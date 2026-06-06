@@ -11,6 +11,7 @@ from typing import Any
 import litellm
 
 from app.config import Settings
+from app.debug_trace import debug_event, sanitize_messages_for_trace
 from app.litellm_resolver import LitellmAliasError, resolve_litellm_params
 from app.message_parts import UserTurn
 from app.model_scheduler import ModelScheduler
@@ -22,6 +23,7 @@ from app.types import RouteResult, RouteSource, SearchResult, ToolCallDelta
 
 logger_llm = logging.getLogger("prompter.llm")
 logger_mcp = logging.getLogger("prompter.mcp")
+logger_router = logging.getLogger("prompter.router")
 
 _CLASSIFIER_ROUTE_TIMEOUT_S = 3.0
 _DEFAULT_MODEL_LOAD_ESTIMATE_S = 34
@@ -112,7 +114,9 @@ class ChatOrchestrator:
         """Return a streaming async iterator of SSE event JSON strings."""
         turn = self._parse_turn(user_content)
         self.projects.sync_docs(project_id)
+        sse_trace = self.settings.debug.sse_trace
 
+        route: RouteResult | None = None
         if turn.has_images():
             intent = "vision"
             tools: list[str] = []
@@ -122,6 +126,19 @@ class ChatOrchestrator:
             tools = list(route.tools)
 
         model_alias = self.router.resolve_model(intent)
+
+        if route is not None:
+            route_payload = {
+                "intent": route.intent,
+                "tools": route.tools,
+                "source": route.source.value,
+                "confidence": route.confidence,
+                "model_alias": model_alias,
+            }
+            if sse_trace:
+                yield debug_event("route", route_payload)
+            if self.settings.debug.router_decisions:
+                logger_router.info(json.dumps(route_payload))
 
         if self._model_needs_loading(model_alias):
             ollama_name = self.settings.alias_to_ollama_name(model_alias)
@@ -160,6 +177,21 @@ class ChatOrchestrator:
             return
 
         retrieved = await self._retrieve(project_id, turn)
+        if sse_trace:
+            yield debug_event(
+                "rag",
+                {
+                    "chunk_count": len(retrieved),
+                    "sources": [
+                        {
+                            "source": chunk.source,
+                            "score": chunk.score,
+                            "title": chunk.title,
+                        }
+                        for chunk in retrieved
+                    ],
+                },
+            )
         if retrieved:
             yield json.dumps(
                 {
@@ -172,9 +204,16 @@ class ChatOrchestrator:
         messages = self._build_messages(
             project_id, turn, retrieved, history, intent
         )
+        if sse_trace:
+            yield debug_event(
+                "messages",
+                {"messages": sanitize_messages_for_trace(messages)},
+            )
         self._persist_user_message(project_id, thread_id, turn)
 
-        async for event in self._execute_with_tools(model_alias, messages, tools):
+        async for event in self._execute_with_tools(
+            model_alias, messages, tools, sse_trace=sse_trace
+        ):
             parsed = json.loads(event)
             if parsed.get("type") == "chunk":
                 reply_parts.append(parsed.get("content", ""))
@@ -313,6 +352,8 @@ class ChatOrchestrator:
         messages: list[dict[str, Any]],
         tools: list[str],
         max_iterations: int = 5,
+        *,
+        sse_trace: bool = False,
     ) -> AsyncIterator[str]:
         tool_schemas = [self._get_tool_schema(t) for t in tools] if tools else None
         try:
@@ -323,9 +364,36 @@ class ChatOrchestrator:
             return
 
         iteration = 0
+        tools_emitted = False
 
         while iteration < max_iterations:
             iteration += 1
+            if sse_trace and tool_schemas and not tools_emitted:
+                yield debug_event(
+                    "tools",
+                    {
+                        "tool_names": tools,
+                        "tool_schemas": tool_schemas,
+                    },
+                )
+                tools_emitted = True
+
+            if sse_trace:
+                yield debug_event(
+                    "llm_request",
+                    {
+                        "alias": model,
+                        "resolved_model": litellm_kwargs.get("model"),
+                        "api_base": litellm_kwargs.get("api_base"),
+                        "iteration": iteration,
+                        **{
+                            key: litellm_kwargs[key]
+                            for key in ("api_key",)
+                            if key in litellm_kwargs
+                        },
+                    },
+                )
+
             logger_llm.info(
                 "LiteLLM completion alias=%s model=%s iteration=%s",
                 model,
@@ -355,6 +423,19 @@ class ChatOrchestrator:
                     for tc_delta in delta.tool_calls:
                         _merge_tool_call_delta(tool_calls, tc_delta)
 
+            if sse_trace:
+                yield debug_event(
+                    "llm_response",
+                    {
+                        "text_length": len(text_buffer),
+                        "tool_calls": [
+                            {"name": tc.name, "arguments": tc.arguments}
+                            for tc in tool_calls
+                        ],
+                        "had_structured_tool_calls": bool(tool_calls),
+                    },
+                )
+
             if not tool_calls:
                 break
 
@@ -375,6 +456,15 @@ class ChatOrchestrator:
                     }
                 )
                 result = await self._dispatch_tool(tc.name, tc.arguments)
+                if sse_trace:
+                    yield debug_event(
+                        "tool_dispatch",
+                        {
+                            "name": tc.name,
+                            "arguments": tc.arguments,
+                            "result": result,
+                        },
+                    )
                 messages.append(
                     {
                         "role": "tool",
