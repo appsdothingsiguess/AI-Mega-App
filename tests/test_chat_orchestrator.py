@@ -10,7 +10,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from app.chat_orchestrator import ChatOrchestrator
-from app.config import ModelsConfig, OllamaSettings, Settings
+from app.config import DebugSettings, ModelsConfig, OllamaSettings, Settings
 from app.message_parts import ImagePart, UserTurn
 from app.project_manager import ProjectManager
 from app.types import RouteResult, RouteSource, SearchResult
@@ -419,3 +419,53 @@ async def test_model_loading_event(
     orchestrator_deps["scheduler"].ensure_loaded.assert_awaited_once_with(
         "local/qwen3-8b"
     )
+
+
+@pytest.mark.asyncio
+async def test_debug_events_emitted_when_sse_trace_enabled(
+    orchestrator: ChatOrchestrator,
+    orchestrator_deps: dict,
+    thread_ids: tuple[str, str],
+) -> None:
+    project_id, thread_id = thread_ids
+    orchestrator.settings = orchestrator.settings.model_copy(
+        update={"debug": DebugSettings(sse_trace=True)}
+    )
+
+    with patch(
+        "app.chat_orchestrator.litellm.acompletion",
+        side_effect=_fake_text_stream,
+    ):
+        events = await _collect_events(
+            orchestrator, project_id, thread_id, "Hello there"
+        )
+
+    debug_events = [event for event in events if event.get("type") == "debug"]
+    stages = {event["stage"] for event in debug_events}
+    assert "route" in stages
+    assert "messages" in stages
+    assert "llm_request" in stages
+    assert "llm_response" in stages
+    assert "rag" in stages
+
+
+@pytest.mark.asyncio
+async def test_no_debug_events_when_sse_trace_disabled(
+    orchestrator: ChatOrchestrator,
+    orchestrator_deps: dict,
+    thread_ids: tuple[str, str],
+) -> None:
+    project_id, thread_id = thread_ids
+    orchestrator.settings = orchestrator.settings.model_copy(
+        update={"debug": DebugSettings(sse_trace=False)}
+    )
+
+    with patch(
+        "app.chat_orchestrator.litellm.acompletion",
+        side_effect=_fake_text_stream,
+    ):
+        events = await _collect_events(
+            orchestrator, project_id, thread_id, "Hello there"
+        )
+
+    assert all(event.get("type") != "debug" for event in events)
