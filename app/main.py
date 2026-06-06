@@ -245,6 +245,17 @@ def _services() -> tuple[Settings, ProjectManager, ChatOrchestrator, LMStudioCli
     return settings, projects, orchestrator, lm
 
 
+def _apply_runtime_settings(fresh: Settings) -> None:
+    """Propagate reloaded settings to cached app.state service objects."""
+    app.state.settings = fresh
+    orchestrator = getattr(app.state, "orchestrator", None)
+    if orchestrator is not None:
+        orchestrator.settings = fresh
+        router = getattr(orchestrator, "router", None)
+        if router is not None:
+            router.settings = fresh
+
+
 def _sanitize_upload_filename(name: str | None) -> str:
     """Strip directory components and reject dangerous filenames."""
     if not name:
@@ -391,7 +402,7 @@ def api_update_settings(body: SettingsUpdate) -> SettingsSnapshot:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     fresh = get_settings()
     if getattr(app.state, "settings", None) is not None:
-        app.state.settings = fresh
+        _apply_runtime_settings(fresh)
     return SettingsSnapshot.model_validate(public)
 
 
