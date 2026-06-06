@@ -2,14 +2,25 @@
 
 // ---- Types ----
 
+export interface HealthServices {
+  ollama?: { status: string; error?: string };
+  qdrant?: { status: string; error?: string };
+  litellm?: { status: string; error?: string };
+  remote_provider?: { status: string; error?: string };
+}
+
 export interface HealthResponse {
-  ok: boolean;
-  mode: string;
-  base_url: string;
-  model: string;
-  model_loaded: boolean;
-  message: string;
-  available_models: string[];
+  /** Phase 1 health shape */
+  status?: "healthy" | "degraded" | "down";
+  services?: HealthServices;
+  /** Legacy LM Studio shape (optional fallback) */
+  ok?: boolean;
+  mode?: string;
+  base_url?: string;
+  model?: string;
+  model_loaded?: boolean;
+  message?: string;
+  available_models?: string[];
 }
 
 export interface ProjectSummary {
@@ -38,12 +49,6 @@ export interface MessageRecord {
   role: "user" | "assistant" | "system";
   content: string;
   created_at: string;
-}
-
-export interface ChatResponse {
-  thread_id: string;
-  reply: string;
-  retrieved_chunks: Array<Record<string, unknown>>;
 }
 
 export interface DocFileInfo {
@@ -229,6 +234,120 @@ export interface LmServerStatus {
   restart_required_note: string | null;
 }
 
+// ---- SSE streaming chat ----
+
+export interface SourceChunk {
+  text: string;
+  source: string;
+  source_file: string;
+  title: string;
+  score: number;
+  metadata: Record<string, unknown>;
+}
+
+export interface ChatStreamRequest {
+  content: string;
+  model_override?: string;
+  enabled_tools?: Record<string, boolean>;
+}
+
+export type SseEvent =
+  | { type: "chunk"; content: string }
+  | { type: "tool_call"; name: string; input: Record<string, unknown> }
+  | { type: "tool_result"; name: string; output: string }
+  | { type: "sources"; chunks: SourceChunk[] }
+  | { type: "model_loading"; model: string; estimated_seconds: number }
+  | { type: "done"; usage: Record<string, unknown> }
+  | { type: "error"; message: string };
+
+export class StreamChatError extends Error {
+  constructor(
+    public status: number,
+    message: string,
+  ) {
+    super(message);
+    this.name = "StreamChatError";
+  }
+}
+
+function parseSseFrame(frame: string): SseEvent | null {
+  for (const line of frame.split("\n")) {
+    if (!line.startsWith("data: ")) continue;
+    const payload = line.slice(6).trim();
+    if (!payload) return null;
+    try {
+      return JSON.parse(payload) as SseEvent;
+    } catch {
+      return { type: "error", message: "Invalid SSE JSON frame" };
+    }
+  }
+  return null;
+}
+
+/**
+ * POST SSE chat stream. Yields typed events until the stream ends or is aborted.
+ */
+export async function* streamChat(
+  projectId: string,
+  threadId: string,
+  body: ChatStreamRequest,
+  signal?: AbortSignal,
+): AsyncGenerator<SseEvent, void, undefined> {
+  const res = await fetch(`/api/chat/${projectId}/${threadId}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+    signal,
+  });
+
+  if (!res.ok) {
+    let detail = res.statusText;
+    try {
+      const errBody = await res.json();
+      const raw = errBody.detail ?? errBody.message ?? detail;
+      if (typeof raw === "string") detail = raw;
+      else if (Array.isArray(raw)) {
+        detail = raw.map((x: { msg?: string }) => x.msg ?? String(x)).join("; ");
+      }
+    } catch {
+      // ignore
+    }
+    throw new StreamChatError(res.status, detail);
+  }
+
+  if (!res.body) {
+    throw new StreamChatError(0, "No response body from chat stream");
+  }
+
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+
+      let sep = buffer.indexOf("\n\n");
+      while (sep !== -1) {
+        const frame = buffer.slice(0, sep);
+        buffer = buffer.slice(sep + 2);
+        const event = parseSseFrame(frame);
+        if (event) yield event;
+        sep = buffer.indexOf("\n\n");
+      }
+    }
+
+    if (buffer.trim()) {
+      const event = parseSseFrame(buffer);
+      if (event) yield event;
+    }
+  } finally {
+    reader.releaseLock();
+  }
+}
+
 // ---- Core fetch ----
 
 class ApiError extends Error {
@@ -396,13 +515,3 @@ export const getMessages = (projectId: string, threadId: string) =>
   apiFetch<MessageRecord[]>(
     `/projects/${projectId}/threads/${threadId}/messages`,
   );
-
-export const sendMessage = (
-  projectId: string,
-  threadId: string,
-  content: string,
-) =>
-  apiFetch<ChatResponse>(
-    `/projects/${projectId}/threads/${threadId}/messages`,
-    { method: "POST", body: JSON.stringify({ content }) },
-  });
