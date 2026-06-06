@@ -21,7 +21,10 @@ model_list:
       model: ollama/deepseek-r1:8b
       api_base: http://localhost:11434
 
-  # Remote models (OpenCode Go — OpenAI-compatible)
+  # Remote models (OpenCode Go — OpenAI-compatible chat/completions)
+  # model_name = app alias (settings.json). litellm_params.model = OpenCode provider ID.
+  # See https://opencode.ai/docs/go/ for current model IDs (use dots, e.g. kimi-k2.6).
+
   - model_name: remote/deepseek-v4-pro
     litellm_params:
       model: openai/deepseek-v4-pro
@@ -32,7 +35,7 @@ model_list:
 
   - model_name: remote/kimi-k2-6
     litellm_params:
-      model: openai/kimi-k2-6
+      model: openai/kimi-k2.6
       api_base: https://opencode.ai/zen/go/v1
       api_key: os.environ/OPENCODE_API_KEY
       extra_headers:

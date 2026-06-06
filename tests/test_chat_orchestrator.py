@@ -10,7 +10,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from app.chat_orchestrator import ChatOrchestrator
-from app.config import ModelsConfig, OllamaSettings, Settings
+from app.config import DebugSettings, ModelsConfig, OllamaSettings, Settings
 from app.message_parts import ImagePart, UserTurn
 from app.project_manager import ProjectManager
 from app.types import RouteResult, RouteSource, SearchResult
@@ -419,3 +419,185 @@ async def test_model_loading_event(
     orchestrator_deps["scheduler"].ensure_loaded.assert_awaited_once_with(
         "local/qwen3-8b"
     )
+
+
+@pytest.mark.asyncio
+async def test_debug_events_emitted_when_sse_trace_enabled(
+    orchestrator: ChatOrchestrator,
+    orchestrator_deps: dict,
+    thread_ids: tuple[str, str],
+) -> None:
+    project_id, thread_id = thread_ids
+    orchestrator.settings = orchestrator.settings.model_copy(
+        update={"debug": DebugSettings(sse_trace=True)}
+    )
+
+    with patch(
+        "app.chat_orchestrator.litellm.acompletion",
+        side_effect=_fake_text_stream,
+    ):
+        events = await _collect_events(
+            orchestrator, project_id, thread_id, "Hello there"
+        )
+
+    debug_events = [event for event in events if event.get("type") == "debug"]
+    stages = [event["stage"] for event in debug_events]
+    assert stages == ["route", "rag", "messages", "llm_request", "llm_response"]
+    route = debug_events[0]["data"]
+    assert route["intent"] == "general_chat"
+    assert route["model_alias"] == "remote/deepseek-v4-pro"
+    assert debug_events[1]["data"]["chunk_count"] == 0
+    assert isinstance(debug_events[2]["data"]["messages"], list)
+    assert debug_events[3]["data"]["alias"] == "remote/deepseek-v4-pro"
+    assert debug_events[4]["data"]["text_length"] == len("Hello world")
+
+
+@pytest.mark.asyncio
+async def test_debug_rag_stage_includes_sources_when_retrieved(
+    orchestrator: ChatOrchestrator,
+    orchestrator_deps: dict,
+    manager: ProjectManager,
+    thread_ids: tuple[str, str],
+    tmp_path: Path,
+) -> None:
+    project_id, thread_id = thread_ids
+    docs_dir = manager.projects_root / project_id / "docs"
+    docs_dir.mkdir(parents=True, exist_ok=True)
+    (docs_dir / "doc.md").write_text("Retrieved chunk body", encoding="utf-8")
+    manager.sync_docs(project_id)
+
+    orchestrator.settings = orchestrator.settings.model_copy(
+        update={"debug": DebugSettings(sse_trace=True)}
+    )
+    orchestrator_deps["embedding"].embed = AsyncMock(return_value=[[0.5, 0.6]])
+    orchestrator_deps["vector_store"].search = AsyncMock(
+        return_value=[
+            SearchResult(
+                text="Retrieved chunk",
+                source="doc.md",
+                title="Doc",
+                score=0.88,
+            )
+        ]
+    )
+
+    with patch(
+        "app.chat_orchestrator.litellm.acompletion",
+        side_effect=_fake_text_stream,
+    ):
+        events = await _collect_events(
+            orchestrator, project_id, thread_id, "What is in the doc?"
+        )
+
+    rag_event = next(event for event in events if event.get("stage") == "rag")
+    assert rag_event["data"]["chunk_count"] == 1
+    assert rag_event["data"]["sources"][0]["source"] == "doc.md"
+    assert rag_event["data"]["sources"][0]["score"] == 0.88
+
+
+@pytest.mark.asyncio
+async def test_debug_tool_stages_when_tools_fire(
+    orchestrator: ChatOrchestrator,
+    orchestrator_deps: dict,
+    thread_ids: tuple[str, str],
+) -> None:
+    project_id, thread_id = thread_ids
+    orchestrator.settings = orchestrator.settings.model_copy(
+        update={"debug": DebugSettings(sse_trace=True)}
+    )
+    orchestrator_deps["router"].route = AsyncMock(
+        return_value=RouteResult(
+            intent="web_search",
+            tools=["web_search"],
+            confidence=1.0,
+            source=RouteSource.KEYWORD,
+        )
+    )
+    orchestrator_deps["router"].resolve_model = MagicMock(
+        return_value="remote/kimi-k2-6"
+    )
+
+    call_count = 0
+
+    async def _tool_then_text(*_args, **_kwargs):
+        nonlocal call_count
+        call_count += 1
+        if call_count == 1:
+            async for chunk in _fake_tool_then_text_stream():
+                yield chunk
+        else:
+            async for chunk in _fake_text_stream():
+                yield chunk
+
+    with patch(
+        "app.chat_orchestrator.litellm.acompletion",
+        side_effect=_tool_then_text,
+    ):
+        events = await _collect_events(
+            orchestrator, project_id, thread_id, "Search for news"
+        )
+
+    debug_events = [event for event in events if event.get("type") == "debug"]
+    stages = [event["stage"] for event in debug_events]
+    assert stages == [
+        "route",
+        "rag",
+        "messages",
+        "tools",
+        "llm_request",
+        "llm_response",
+        "tool_dispatch",
+        "llm_request",
+        "llm_response",
+    ]
+    tools_event = next(event for event in debug_events if event["stage"] == "tools")
+    assert tools_event["data"]["tool_names"] == ["web_search"]
+    assert tools_event["data"]["tool_schemas"]
+    dispatch_event = next(
+        event for event in debug_events if event["stage"] == "tool_dispatch"
+    )
+    assert dispatch_event["data"]["name"] == "web_search"
+    assert dispatch_event["data"]["arguments"] == '{"query": "test"}'
+    assert "error" in dispatch_event["data"]["result"]
+
+
+@pytest.mark.asyncio
+async def test_no_debug_events_when_sse_trace_disabled(
+    orchestrator: ChatOrchestrator,
+    orchestrator_deps: dict,
+    thread_ids: tuple[str, str],
+) -> None:
+    project_id, thread_id = thread_ids
+    orchestrator.settings = orchestrator.settings.model_copy(
+        update={"debug": DebugSettings(sse_trace=False)}
+    )
+    orchestrator_deps["router"].route = AsyncMock(
+        return_value=RouteResult(
+            intent="web_search",
+            tools=["web_search"],
+            confidence=1.0,
+            source=RouteSource.KEYWORD,
+        )
+    )
+
+    call_count = 0
+
+    async def _tool_then_text(*_args, **_kwargs):
+        nonlocal call_count
+        call_count += 1
+        if call_count == 1:
+            async for chunk in _fake_tool_then_text_stream():
+                yield chunk
+        else:
+            async for chunk in _fake_text_stream():
+                yield chunk
+
+    with patch(
+        "app.chat_orchestrator.litellm.acompletion",
+        side_effect=_tool_then_text,
+    ):
+        events = await _collect_events(
+            orchestrator, project_id, thread_id, "Search for news"
+        )
+
+    assert all(event.get("type") != "debug" for event in events)

@@ -265,6 +265,7 @@ class LoggingSettings(BaseModel):
 
 class DebugSettings(BaseModel):
     router_decisions: bool = False
+    sse_trace: bool = False
 
 
 class Settings(BaseSettings):

@@ -16,6 +16,7 @@ import {
 import MessageBubble, { ToolEvent } from "./MessageBubble";
 import ModelSelector from "./ModelSelector";
 import ToolToggles, { ToolTogglesState } from "./ToolToggles";
+import DebugTracePanel, { TraceEntry } from "./DebugTracePanel";
 
 // Same verb list as app/main.py _THINKING_VERBS
 const THINKING_VERBS = [
@@ -81,6 +82,8 @@ interface Props {
   onToolTogglesChange: (toggles: ToolTogglesState) => void;
   onModelLoading: (payload: { model: string; estimated_seconds: number }) => void;
   onClearModelLoading: () => void;
+  debugTraceOpen: boolean;
+  sseTraceEnabled: boolean;
 }
 
 function useVerbCycle(active: boolean): string {
@@ -113,8 +116,11 @@ export default function ChatView({
   onToolTogglesChange,
   onModelLoading,
   onClearModelLoading,
+  debugTraceOpen,
+  sseTraceEnabled,
 }: Props) {
   const [messages, setMessages] = useState<StreamingMessage[]>([]);
+  const [traceEntries, setTraceEntries] = useState<TraceEntry[]>([]);
   const [threadTitle, setThreadTitle] = useState<string | null>(null);
   const [draft, setDraft] = useState("");
   const [streaming, setStreaming] = useState(false);
@@ -214,6 +220,7 @@ export default function ChatView({
     const content = draft.trim();
     setDraft("");
     setError(null);
+    setTraceEntries([]);
 
     abortRef.current?.abort();
     const controller = new AbortController();
@@ -312,6 +319,18 @@ export default function ChatView({
               ...msg,
               error: event.message,
             }));
+            break;
+
+          case "debug":
+            setTraceEntries((prev) => [
+              ...prev,
+              {
+                id: `${Date.now()}-${prev.length}`,
+                timestamp: new Date().toISOString(),
+                stage: event.stage,
+                data: event.data,
+              },
+            ]);
             break;
 
           case "done":
@@ -476,6 +495,13 @@ export default function ChatView({
           </button>
         </div>
       </div>
+
+      <DebugTracePanel
+        entries={traceEntries}
+        visible={debugTraceOpen}
+        sseTraceEnabled={sseTraceEnabled}
+        onClear={() => setTraceEntries([])}
+      />
     </div>
   );
 }

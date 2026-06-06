@@ -154,6 +154,7 @@
     }
   },
   "debug": {
-    "router_decisions": false
+    "router_decisions": false,
+    "sse_trace": false
   }
 }
