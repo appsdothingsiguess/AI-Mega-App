@@ -124,6 +124,37 @@ def test_public_settings_secret_flags_from_env(
     assert public["search"]["tavily_api_key"] == ""
 
 
+def test_update_settings_persists_secrets_to_env(
+    _isolated_settings: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    env_path = tmp_path / ".env"
+    env_path.write_text("OPENCODE_API_KEY=\n", encoding="utf-8")
+    monkeypatch.setenv("ENV_FILE_PATH", str(env_path))
+    monkeypatch.delenv("OPENCODE_API_KEY", raising=False)
+    monkeypatch.delenv("TAVILY_API_KEY", raising=False)
+
+    init_settings_store()
+    public = update_settings(
+        {
+            "search": {"tavily_api_key": "tvly-from-ui"},
+            "opencode_go": {"api_key": "oc-from-ui"},
+        }
+    )
+    assert public["search"]["tavily_api_key_set"] is True
+    assert public["opencode_go"]["api_key_set"] is True
+    assert public["search"]["tavily_api_key"] == ""
+
+    on_disk = json.loads(_isolated_settings.read_text(encoding="utf-8"))
+    assert on_disk["search"]["tavily_api_key"] == ""
+    assert on_disk["opencode_go"]["api_key"] == ""
+
+    env_text = env_path.read_text(encoding="utf-8")
+    assert "TAVILY_API_KEY=tvly-from-ui" in env_text
+    assert "OPENCODE_API_KEY=oc-from-ui" in env_text
+    assert os.environ["TAVILY_API_KEY"] == "tvly-from-ui"
+    assert os.environ["OPENCODE_API_KEY"] == "oc-from-ui"
+
+
 def test_init_settings_store_clears_cache(_isolated_settings: Path) -> None:
     init_settings_store()
     update_settings({"debug": {"router_decisions": True}})

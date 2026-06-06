@@ -190,7 +190,7 @@ async def test_basic_chat_flow(
     with patch(
         "app.chat_orchestrator.litellm.acompletion",
         side_effect=_fake_text_stream,
-    ):
+    ) as mock_completion:
         events = await _collect_events(
             orchestrator, project_id, thread_id, "Hello there"
         )
@@ -199,6 +199,8 @@ async def test_basic_chat_flow(
     assert events[1] == {"type": "chunk", "content": " world"}
     assert events[-1] == {"type": "done", "usage": {}}
     orchestrator_deps["router"].route.assert_awaited_once()
+    assert mock_completion.await_args.kwargs["model"] == "openai/deepseek-v4-pro"
+    assert mock_completion.await_args.kwargs["api_base"] == "https://opencode.ai/zen/go/v1"
 
 
 @pytest.mark.asyncio

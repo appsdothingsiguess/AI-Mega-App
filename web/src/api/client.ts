@@ -395,7 +395,21 @@ async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
 
 // ---- Health ----
 
-export const health = () => apiFetch<HealthResponse>("/health");
+export async function health(): Promise<HealthResponse> {
+  const res = await fetch("/health");
+  if (res.status === 200 || res.status === 503) {
+    return res.json() as Promise<HealthResponse>;
+  }
+  let detail = res.statusText;
+  try {
+    const body = await res.json();
+    const raw = body.detail ?? body.message ?? detail;
+    if (typeof raw === "string") detail = raw;
+  } catch {
+    // ignore
+  }
+  throw new ApiError(res.status, detail);
+}
 
 // ---- Settings ----
 

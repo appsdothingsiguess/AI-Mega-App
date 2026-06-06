@@ -294,6 +294,7 @@ class Settings(BaseSettings):
     debug: DebugSettings = Field(default_factory=DebugSettings)
 
     opencode_api_key: str = Field(default="", validation_alias="OPENCODE_API_KEY")
+    tavily_api_key: str = Field(default="", validation_alias="TAVILY_API_KEY")
 
     projects_dir: Path = Field(
         default=Path("./projects"),
@@ -361,6 +362,8 @@ class Settings(BaseSettings):
     def sync_secrets_and_legacy_fields(self) -> Self:
         if self.opencode_api_key:
             self.opencode_go.api_key = self.opencode_api_key
+        if self.tavily_api_key:
+            self.search.tavily_api_key = self.tavily_api_key
         return self
 
     @property

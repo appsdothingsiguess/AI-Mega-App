@@ -389,6 +389,9 @@ def api_update_settings(body: SettingsUpdate) -> SettingsSnapshot:
         public = update_settings(updates) if updates else read_settings()
     except SettingsValidationError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
+    fresh = get_settings()
+    if getattr(app.state, "settings", None) is not None:
+        app.state.settings = fresh
     return SettingsSnapshot.model_validate(public)
 
 

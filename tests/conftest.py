@@ -13,7 +13,13 @@ def settings(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Settings:
     monkeypatch.chdir(tmp_path)
     projects = tmp_path / "projects"
     projects.mkdir()
-    return Settings(projects_dir=projects, data_dir=tmp_path / "data", lmstudio_model="test-model")
+    repo_root = Path(__file__).resolve().parent.parent
+    return Settings(
+        projects_dir=projects,
+        data_dir=tmp_path / "data",
+        lmstudio_model="test-model",
+        litellm_config_path=str(repo_root / "litellm_config.yaml"),
+    )
 
 
 @pytest.fixture

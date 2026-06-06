@@ -19,6 +19,7 @@ from app.config import (
     Settings,
     get_settings,
 )
+from app.env_secrets import secret_is_set, write_env_vars
 
 _SETTINGS_ENV = "SETTINGS_JSON_PATH"
 _DEFAULT_FILE = Path("settings.json")
@@ -118,9 +119,40 @@ def validate_settings(data: dict[str, Any]) -> dict[str, Any]:
 
 def _secret_is_set(path: tuple[str, ...]) -> bool:
     env_key = _ENV_SECRET_FLAGS.get(path)
-    if env_key and os.environ.get(env_key, "").strip():
+    if env_key and secret_is_set(env_key):
         return True
     return False
+
+
+def _extract_secret_updates(updates: dict[str, Any]) -> tuple[dict[str, Any], dict[str, str]]:
+    """Pull secret values from a settings update; return cleaned update + env writes."""
+    cleaned = _deep_merge({}, updates)
+    env_writes: dict[str, str] = {}
+
+    search = cleaned.get("search")
+    if isinstance(search, dict) and "tavily_api_key" in search:
+        raw = search.pop("tavily_api_key")
+        if isinstance(raw, str) and raw.strip():
+            env_writes["TAVILY_API_KEY"] = raw.strip()
+
+    opencode = cleaned.get("opencode_go")
+    if isinstance(opencode, dict) and "api_key" in opencode:
+        raw = opencode.pop("api_key")
+        if isinstance(raw, str) and raw.strip():
+            env_writes["OPENCODE_API_KEY"] = raw.strip()
+
+    if isinstance(search, dict) and not search:
+        cleaned.pop("search", None)
+    if isinstance(opencode, dict) and not opencode:
+        cleaned.pop("opencode_go", None)
+
+    return cleaned, env_writes
+
+
+def _refresh_settings_cache() -> None:
+    clear = getattr(get_settings, "cache_clear", None)
+    if clear is not None:
+        clear()
 
 
 def to_public_settings(data: dict[str, Any]) -> dict[str, Any]:
@@ -168,17 +200,21 @@ def write_settings(data: dict[str, Any]) -> None:
         json.dumps(normalized, indent=2, ensure_ascii=False) + "\n",
         encoding="utf-8",
     )
-    clear = getattr(get_settings, "cache_clear", None)
-    if clear is not None:
-        clear()
+    _refresh_settings_cache()
 
 
 def update_settings(updates: dict[str, Any]) -> dict[str, Any]:
     """Merge partial *updates*, validate, persist, and return public settings."""
     if not updates:
         return read_settings()
+    cleaned, env_writes = _extract_secret_updates(updates)
+    if env_writes:
+        write_env_vars(env_writes)
+        _refresh_settings_cache()
+    if not cleaned:
+        return read_settings()
     current = load_settings()
-    merged = _deep_merge(current, updates)
+    merged = _deep_merge(current, cleaned)
     write_settings(merged)
     return read_settings()
 
@@ -194,9 +230,7 @@ def ensure_settings_file() -> None:
 def init_settings_store() -> None:
     """Call at app startup to ensure settings.json exists and refresh cache."""
     ensure_settings_file()
-    clear = getattr(get_settings, "cache_clear", None)
-    if clear is not None:
-        clear()
+    _refresh_settings_cache()
 
 
 # Backward-compatible aliases used by legacy routes/tests.

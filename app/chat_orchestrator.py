@@ -11,6 +11,7 @@ from typing import Any
 import litellm
 
 from app.config import Settings
+from app.litellm_resolver import LitellmAliasError, resolve_litellm_params
 from app.message_parts import UserTurn
 from app.model_scheduler import ModelScheduler
 from app.project_manager import ProjectManager
@@ -314,16 +315,28 @@ class ChatOrchestrator:
         max_iterations: int = 5,
     ) -> AsyncIterator[str]:
         tool_schemas = [self._get_tool_schema(t) for t in tools] if tools else None
+        try:
+            litellm_kwargs = resolve_litellm_params(self.settings, model)
+        except LitellmAliasError as exc:
+            yield json.dumps({"type": "error", "message": str(exc)})
+            yield json.dumps({"type": "done", "usage": {}})
+            return
+
         iteration = 0
 
         while iteration < max_iterations:
             iteration += 1
-            logger_llm.info("LiteLLM completion model=%s iteration=%s", model, iteration)
+            logger_llm.info(
+                "LiteLLM completion alias=%s model=%s iteration=%s",
+                model,
+                litellm_kwargs.get("model"),
+                iteration,
+            )
             response = await litellm.acompletion(
-                model=model,
                 messages=messages,
                 tools=tool_schemas,
                 stream=True,
+                **litellm_kwargs,
             )
 
             text_buffer = ""

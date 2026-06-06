@@ -74,6 +74,8 @@ export default function SettingsModal({ onClose }: Props) {
   const [saved, setSaved] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [fieldError, setFieldError] = useState<string | null>(null);
+  const [draftTavilyKey, setDraftTavilyKey] = useState("");
+  const [draftOpencodeKey, setDraftOpencodeKey] = useState("");
 
   useEffect(() => {
     getSettings()
@@ -123,6 +125,18 @@ export default function SettingsModal({ onClose }: Props) {
         updates[key] = form[key] as SettingsUpdate[typeof key];
       }
     }
+    if (draftTavilyKey.trim()) {
+      updates.search = {
+        ...(updates.search ?? {}),
+        tavily_api_key: draftTavilyKey.trim(),
+      };
+    }
+    if (draftOpencodeKey.trim()) {
+      updates.opencode_go = {
+        ...(updates.opencode_go ?? {}),
+        api_key: draftOpencodeKey.trim(),
+      };
+    }
     return updates;
   };
 
@@ -140,6 +154,8 @@ export default function SettingsModal({ onClose }: Props) {
       const updated = await updateSettings(buildUpdate());
       setSnap(updated);
       setForm(deepClone(updated));
+      setDraftTavilyKey("");
+      setDraftOpencodeKey("");
       setSaved(true);
       setTimeout(() => setSaved(false), 2000);
     } catch (e: unknown) {
@@ -512,16 +528,17 @@ export default function SettingsModal({ onClose }: Props) {
                 <input
                   style={styles.input}
                   type="password"
-                  value=""
-                  readOnly
+                  value={draftTavilyKey}
+                  onChange={(e) => setDraftTavilyKey(e.target.value)}
                   placeholder={
                     form.search.tavily_api_key_set
-                      ? "Configured in .env (TAVILY_API_KEY)"
-                      : "Set TAVILY_API_KEY in .env"
+                      ? "Configured — enter a new key to replace"
+                      : "Enter Tavily API key"
                   }
+                  autoComplete="off"
                 />
                 <div style={styles.hint}>
-                  API keys are stored in .env only, not settings.json.
+                  Saved to .env (TAVILY_API_KEY), not settings.json.
                 </div>
               </Field>
             </section>
@@ -631,14 +648,18 @@ export default function SettingsModal({ onClose }: Props) {
                 <input
                   style={styles.input}
                   type="password"
-                  value=""
-                  readOnly
+                  value={draftOpencodeKey}
+                  onChange={(e) => setDraftOpencodeKey(e.target.value)}
                   placeholder={
                     form.opencode_go.api_key_set
-                      ? "Configured in .env (OPENCODE_API_KEY)"
-                      : "Set OPENCODE_API_KEY in .env"
+                      ? "Configured — enter a new key to replace"
+                      : "Enter OpenCode Go API key"
                   }
+                  autoComplete="off"
                 />
+                <div style={styles.hint}>
+                  Saved to .env (OPENCODE_API_KEY), not settings.json.
+                </div>
               </Field>
               <div style={styles.sectionTitle}>Health</div>
               <Field label="Classifier timeout (seconds)">
