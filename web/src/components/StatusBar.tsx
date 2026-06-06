@@ -10,6 +10,8 @@ export interface ModelLoadingState {
 
 interface Props {
   modelLoading?: ModelLoadingState | null;
+  debugTraceOpen?: boolean;
+  onToggleDebugTrace?: () => void;
 }
 
 function isHealthy(h: HealthResponse): boolean {
@@ -36,7 +38,11 @@ function formatHealthLabel(h: HealthResponse): string {
   return h.message ?? "Connected";
 }
 
-export default function StatusBar({ modelLoading }: Props) {
+export default function StatusBar({
+  modelLoading,
+  debugTraceOpen = false,
+  onToggleDebugTrace,
+}: Props) {
   const [status, setStatus] = useState<HealthResponse | null>(null);
   const [error, setError] = useState(false);
 
@@ -88,6 +94,18 @@ export default function StatusBar({ modelLoading }: Props) {
           Loading {modelLoading.model} (~{modelLoading.estimated_seconds}s)
         </span>
       )}
+      {onToggleDebugTrace && (
+        <button
+          type="button"
+          style={{
+            ...styles.debugBtn,
+            ...(debugTraceOpen ? styles.debugBtnActive : {}),
+          }}
+          onClick={onToggleDebugTrace}
+        >
+          Debug trace{debugTraceOpen ? " ▾" : ""}
+        </button>
+      )}
     </div>
   );
 }
@@ -123,5 +141,19 @@ const styles: Record<string, React.CSSProperties> = {
     fontSize: 11,
     flexShrink: 0,
     marginLeft: "auto",
+  },
+  debugBtn: {
+    marginLeft: 8,
+    padding: "2px 8px",
+    borderRadius: "var(--radius-sm)",
+    background: "var(--bg-hover)",
+    color: "var(--text-dim)",
+    fontSize: 11,
+    fontFamily: "var(--font-mono)",
+    flexShrink: 0,
+  },
+  debugBtnActive: {
+    background: "var(--accent-dim)",
+    color: "var(--accent)",
   },
 };

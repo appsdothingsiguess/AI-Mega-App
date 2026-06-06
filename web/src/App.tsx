@@ -22,6 +22,8 @@ export default function App() {
   const [toolToggles, setToolToggles] = useState<ToolTogglesState>(DEFAULT_TOOL_TOGGLES);
   const [modelLoading, setModelLoading] = useState<ModelLoadingState | null>(null);
   const [ollamaNameToAlias, setOllamaNameToAlias] = useState<Record<string, string>>({});
+  const [debugTraceOpen, setDebugTraceOpen] = useState(false);
+  const [sseTraceEnabled, setSseTraceEnabled] = useState(false);
 
   const notifySourcesChanged = useCallback(
     () => setSourcesVersion((v) => v + 1),
@@ -40,6 +42,7 @@ export default function App() {
           reverse[ollamaName] = alias;
         }
         setOllamaNameToAlias(reverse);
+        setSseTraceEnabled(Boolean(s.debug?.sse_trace));
       })
       .catch(() => {
         // mapping is optional for display
@@ -110,6 +113,8 @@ export default function App() {
             onToolTogglesChange={setToolToggles}
             onModelLoading={handleModelLoading}
             onClearModelLoading={handleClearModelLoading}
+            debugTraceOpen={debugTraceOpen}
+            sseTraceEnabled={sseTraceEnabled}
           />
         </div>
 
@@ -127,9 +132,18 @@ export default function App() {
         </div>
       </div>
 
-      <StatusBar modelLoading={modelLoading} />
+      <StatusBar
+        modelLoading={modelLoading}
+        debugTraceOpen={debugTraceOpen}
+        onToggleDebugTrace={() => setDebugTraceOpen((v) => !v)}
+      />
 
-      {showSettings && <SettingsModal onClose={() => setShowSettings(false)} />}
+      {showSettings && (
+        <SettingsModal
+          onClose={() => setShowSettings(false)}
+          onSaved={(s) => setSseTraceEnabled(Boolean(s.debug?.sse_trace))}
+        />
+      )}
     </div>
   );
 }

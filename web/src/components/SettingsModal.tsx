@@ -10,6 +10,7 @@ import {
 
 interface Props {
   onClose: () => void;
+  onSaved?: (snapshot: SettingsSnapshot) => void;
 }
 
 type TabId =
@@ -66,7 +67,7 @@ function validateForm(form: SettingsSnapshot): string | null {
   return null;
 }
 
-export default function SettingsModal({ onClose }: Props) {
+export default function SettingsModal({ onClose, onSaved }: Props) {
   const [snap, setSnap] = useState<SettingsSnapshot | null>(null);
   const [form, setForm] = useState<SettingsSnapshot | null>(null);
   const [tab, setTab] = useState<TabId>("models");
@@ -157,6 +158,7 @@ export default function SettingsModal({ onClose }: Props) {
       setDraftTavilyKey("");
       setDraftOpencodeKey("");
       setSaved(true);
+      onSaved?.(updated);
       setTimeout(() => setSaved(false), 2000);
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : "Save failed");
@@ -778,12 +780,35 @@ export default function SettingsModal({ onClose }: Props) {
                     onChange={(e) =>
                       patch((f) => ({
                         ...f,
-                        debug: { router_decisions: e.target.checked },
+                        debug: {
+                          ...f.debug,
+                          router_decisions: e.target.checked,
+                        },
                       }))
                     }
                   />
                   <span style={{ color: "var(--text-muted)", fontSize: 12 }}>
                     Log routing decisions to stderr
+                  </span>
+                </label>
+              </Field>
+              <Field label="Debug trace">
+                <label style={styles.checkLabel}>
+                  <input
+                    type="checkbox"
+                    checked={form.debug.sse_trace ?? false}
+                    onChange={(e) =>
+                      patch((f) => ({
+                        ...f,
+                        debug: {
+                          ...f.debug,
+                          sse_trace: e.target.checked,
+                        },
+                      }))
+                    }
+                  />
+                  <span style={{ color: "var(--text-muted)", fontSize: 12 }}>
+                    Show debug trace in chat UI
                   </span>
                 </label>
               </Field>

@@ -176,6 +176,7 @@ export interface LoggingSettings {
 
 export interface DebugSettings {
   router_decisions: boolean;
+  sse_trace: boolean;
 }
 
 export interface SettingsSnapshot {
@@ -257,6 +258,7 @@ export type SseEvent =
   | { type: "tool_result"; name: string; output: string }
   | { type: "sources"; chunks: SourceChunk[] }
   | { type: "model_loading"; model: string; estimated_seconds: number }
+  | { type: "debug"; stage: string; data: Record<string, unknown> }
   | { type: "done"; usage: Record<string, unknown> }
   | { type: "error"; message: string };
 
