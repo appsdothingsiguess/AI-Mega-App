@@ -30,6 +30,13 @@ def _write_litellm_config(path: Path) -> None:
                 "      api_key: os.environ/OPENCODE_API_KEY",
                 "      extra_headers:",
                 "        User-Agent: prompter-x/1.0",
+                "  - model_name: remote/kimi-k2-6",
+                "    litellm_params:",
+                "      model: openai/kimi-k2.6",
+                "      api_base: https://opencode.ai/zen/go/v1",
+                "      api_key: os.environ/OPENCODE_API_KEY",
+                "      extra_headers:",
+                "        User-Agent: prompter-x/1.0",
                 "",
             ]
         ),
@@ -80,6 +87,22 @@ def test_resolve_remote_alias_uses_env_secret(
     assert params["api_base"] == "https://opencode.ai/zen/go/v1"
     assert params["api_key"] == "test-opencode-key"
     assert params["extra_headers"] == {"User-Agent": "prompter-x/1.0"}
+
+
+def test_resolve_kimi_alias_uses_opencode_provider_id(tmp_path: Path) -> None:
+    """App alias remote/kimi-k2-6 must map to OpenCode ID kimi-k2.6 (dot, not hyphen)."""
+    config_path = tmp_path / "litellm_config.yaml"
+    _write_litellm_config(config_path)
+    settings = Settings(
+        projects_dir=tmp_path / "projects",
+        data_dir=tmp_path / "data",
+        litellm_config_path=str(config_path),
+    )
+
+    params = resolve_litellm_params(settings, "remote/kimi-k2-6")
+
+    assert params["model"] == "openai/kimi-k2.6"
+    assert params["api_base"] == "https://opencode.ai/zen/go/v1"
 
 
 def test_missing_alias_raises(tmp_path: Path) -> None:
