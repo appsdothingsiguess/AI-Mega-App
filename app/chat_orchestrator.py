@@ -14,8 +14,9 @@ from app.config import Settings
 from app.message_parts import UserTurn
 from app.model_scheduler import ModelScheduler
 from app.project_manager import ProjectManager
-from app.protocols import EmbeddingService, VectorStore, VisionService
+from app.protocols import EmbeddingService, SearchService, VectorStore, VisionService
 from app.router import HybridRouter
+from app.tools import web_search as web_search_tool
 from app.types import RouteResult, RouteSource, SearchResult, ToolCallDelta
 
 logger_llm = logging.getLogger("prompter.llm")
@@ -26,23 +27,7 @@ _DEFAULT_MODEL_LOAD_ESTIMATE_S = 34
 _MAX_HISTORY_TURNS = 20
 
 _TOOL_SCHEMAS: dict[str, dict[str, Any]] = {
-    "web_search": {
-        "type": "function",
-        "function": {
-            "name": "web_search",
-            "description": "Search the web for current information.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "query": {
-                        "type": "string",
-                        "description": "Search query",
-                    },
-                },
-                "required": ["query"],
-            },
-        },
-    },
+    "web_search": web_search_tool.TOOL_SCHEMA,
 }
 
 
@@ -106,6 +91,7 @@ class ChatOrchestrator:
         model_scheduler: ModelScheduler | None,
         settings: Settings,
         projects: ProjectManager,
+        search_service: SearchService | None = None,
     ) -> None:
         self.router = router
         self.vector_store = vector_store
@@ -114,6 +100,7 @@ class ChatOrchestrator:
         self.model_scheduler = model_scheduler
         self.settings = settings
         self.projects = projects
+        self.search_service = search_service
 
     async def handle_message(
         self,
@@ -414,10 +401,40 @@ class ChatOrchestrator:
 
     async def _dispatch_tool(self, name: str, arguments: str) -> str:
         logger_mcp.info("Dispatch tool name=%s arguments=%s", name, arguments)
+        if name == "web_search":
+            return await self._dispatch_web_search(arguments)
         return json.dumps(
             {
                 "status": "not_implemented",
                 "tool": name,
-                "message": f"Tool {name!r} is not implemented yet (Task 6).",
+                "message": f"Tool {name!r} is not implemented yet.",
             }
         )
+
+    async def _dispatch_web_search(self, arguments: str) -> str:
+        if self.search_service is None:
+            return json.dumps({"error": "Search service unavailable"})
+
+        try:
+            args = json.loads(arguments) if arguments else {}
+        except json.JSONDecodeError as exc:
+            return json.dumps({"error": f"Invalid JSON arguments: {exc}"})
+
+        if not isinstance(args, dict):
+            return json.dumps({"error": "Invalid arguments: expected object"})
+
+        query = args.get("query")
+        if not query or not isinstance(query, str):
+            return json.dumps({"error": "Missing or invalid required parameter: query"})
+
+        max_results = args.get("max_results", web_search_tool.DEFAULT_MAX_RESULTS)
+        if not isinstance(max_results, int):
+            return json.dumps({"error": "max_results must be an integer"})
+
+        try:
+            return await web_search_tool.execute(
+                query, max_results, self.search_service
+            )
+        except Exception as exc:
+            logger_mcp.exception("web_search failed")
+            return json.dumps({"error": str(exc)})
