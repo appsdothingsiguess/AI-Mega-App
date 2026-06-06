@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock
 
-from app.chat_service import build_prompt_messages
 from app.config import Settings
 from app.lmstudio_client import ChatMessage, LMStudioClient
 
@@ -33,16 +32,12 @@ def test_multi_turn_llm_mode_uses_rest_messages_array() -> None:
 
     client._request = fake_request  # type: ignore[method-assign]
 
-    messages = build_prompt_messages(
-        project_name="Demo",
-        system_prompt="Be concise.",
-        retrieved_chunks=[],
-        history=[
-            {"role": "user", "content": "First question"},
-            {"role": "assistant", "content": "First answer"},
-        ],
-        user_message="Follow-up question",
-    )
+    messages = [
+        ChatMessage(role="system", content="Be concise."),
+        ChatMessage(role="user", content="First question"),
+        ChatMessage(role="assistant", content="First answer"),
+        ChatMessage(role="user", content="Follow-up question"),
+    ]
     assert len([m for m in messages if m.role != "system"]) > 1
 
     result = client.chat(messages)
