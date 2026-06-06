@@ -1,0 +1,15 @@
+---
+description: "Core stack and conventions"
+alwaysApply: true
+---
+Stack: Python 3.12, FastAPI (async), React 18 / Vite / TypeScript, LiteLLM, Ollama (Docker), Qdrant (Docker).
+
+All I/O-performing functions must be async. Sync helpers are allowed for pure computation only.
+
+All model names, provider URLs, and tool names come from settings.json or litellm_config.yaml — resolved at runtime, never hardcoded in application logic.
+
+Streaming via SSE is the primary response path. ChatOrchestrator.handle_message() returns AsyncIterator[str].
+
+Use dataclasses for data transfer objects. Use Pydantic for config/settings validation only.
+
+Naming: snake_case for Python, camelCase for TypeScript. Files: lowercase with underscores (Python), PascalCase components (TSX).

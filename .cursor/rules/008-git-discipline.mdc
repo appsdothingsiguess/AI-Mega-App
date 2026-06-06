@@ -1,0 +1,22 @@
+---
+alwaysApply: true
+---
+
+Before writing any code, you MUST execute these steps in order:
+
+1. `git status` — confirm clean working tree
+2. `git checkout -b phase1/<task-name>` — create task branch (use the branch name from the task prompt)
+3. If uncommitted changes exist on main, stop and report them before proceeding
+
+During implementation, commit after each logical unit of work:
+- `git add <files-in-scope-only>`
+- `git commit -m "feat(<task>): <what was done>"`
+
+Never use `git add .` — only stage files listed in your FILE SCOPE.
+
+At task completion, before reporting done:
+1. Run all tests
+2. Commit any remaining changes
+3. Report: branch name, files committed, test results
+
+Never leave work uncommitted. Never commit files outside your FILE SCOPE.

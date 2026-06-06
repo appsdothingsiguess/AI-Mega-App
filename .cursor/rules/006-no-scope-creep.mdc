@@ -1,0 +1,15 @@
+---
+description: "Agent boundaries"
+alwaysApply: true
+---
+ChatService is DELETED. ChatOrchestrator replaces it. All references to ChatService are dead code.
+
+project_manager.py is frozen — read and call it, never modify it.
+
+Each agent task has an explicit file scope. Only modify files listed in your task contract.
+
+When a change requires modifying a file outside your scope, stop and describe what you need changed and why.
+
+Shared config files (pyproject.toml, settings.json) have a designated owner per phase. If you need a config change, describe it — the owner agent applies it.
+
+Run existing tests after every change. Add new tests for new code. All tests must pass before considering a task complete.

@@ -1,0 +1,16 @@
+---
+description: "FastAPI backend conventions"
+globs: ["app/**/*.py"]
+alwaysApply: false
+---
+All chat endpoints stream via SSE. ChatOrchestrator.handle_message() returns AsyncIterator[str].
+
+FastAPI dependencies use Depends() for injection. ModelScheduler, Settings, and service instances are singletons created in lifespan.
+
+Use httpx.AsyncClient for all HTTP calls. Close clients in lifespan shutdown.
+
+Logging uses named loggers: prompter.router, prompter.rag, prompter.llm, prompter.search, prompter.embedding, prompter.mcp, prompter.scheduler.
+
+Error responses use standard FastAPI HTTPException with appropriate status codes.
+
+Test files live in tests/ and use pytest + pytest-asyncio. Every new module gets a corresponding test file.

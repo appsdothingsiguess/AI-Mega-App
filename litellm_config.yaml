@@ -1,0 +1,39 @@
+# litellm_config.yaml
+model_list:
+  # Local models (Ollama)
+  - model_name: local/qwen3-8b
+    litellm_params:
+      model: ollama/qwen3:8b
+      api_base: http://localhost:11434
+
+  - model_name: local/qwen2.5-coder-7b
+    litellm_params:
+      model: ollama/qwen2.5-coder:7b
+      api_base: http://localhost:11434
+
+  - model_name: local/qwen2.5-vl-3b
+    litellm_params:
+      model: ollama/qwen2.5-vl-3b
+      api_base: http://localhost:11434
+
+  - model_name: local/deepseek-r1-8b
+    litellm_params:
+      model: ollama/deepseek-r1:8b
+      api_base: http://localhost:11434
+
+  # Remote models (OpenCode Go — OpenAI-compatible)
+  - model_name: remote/deepseek-v4-pro
+    litellm_params:
+      model: openai/deepseek-v4-pro
+      api_base: https://opencode.ai/zen/go/v1
+      api_key: os.environ/OPENCODE_API_KEY
+      extra_headers:
+        User-Agent: prompter-x/1.0
+
+  - model_name: remote/kimi-k2-6
+    litellm_params:
+      model: openai/kimi-k2-6
+      api_base: https://opencode.ai/zen/go/v1
+      api_key: os.environ/OPENCODE_API_KEY
+      extra_headers:
+        User-Agent: prompter-x/1.0

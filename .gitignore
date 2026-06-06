@@ -1,0 +1,45 @@
+# Environment and secrets
+.env
+
+# Python
+.venv/
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+dist/
+*.egg-info/
+.eggs/
+pip-wheel-metadata/
+.pytest_cache/
+.coverage
+htmlcov/
+.mypy_cache/
+.ruff_cache/
+
+# Node / frontend (web/)
+web/node_modules/
+web/dist/
+
+# Local runtime data (uploads, UI overrides, legacy project root)
+data/
+
+# User projects (sample ships with the repo)
+projects/*
+!projects/sample-project/
+
+# Generated per-project state (RAG index, threads, uploads)
+**/.prompter/
+
+# OS and editors
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+.idea/
+.vscode/
+
+# Logs
+*.log
