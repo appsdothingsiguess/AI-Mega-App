@@ -15,6 +15,7 @@ export default defineConfig({
   plugins: [react()],
   server: {
     proxy: {
+      "/api": proxyApi(),
       "/health": proxyApi(),
       "/settings": proxyApi(),
       "/projects": proxyApi(),
