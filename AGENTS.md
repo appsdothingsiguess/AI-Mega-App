@@ -28,6 +28,7 @@ Python 3.12, FastAPI (async), React 18 / Vite / TypeScript, LiteLLM, Ollama (Doc
 
 ## Key Rules
 
+- **Git:** Each task uses branch `phase1/<task-name>`, commits are mandatory at task completion — see `.cursor/rules/008-git-discipline.mdc`. Do not wait for the user to ask.
 - All model names resolved from settings.json at runtime — never hardcoded
 - All I/O methods are async
 - Streaming via SSE is the primary response path

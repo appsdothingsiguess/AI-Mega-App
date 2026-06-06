@@ -1,22 +1,66 @@
 ---
+description: Git workflow for parallel Phase 1 agent tasks — branch, commit, never leave dirty
 alwaysApply: true
 ---
 
-Before writing any code, you MUST execute these steps in order:
+# Git Discipline (Parallel Agent Tasks)
 
-1. `git status` — confirm clean working tree
-2. `git checkout -b phase1/<task-name>` — create task branch (use the branch name from the task prompt)
-3. If uncommitted changes exist on main, stop and report them before proceeding
+**Commits are mandatory for task prompts with a FILE SCOPE.** Do not wait for the user to ask. This rule overrides general "only commit when requested" preferences during phased agent work.
 
-During implementation, commit after each logical unit of work:
-- `git add <files-in-scope-only>`
-- `git commit -m "feat(<task>): <what was done>"`
+Each parallel agent owns one branch and one file scope. Never assume a clean repo unless you verified it.
 
-Never use `git add .` — only stage files listed in your FILE SCOPE.
+## Pre-flight (before any code changes)
 
-At task completion, before reporting done:
-1. Run all tests
-2. Commit any remaining changes
-3. Report: branch name, files committed, test results
+Run in order:
 
-Never leave work uncommitted. Never commit files outside your FILE SCOPE.
+1. `git status` and `git branch --show-current`
+2. Read the task prompt's **branch name** (e.g. `phase1/chat-orchestrator`) and **FILE SCOPE**
+3. Branch setup:
+   - If already on the task branch → continue (uncommitted in-scope work is OK to finish)
+   - Else if the task branch exists → `git checkout <task-branch>`
+   - Else → `git checkout main` then `git checkout -b <task-branch>`
+4. **Stop and report** (do not edit) if:
+   - You are on `main` with any uncommitted changes
+   - Uncommitted changes include files **outside your FILE SCOPE** (another agent, user, or wrong task)
+   - You cannot create/switch branches without losing or overwriting foreign changes
+
+Do not stash, reset, or commit files outside your scope to "clean up" the tree.
+
+## During implementation
+
+Commit after each logical unit of work:
+
+```bash
+git add <files-in-scope-only>
+git commit -m "feat(<task>): <what was done>"
+```
+
+- Never use `git add .`
+- Only stage files listed in your FILE SCOPE
+- Never commit files outside FILE SCOPE in a `feat(<task>)` commit
+
+## Out-of-scope fallout (tests only)
+
+If your in-scope change breaks an out-of-scope test (e.g. deleted module still imported elsewhere), apply the **minimal** fix and commit it separately:
+
+```bash
+git add <out-of-scope-file>
+git commit -m "fix(<area>): <why required by task N>"
+```
+
+Note this in your completion report. Do not expand scope beyond what tests require.
+
+## Task completion (before reporting done)
+
+1. Run all tests (`pytest`)
+2. Commit any remaining in-scope changes
+3. Working tree must be clean (or only unrelated user edits you did not touch)
+4. Report: **branch name**, **commits made** (hash + message), **files touched**, **test results**
+
+**Never leave task work uncommitted.**
+
+## Parallel safety
+
+- One task → one branch → one FILE SCOPE. Tasks are designed not to overlap files.
+- Do not merge, rebase, or push unless the user explicitly asks.
+- If two agents would edit the same file (e.g. both touch `app/main.py`), coordinate via branch order or sequential merges — do not commit the other agent's files.
