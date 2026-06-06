@@ -6,12 +6,16 @@ import {
 import {
   listThreads,
   getMessages,
-  sendMessage,
+  streamChat,
   getSources,
   MessageRecord,
   SourcesState,
+  SourceChunk,
+  StreamChatError,
 } from "../api/client";
-import MessageBubble from "./MessageBubble";
+import MessageBubble, { ToolEvent } from "./MessageBubble";
+import ModelSelector from "./ModelSelector";
+import ToolToggles, { ToolTogglesState } from "./ToolToggles";
 
 // Same verb list as app/main.py _THINKING_VERBS
 const THINKING_VERBS = [
@@ -55,12 +59,28 @@ export function countEnabled(s: SourcesState): number {
   return s.files.length === 0 ? 0 : enabled.length;
 }
 
+export interface StreamingMessage {
+  role: "user" | "assistant";
+  content: string;
+  created_at: string;
+  isStreaming?: boolean;
+  tools?: ToolEvent[];
+  sources?: SourceChunk[];
+  error?: string;
+}
+
 interface Props {
   projectId: string | null;
   threadId: string | null;
   sourcesVersion: number;
   threadsVersion?: number;
   onThreadsChange?: () => void;
+  modelOverride: string | null;
+  onModelOverrideChange: (alias: string | null) => void;
+  toolToggles: ToolTogglesState;
+  onToolTogglesChange: (toggles: ToolTogglesState) => void;
+  onModelLoading: (payload: { model: string; estimated_seconds: number }) => void;
+  onClearModelLoading: () => void;
 }
 
 function useVerbCycle(active: boolean): string {
@@ -73,26 +93,48 @@ function useVerbCycle(active: boolean): string {
   return verb;
 }
 
+function toDisplayMessage(m: MessageRecord): StreamingMessage {
+  return {
+    role: m.role as "user" | "assistant",
+    content: m.content,
+    created_at: m.created_at,
+  };
+}
+
 export default function ChatView({
   projectId,
   threadId,
   sourcesVersion,
   threadsVersion = 0,
   onThreadsChange,
+  modelOverride,
+  onModelOverrideChange,
+  toolToggles,
+  onToolTogglesChange,
+  onModelLoading,
+  onClearModelLoading,
 }: Props) {
-  const [messages, setMessages] = useState<MessageRecord[]>([]);
+  const [messages, setMessages] = useState<StreamingMessage[]>([]);
   const [threadTitle, setThreadTitle] = useState<string | null>(null);
   const [draft, setDraft] = useState("");
-  const [loading, setLoading] = useState(false);
+  const [streaming, setStreaming] = useState(false);
+  const [awaitingFirstChunk, setAwaitingFirstChunk] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [enabledCount, setEnabledCount] = useState<number | null>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const abortRef = useRef<AbortController | null>(null);
 
-  const thinkingVerb = useVerbCycle(loading);
+  const thinkingVerb = useVerbCycle(awaitingFirstChunk);
 
   const scrollBottom = () =>
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
+
+  useEffect(() => {
+    return () => {
+      abortRef.current?.abort();
+    };
+  }, []);
 
   useEffect(() => {
     if (!projectId) {
@@ -127,6 +169,9 @@ export default function ChatView({
     setMessages([]);
     setError(null);
     setDraft("");
+    abortRef.current?.abort();
+    setStreaming(false);
+    setAwaitingFirstChunk(false);
   }, [projectId]);
 
   useEffect(() => {
@@ -134,9 +179,17 @@ export default function ChatView({
       setMessages([]);
       return;
     }
+    abortRef.current?.abort();
+    setStreaming(false);
+    setAwaitingFirstChunk(false);
+
     getMessages(projectId, threadId)
       .then((msgs) => {
-        setMessages(msgs as MessageRecord[]);
+        setMessages(
+          (msgs as MessageRecord[])
+            .filter((m) => m.role !== "system")
+            .map(toDisplayMessage),
+        );
         setTimeout(scrollBottom, 80);
       })
       .catch((e: unknown) => {
@@ -144,38 +197,161 @@ export default function ChatView({
       });
   }, [projectId, threadId, threadsVersion]);
 
+  const updateStreamingMessage = (
+    updater: (msg: StreamingMessage) => StreamingMessage,
+  ) => {
+    setMessages((prev) => {
+      const idx = prev.findIndex((m) => m.isStreaming);
+      if (idx === -1) return prev;
+      const next = [...prev];
+      next[idx] = updater(next[idx]);
+      return next;
+    });
+  };
+
   const handleSend = async () => {
-    if (!projectId || !threadId || !draft.trim() || loading) return;
+    if (!projectId || !threadId || !draft.trim() || streaming) return;
     const content = draft.trim();
     setDraft("");
     setError(null);
 
-    const optimisticUser: MessageRecord = {
+    abortRef.current?.abort();
+    const controller = new AbortController();
+    abortRef.current = controller;
+
+    const optimisticUser: StreamingMessage = {
       role: "user",
       content,
       created_at: new Date().toISOString(),
     };
-    setMessages((prev) => [...prev, optimisticUser]);
+    const streamingAssistant: StreamingMessage = {
+      role: "assistant",
+      content: "",
+      created_at: new Date().toISOString(),
+      isStreaming: true,
+      tools: [],
+      sources: [],
+    };
+
+    setMessages((prev) => [...prev, optimisticUser, streamingAssistant]);
+    setStreaming(true);
+    setAwaitingFirstChunk(true);
     setTimeout(scrollBottom, 50);
 
-    setLoading(true);
+    const body: {
+      content: string;
+      model_override?: string;
+      enabled_tools?: Record<string, boolean>;
+    } = {
+      content,
+      enabled_tools: { ...toolToggles },
+    };
+    if (modelOverride) {
+      body.model_override = modelOverride;
+    }
+
+    let gotFirstChunk = false;
+
     try {
-      const resp = await sendMessage(projectId, threadId, content);
-      const assistantMsg: MessageRecord = {
-        role: "assistant",
-        content: resp.reply,
-        created_at: new Date().toISOString(),
-      };
-      setMessages((prev) => [...prev, assistantMsg]);
+      for await (const event of streamChat(
+        projectId,
+        threadId,
+        body,
+        controller.signal,
+      )) {
+        switch (event.type) {
+          case "model_loading":
+            onModelLoading({
+              model: event.model,
+              estimated_seconds: event.estimated_seconds,
+            });
+            break;
+
+          case "sources":
+            updateStreamingMessage((msg) => ({
+              ...msg,
+              sources: event.chunks,
+            }));
+            break;
+
+          case "chunk":
+            if (!gotFirstChunk) {
+              gotFirstChunk = true;
+              setAwaitingFirstChunk(false);
+              onClearModelLoading();
+            }
+            updateStreamingMessage((msg) => ({
+              ...msg,
+              content: msg.content + event.content,
+            }));
+            setTimeout(scrollBottom, 30);
+            break;
+
+          case "tool_call":
+            updateStreamingMessage((msg) => ({
+              ...msg,
+              tools: [
+                ...(msg.tools ?? []),
+                { name: event.name, kind: "call", input: event.input },
+              ],
+            }));
+            break;
+
+          case "tool_result":
+            updateStreamingMessage((msg) => ({
+              ...msg,
+              tools: [
+                ...(msg.tools ?? []),
+                { name: event.name, kind: "result", output: event.output },
+              ],
+            }));
+            break;
+
+          case "error":
+            updateStreamingMessage((msg) => ({
+              ...msg,
+              error: event.message,
+            }));
+            break;
+
+          case "done":
+            updateStreamingMessage((msg) => ({
+              ...msg,
+              isStreaming: false,
+            }));
+            break;
+        }
+      }
+
+      setMessages((prev) =>
+        prev.map((m) => (m.isStreaming ? { ...m, isStreaming: false } : m)),
+      );
+
       getSources(projectId)
         .then((s) => setEnabledCount(countEnabled(s)))
         .catch(() => null);
       onThreadsChange?.();
     } catch (e: unknown) {
-      setError(e instanceof Error ? e.message : "Send failed");
-      setMessages((prev) => prev.filter((m) => m !== optimisticUser));
+      if (e instanceof DOMException && e.name === "AbortError") {
+        setMessages((prev) =>
+          prev.map((m) => (m.isStreaming ? { ...m, isStreaming: false } : m)),
+        );
+      } else {
+        const msg =
+          e instanceof StreamChatError || e instanceof Error
+            ? e.message
+            : "Send failed";
+        setError(msg);
+        setMessages((prev) => {
+          const withoutStreaming = prev.filter((m) => !m.isStreaming);
+          return withoutStreaming.filter((m) => m !== optimisticUser);
+        });
+      }
+      onClearModelLoading();
     } finally {
-      setLoading(false);
+      setStreaming(false);
+      setAwaitingFirstChunk(false);
+      abortRef.current = null;
       setTimeout(scrollBottom, 80);
       textareaRef.current?.focus();
     }
@@ -208,30 +384,45 @@ export default function ChatView({
     );
   }
 
-  const visibleMessages = messages.filter((m) => m.role !== "system");
   const headerTitle = threadTitle ?? threadId.slice(0, 12);
 
   return (
     <div style={styles.root}>
       <div style={styles.chatHeader}>
         <span style={styles.chatTitle}>{headerTitle}</span>
+        <div style={styles.headerControls}>
+          <ModelSelector
+            modelOverride={modelOverride}
+            onModelOverrideChange={onModelOverrideChange}
+            disabled={streaming}
+          />
+          <ToolToggles
+            toggles={toolToggles}
+            onChange={onToolTogglesChange}
+            disabled={streaming}
+          />
+        </div>
       </div>
 
       <div style={styles.messages}>
-        {visibleMessages.length === 0 && !loading && (
+        {messages.length === 0 && !awaitingFirstChunk && (
           <div style={styles.noMessages}>
             No messages yet — send one below
           </div>
         )}
-        {visibleMessages.map((m, i) => (
+        {messages.map((m, i) => (
           <MessageBubble
             key={i}
-            role={m.role as "user" | "assistant" | "system"}
+            role={m.role}
             content={m.content}
             createdAt={m.created_at}
+            isStreaming={m.isStreaming}
+            tools={m.tools}
+            sources={m.sources}
+            error={m.error}
           />
         ))}
-        {loading && (
+        {awaitingFirstChunk && (
           <div style={styles.loadingRow}>
             <span style={styles.loadingDot}>•</span>
             <span style={styles.loadingVerb}>{thinkingVerb}…</span>
@@ -271,17 +462,17 @@ export default function ChatView({
             placeholder="Ask something… (Enter to send, Shift+Enter for newline)"
             onChange={(e) => setDraft(e.target.value)}
             onKeyDown={handleKeyDown}
-            disabled={loading}
+            disabled={streaming}
           />
           <button
             style={{
               ...styles.sendBtn,
-              ...(loading || !draft.trim() ? styles.sendBtnDisabled : {}),
+              ...(streaming || !draft.trim() ? styles.sendBtnDisabled : {}),
             }}
             onClick={handleSend}
-            disabled={loading || !draft.trim()}
+            disabled={streaming || !draft.trim()}
           >
-            {loading ? "…" : "Send"}
+            {streaming ? "…" : "Send"}
           </button>
         </div>
       </div>
@@ -323,10 +514,10 @@ const styles: Record<string, React.CSSProperties> = {
   },
   chatHeader: {
     display: "flex",
-    alignItems: "center",
-    padding: "0 16px",
+    flexDirection: "column",
+    gap: 8,
+    padding: "8px 16px",
     borderBottom: "1px solid var(--border)",
-    height: 40,
     flexShrink: 0,
   },
   chatTitle: {
@@ -335,6 +526,11 @@ const styles: Record<string, React.CSSProperties> = {
     overflow: "hidden",
     textOverflow: "ellipsis",
     whiteSpace: "nowrap",
+  },
+  headerControls: {
+    display: "flex",
+    flexDirection: "column",
+    gap: 6,
   },
   messages: {
     flex: 1,

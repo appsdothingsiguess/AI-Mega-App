@@ -3,7 +3,40 @@ import { health, HealthResponse } from "../api/client";
 
 const POLL_INTERVAL = 30_000;
 
-export default function StatusBar() {
+export interface ModelLoadingState {
+  model: string;
+  estimated_seconds: number;
+}
+
+interface Props {
+  modelLoading?: ModelLoadingState | null;
+}
+
+function isHealthy(h: HealthResponse): boolean {
+  if (h.status) {
+    return h.status === "healthy" || h.status === "degraded";
+  }
+  return h.ok === true;
+}
+
+function formatHealthLabel(h: HealthResponse): string {
+  if (h.services) {
+    const parts: string[] = [];
+    const svc = h.services;
+    if (svc.ollama) parts.push(`ollama:${svc.ollama.status}`);
+    if (svc.qdrant) parts.push(`qdrant:${svc.qdrant.status}`);
+    if (svc.litellm) parts.push(`litellm:${svc.litellm.status}`);
+    if (svc.remote_provider) parts.push(`remote:${svc.remote_provider.status}`);
+    const status = h.status ?? "unknown";
+    return parts.length > 0 ? `${status} · ${parts.join(" · ")}` : status;
+  }
+  if (h.model !== undefined) {
+    return `${h.model_loaded ? h.model : "no model"} · ${h.mode ?? ""} · ${h.base_url ?? ""}`;
+  }
+  return h.message ?? "Connected";
+}
+
+export default function StatusBar({ modelLoading }: Props) {
   const [status, setStatus] = useState<HealthResponse | null>(null);
   const [error, setError] = useState(false);
 
@@ -23,25 +56,36 @@ export default function StatusBar() {
     return () => clearInterval(id);
   }, []);
 
-  const dot = error || !status?.ok
+  const healthy = !error && status && isHealthy(status);
+  const dot = error || !healthy
     ? <span style={{ color: "var(--danger)" }}>●</span>
     : <span style={{ color: "var(--success)" }}>●</span>;
 
   const label = error
-    ? "LM Studio: unreachable"
+    ? "Backend: unreachable"
     : status
-    ? `${status.model_loaded ? status.model : "no model"} · ${status.mode} · ${status.base_url}`
+    ? formatHealthLabel(status)
     : "Connecting…";
+
+  const degraded =
+    status?.status === "degraded" ||
+    (status?.services &&
+      Object.values(status.services).some((s) => s?.status === "down"));
 
   return (
     <div style={styles.bar}>
       <span style={styles.dot}>{dot}</span>
       <span style={styles.label}>
-        <strong>LM Studio</strong>&nbsp;{label}
+        <strong>Prompter</strong>&nbsp;{label}
       </span>
-      {status?.ok && !status.model_loaded && (
+      {degraded && !error && (
         <span style={{ color: "var(--warning)", marginLeft: 8 }}>
-          ⚠ No model loaded
+          ⚠ Degraded
+        </span>
+      )}
+      {modelLoading && (
+        <span style={styles.modelLoading}>
+          Loading {modelLoading.model} (~{modelLoading.estimated_seconds}s)
         </span>
       )}
     </div>
@@ -68,5 +112,16 @@ const styles: Record<string, React.CSSProperties> = {
   label: {
     fontFamily: "var(--font-mono)",
     fontSize: 11,
+    flex: 1,
+    overflow: "hidden",
+    textOverflow: "ellipsis",
+    whiteSpace: "nowrap",
+  },
+  modelLoading: {
+    color: "var(--accent)",
+    fontFamily: "var(--font-mono)",
+    fontSize: 11,
+    flexShrink: 0,
+    marginLeft: "auto",
   },
 };

@@ -1,10 +1,76 @@
+import { useState } from "react";
+import type { SourceChunk } from "../api/client";
+import ArtifactRenderer from "./ArtifactRenderer";
+import SourceCitations from "./SourceCitations";
+
+export interface ToolEvent {
+  name: string;
+  kind: "call" | "result";
+  input?: Record<string, unknown>;
+  output?: string;
+}
+
 interface Props {
   role: "user" | "assistant" | "system";
   content: string;
   createdAt?: string;
+  isStreaming?: boolean;
+  tools?: ToolEvent[];
+  sources?: SourceChunk[];
+  error?: string;
 }
 
-export default function MessageBubble({ role, content, createdAt }: Props) {
+function formatToolOutput(output: string): string {
+  try {
+    const parsed = JSON.parse(output);
+    return JSON.stringify(parsed, null, 2);
+  } catch {
+    return output;
+  }
+}
+
+function ToolSection({ tools }: { tools: ToolEvent[] }) {
+  const [open, setOpen] = useState(true);
+  if (tools.length === 0) return null;
+
+  return (
+    <div style={styles.toolsWrap}>
+      <button type="button" style={styles.toolsToggle} onClick={() => setOpen((v) => !v)}>
+        {open ? "▾" : "▸"} Tools ({tools.length})
+      </button>
+      {open && (
+        <div style={styles.toolsList}>
+          {tools.map((t, i) => (
+            <div key={i} style={styles.toolItem}>
+              <div style={styles.toolHeader}>
+                <span style={styles.toolKind}>{t.kind === "call" ? "Call" : "Result"}</span>
+                <span style={styles.toolName}>{t.name}</span>
+              </div>
+              {t.kind === "call" && t.input && (
+                <pre style={styles.toolBody}>
+                  {JSON.stringify(t.input, null, 2)}
+                </pre>
+              )}
+              {t.kind === "result" && t.output !== undefined && (
+                <pre style={styles.toolBody}>{formatToolOutput(t.output)}</pre>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+export default function MessageBubble({
+  role,
+  content,
+  createdAt,
+  isStreaming,
+  tools,
+  sources,
+  error,
+}: Props) {
   if (role === "system") return null;
 
   const time = createdAt
@@ -26,21 +92,16 @@ export default function MessageBubble({ role, content, createdAt }: Props) {
     <div style={styles.assistantRow}>
       <div style={styles.assistantDot}>•</div>
       <div style={styles.assistantBody}>
-        <div style={styles.assistantContent}>{formatAssistant(content)}</div>
-        {time && <div style={styles.timeAssistant}>{time}</div>}
+        {tools && tools.length > 0 && <ToolSection tools={tools} />}
+        {sources && sources.length > 0 && <SourceCitations sources={sources} />}
+        {(content || isStreaming) && (
+          <ArtifactRenderer content={content} isStreaming={isStreaming} />
+        )}
+        {error && <div style={styles.inlineError}>{error}</div>}
+        {time && !isStreaming && <div style={styles.timeAssistant}>{time}</div>}
       </div>
     </div>
   );
-}
-
-/** Render line breaks; no heavy markdown parsing. */
-function formatAssistant(text: string): React.ReactNode {
-  return text.split("\n").map((line, i) => (
-    <span key={i}>
-      {line}
-      {i < text.split("\n").length - 1 && <br />}
-    </span>
-  ));
 }
 
 const styles: Record<string, React.CSSProperties> = {
@@ -85,17 +146,69 @@ const styles: Record<string, React.CSSProperties> = {
   },
   assistantBody: {
     flex: 1,
-  },
-  assistantContent: {
-    fontSize: 14,
-    lineHeight: 1.65,
-    whiteSpace: "pre-wrap",
-    wordBreak: "break-word",
-    color: "var(--text-primary)",
+    minWidth: 0,
   },
   timeAssistant: {
     marginTop: 4,
     fontSize: 10,
     color: "var(--text-dim)",
+  },
+  inlineError: {
+    marginTop: 8,
+    padding: "6px 10px",
+    borderRadius: "var(--radius-sm)",
+    background: "var(--danger-dim)",
+    color: "var(--danger)",
+    fontSize: 12,
+  },
+  toolsWrap: {
+    marginBottom: 8,
+  },
+  toolsToggle: {
+    fontSize: 11,
+    color: "var(--text-muted)",
+    padding: "2px 0",
+    background: "transparent",
+  },
+  toolsList: {
+    marginTop: 4,
+    display: "flex",
+    flexDirection: "column",
+    gap: 6,
+  },
+  toolItem: {
+    border: "1px solid var(--border)",
+    borderRadius: "var(--radius-sm)",
+    overflow: "hidden",
+    background: "var(--bg-sidebar)",
+  },
+  toolHeader: {
+    display: "flex",
+    alignItems: "center",
+    gap: 8,
+    padding: "4px 8px",
+    borderBottom: "1px solid var(--border)",
+    fontSize: 11,
+  },
+  toolKind: {
+    color: "var(--text-dim)",
+    textTransform: "uppercase",
+    fontSize: 10,
+    letterSpacing: "0.04em",
+  },
+  toolName: {
+    color: "var(--accent)",
+    fontFamily: "var(--font-mono)",
+  },
+  toolBody: {
+    margin: 0,
+    padding: "8px 10px",
+    fontSize: 11,
+    fontFamily: "var(--font-mono)",
+    lineHeight: 1.45,
+    overflowX: "auto",
+    whiteSpace: "pre-wrap",
+    wordBreak: "break-word",
+    color: "var(--text-muted)",
   },
 };

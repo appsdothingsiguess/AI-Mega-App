@@ -1,10 +1,15 @@
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import ProjectSidebar from "./components/ProjectSidebar";
 import SourcesPanel from "./components/SourcesPanel";
 import ChatView from "./components/ChatView";
 import InstructionsPanel from "./components/InstructionsPanel";
 import SettingsModal from "./components/SettingsModal";
-import StatusBar from "./components/StatusBar";
+import StatusBar, { ModelLoadingState } from "./components/StatusBar";
+import {
+  DEFAULT_TOOL_TOGGLES,
+  ToolTogglesState,
+} from "./components/ToolToggles";
+import { getSettings } from "./api/client";
 
 export default function App() {
   const [selectedProject, setSelectedProject] = useState<string | null>(null);
@@ -12,6 +17,11 @@ export default function App() {
   const [showSettings, setShowSettings] = useState(false);
   const [sourcesVersion, setSourcesVersion] = useState(0);
   const [threadsVersion, setThreadsVersion] = useState(0);
+
+  const [modelOverride, setModelOverride] = useState<string | null>(null);
+  const [toolToggles, setToolToggles] = useState<ToolTogglesState>(DEFAULT_TOOL_TOGGLES);
+  const [modelLoading, setModelLoading] = useState<ModelLoadingState | null>(null);
+  const [ollamaNameToAlias, setOllamaNameToAlias] = useState<Record<string, string>>({});
 
   const notifySourcesChanged = useCallback(
     () => setSourcesVersion((v) => v + 1),
@@ -22,10 +32,52 @@ export default function App() {
     [],
   );
 
+  useEffect(() => {
+    getSettings()
+      .then((s) => {
+        const reverse: Record<string, string> = {};
+        for (const [alias, ollamaName] of Object.entries(s.ollama_model_names)) {
+          reverse[ollamaName] = alias;
+        }
+        setOllamaNameToAlias(reverse);
+      })
+      .catch(() => {
+        // mapping is optional for display
+      });
+  }, []);
+
+  const resetConversationState = useCallback(() => {
+    setModelOverride(null);
+    setToolToggles(DEFAULT_TOOL_TOGGLES);
+    setModelLoading(null);
+  }, []);
+
   const handleSelectProject = (id: string) => {
     setSelectedProject(id);
     setThreadId(null);
+    resetConversationState();
   };
+
+  const handleThreadSelect = (id: string | null) => {
+    setThreadId(id);
+    resetConversationState();
+  };
+
+  const handleModelLoading = useCallback(
+    (payload: { model: string; estimated_seconds: number }) => {
+      const display =
+        ollamaNameToAlias[payload.model] ?? payload.model;
+      setModelLoading({
+        model: display,
+        estimated_seconds: payload.estimated_seconds,
+      });
+    },
+    [ollamaNameToAlias],
+  );
+
+  const handleClearModelLoading = useCallback(() => {
+    setModelLoading(null);
+  }, []);
 
   return (
     <div style={styles.app}>
@@ -35,7 +87,7 @@ export default function App() {
             selectedId={selectedProject}
             onSelect={handleSelectProject}
             threadId={threadId}
-            onThreadSelect={setThreadId}
+            onThreadSelect={handleThreadSelect}
             onThreadsChange={notifyThreadsChanged}
             threadsVersion={threadsVersion}
           />
@@ -52,6 +104,12 @@ export default function App() {
             sourcesVersion={sourcesVersion}
             threadsVersion={threadsVersion}
             onThreadsChange={notifyThreadsChanged}
+            modelOverride={modelOverride}
+            onModelOverrideChange={setModelOverride}
+            toolToggles={toolToggles}
+            onToolTogglesChange={setToolToggles}
+            onModelLoading={handleModelLoading}
+            onClearModelLoading={handleClearModelLoading}
           />
         </div>
 
@@ -69,7 +127,7 @@ export default function App() {
         </div>
       </div>
 
-      <StatusBar />
+      <StatusBar modelLoading={modelLoading} />
 
       {showSettings && <SettingsModal onClose={() => setShowSettings(false)} />}
     </div>
