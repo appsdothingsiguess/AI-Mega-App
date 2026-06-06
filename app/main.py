@@ -6,20 +6,25 @@ import argparse
 import asyncio
 import itertools
 import json
+import logging
 import random
 import sys
 import threading
 import time
 import warnings
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
 
+import httpx
 from fastapi import FastAPI, File, HTTPException, UploadFile
 from fastapi import status as http_status
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 
 from app.chat_orchestrator import ChatOrchestrator
 from app.config import Settings, get_settings
+from app.config_validation import _parse_litellm_config, validate_config
 from app.settings_store import (
     SettingsValidationError,
     init_settings_store,
@@ -32,9 +37,7 @@ from app import lmstudio_server_config as lm_server_cfg
 from app.message_parts import UserTurn
 from app.project_manager import ProjectManager, ProjectNotFoundError, ThreadNotFoundError
 from app.schemas import (
-    ChatResponse,
     DocFileInfo,
-    HealthResponse,
     InstructionsResponse,
     InstructionsUpdate,
     MessageCreate,
@@ -60,7 +63,7 @@ from app.schemas import (
 # Apply local settings overrides before the first get_settings() call.
 init_settings_store()
 
-app = FastAPI(title="Prompter", description="Local project assistant with LM Studio")
+logger = logging.getLogger(__name__)
 
 _THINKING_VERBS = [
     "Accomplishing", "Actioning", "Actualizing", "Architecting", "Baking",
@@ -162,8 +165,10 @@ class _ClaudeSpinner:
             self._thread.join(timeout=1.0)
 
 
-def _services() -> tuple[Settings, ProjectManager, ChatOrchestrator, LMStudioClient]:
-    settings = get_settings()
+def _build_services(
+    settings: Settings | None = None,
+) -> tuple[Settings, ProjectManager, ChatOrchestrator, LMStudioClient, Any]:
+    settings = settings or get_settings()
     projects = ProjectManager(settings)
     lm = LMStudioClient(settings)
 
@@ -188,35 +193,56 @@ def _services() -> tuple[Settings, ProjectManager, ChatOrchestrator, LMStudioCli
         settings=settings,
         projects=projects,
     )
+    return settings, projects, orchestrator, lm, vector_store
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    settings = get_settings()
+    errors, warnings = await validate_config(settings)
+    startup_errors = [
+        err for err in errors if not err.startswith("Ollama unreachable")
+    ]
+    for err in errors:
+        if err.startswith("Ollama unreachable"):
+            warnings.append(err)
+    for warning in warnings:
+        logger.warning("%s", warning)
+    if startup_errors:
+        raise RuntimeError("; ".join(startup_errors))
+
+    settings, projects, orchestrator, lm, vector_store = _build_services(settings)
+    app.state.settings = settings
+    app.state.projects = projects
+    app.state.orchestrator = orchestrator
+    app.state.lm = lm
+    app.state.vector_store = vector_store
+
+    yield
+
+    await vector_store.close()
+
+
+app = FastAPI(
+    title="Prompter",
+    description="Local project assistant with LM Studio",
+    lifespan=lifespan,
+)
+
+
+def _services() -> tuple[Settings, ProjectManager, ChatOrchestrator, LMStudioClient]:
+    if (
+        getattr(app.state, "orchestrator", None) is not None
+        and getattr(app.state, "settings", None) is not None
+    ):
+        return (
+            app.state.settings,
+            app.state.projects,
+            app.state.orchestrator,
+            app.state.lm,
+        )
+    settings, projects, orchestrator, lm, _vector_store = _build_services()
     return settings, projects, orchestrator, lm
-
-
-async def _collect_chat_response(
-    orchestrator: ChatOrchestrator,
-    project_id: str,
-    thread_id: str,
-    content: str | UserTurn,
-) -> ChatResponse:
-    """Collect streamed SSE events into a ChatResponse for backward-compatible API."""
-    reply_parts: list[str] = []
-    retrieved_chunks: list[dict[str, Any]] = []
-    async for event_str in orchestrator.handle_message(project_id, thread_id, content):
-        event = json.loads(event_str)
-        event_type = event.get("type")
-        if event_type == "chunk":
-            reply_parts.append(event.get("content", ""))
-        elif event_type == "sources":
-            retrieved_chunks = event.get("chunks", [])
-        elif event_type == "error":
-            raise HTTPException(
-                status_code=502,
-                detail=event.get("message", "Chat error"),
-            )
-    return ChatResponse(
-        thread_id=thread_id,
-        reply="".join(reply_parts),
-        retrieved_chunks=retrieved_chunks,
-    )
 
 
 def _sanitize_upload_filename(name: str | None) -> str:
@@ -233,19 +259,117 @@ def _sanitize_upload_filename(name: str | None) -> str:
 # Health
 # ---------------------------------------------------------------------------
 
-@app.get("/health", response_model=HealthResponse)
-def api_health() -> HealthResponse:
-    _, _, _, lm = _services()
-    health = lm.health_check()
-    return HealthResponse(
-        ok=health.ok,
-        mode=health.mode,
-        base_url=health.base_url,
-        model=health.model,
-        model_loaded=health.model_loaded,
-        message=health.message,
-        available_models=health.available_models,
-    )
+async def _check_ollama_health(settings: Settings) -> dict[str, Any]:
+    try:
+        async with httpx.AsyncClient(timeout=3) as client:
+            resp = await client.get(f"{settings.ollama.base_url.rstrip('/')}/api/tags")
+            resp.raise_for_status()
+            data = resp.json()
+            loaded_models = [
+                str(entry.get("name", ""))
+                for entry in data.get("models", [])
+                if entry.get("name")
+            ]
+            return {"status": "up", "loaded_models": loaded_models}
+    except Exception as exc:
+        return {"status": "down", "error": str(exc), "loaded_models": []}
+
+
+async def _check_qdrant_health(settings: Settings) -> dict[str, Any]:
+    try:
+        async with httpx.AsyncClient(timeout=3) as client:
+            resp = await client.get(f"{settings.qdrant.url.rstrip('/')}/collections")
+            resp.raise_for_status()
+            data = resp.json()
+            collections = data.get("result", {}).get("collections", [])
+            count = len(collections) if isinstance(collections, list) else 0
+            return {"status": "up", "collections": count}
+    except Exception as exc:
+        return {"status": "down", "error": str(exc), "collections": 0}
+
+
+def _check_litellm_health(settings: Settings) -> dict[str, Any]:
+    try:
+        litellm_models = _parse_litellm_config(settings.litellm_config_path)
+        missing = [
+            alias
+            for _intent, alias in settings.models.items()
+            if alias not in litellm_models
+        ]
+        if missing:
+            return {
+                "status": "down",
+                "error": f"Missing litellm aliases: {', '.join(missing)}",
+            }
+        return {"status": "up"}
+    except Exception as exc:
+        return {"status": "down", "error": str(exc)}
+
+
+async def _check_remote_provider_health(settings: Settings) -> dict[str, Any]:
+    if not settings.opencode_go.enabled:
+        return {"status": "down", "error": "Remote provider disabled"}
+    if not settings.opencode_go.api_key:
+        return {"status": "down", "error": "API key not configured"}
+    try:
+        base = settings.opencode_go.base_url.rstrip("/")
+        url = f"{base}/zen/go/v1/models"
+        async with httpx.AsyncClient(timeout=3) as client:
+            resp = await client.get(
+                url,
+                headers={"Authorization": f"Bearer {settings.opencode_go.api_key}"},
+            )
+            if resp.status_code < 500:
+                return {"status": "up"}
+            return {"status": "down", "error": f"HTTP {resp.status_code}"}
+    except Exception as exc:
+        return {"status": "down", "error": str(exc)}
+
+
+def _compute_overall_health_status(
+    settings: Settings,
+    services: dict[str, dict[str, Any]],
+) -> str:
+    if services["litellm"]["status"] != "up":
+        return "down"
+
+    ollama_up = services["ollama"]["status"] == "up"
+    qdrant_up = services["qdrant"]["status"] == "up"
+    remote_up = services["remote_provider"]["status"] == "up"
+
+    has_local = any(alias.startswith("local/") for alias in settings.models.values())
+    has_remote = any(alias.startswith("remote/") for alias in settings.models.values())
+
+    local_usable = ollama_up and has_local
+    remote_usable = remote_up and has_remote
+
+    if not local_usable and not remote_usable:
+        return "down"
+
+    if ollama_up and qdrant_up and remote_up:
+        return "healthy"
+
+    return "degraded"
+
+
+async def _build_health_report(settings: Settings) -> tuple[str, dict[str, Any]]:
+    services = {
+        "ollama": await _check_ollama_health(settings),
+        "qdrant": await _check_qdrant_health(settings),
+        "litellm": _check_litellm_health(settings),
+        "remote_provider": await _check_remote_provider_health(settings),
+    }
+    status = _compute_overall_health_status(settings, services)
+    return status, services
+
+
+@app.get("/health")
+async def api_health() -> JSONResponse:
+    settings, _, _, _ = _services()
+    status, services = await _build_health_report(settings)
+    body = {"status": status, "services": services}
+    code = http_status.HTTP_200_OK if status == "healthy" else http_status.HTTP_503_SERVICE_UNAVAILABLE
+    return JSONResponse(content=body, status_code=code)
 
 
 # ---------------------------------------------------------------------------
@@ -655,28 +779,35 @@ def api_get_messages(project_id: str, thread_id: str) -> list[dict[str, Any]]:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
-@app.post(
-    "/projects/{project_id}/threads/{thread_id}/messages",
-    response_model=ChatResponse,
-)
-async def api_send_message(
+@app.post("/api/chat/{project_id}/{thread_id}")
+async def api_chat_sse(
     project_id: str,
     thread_id: str,
     body: MessageCreate,
-) -> ChatResponse:
+) -> StreamingResponse:
     _, projects, orchestrator, _ = _services()
     try:
-        return await _collect_chat_response(
-            orchestrator, project_id, thread_id, body.content
-        )
+        projects.get_thread_messages(project_id, thread_id)
     except ProjectNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except ThreadNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
-    except HTTPException:
-        raise
-    except Exception as exc:
-        raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+    async def event_generator() -> AsyncIterator[str]:
+        try:
+            async for event in orchestrator.handle_message(
+                project_id, thread_id, body.content
+            ):
+                yield f"data: {event}\n\n"
+        except asyncio.CancelledError:
+            logger.info(
+                "Client disconnected from SSE stream project=%s thread=%s",
+                project_id,
+                thread_id,
+            )
+            raise
+
+    return StreamingResponse(event_generator(), media_type="text/event-stream")
 
 
 # ---------------------------------------------------------------------------
@@ -710,7 +841,7 @@ def _register_spa() -> None:
     def spa_path(spa_path: str) -> FileResponse:
         # Never serve the SPA for API paths (avoids swallowing /settings etc.)
         root = spa_path.split("/", 1)[0]
-        if root in {"health", "settings", "projects", "lmstudio", "docs", "openapi.json"}:
+        if root in {"health", "settings", "projects", "lmstudio", "docs", "openapi.json", "api"}:
             raise HTTPException(status_code=404, detail="Not Found")
         candidate = _WEB_DIST / spa_path
         if candidate.is_file():
