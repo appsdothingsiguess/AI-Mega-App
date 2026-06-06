@@ -32,6 +32,11 @@ def _patch_settings(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr("app.main.get_settings", lambda: s)
     monkeypatch.setattr("app.config.get_settings", lambda: s)
     monkeypatch.setattr("app.settings_store.get_settings", lambda: s)
+
+    async def _noop_validate(_settings: Settings) -> tuple[list[str], list[str]]:
+        return [], []
+
+    monkeypatch.setattr("app.main.validate_config", _noop_validate)
     yield
     get_settings.cache_clear()
 
@@ -291,5 +296,11 @@ def test_put_settings_validation_error(client: TestClient) -> None:
 
 def test_health_returns_structure(client: TestClient) -> None:
     resp = client.get("/health")
-    # May fail to reach LM Studio in test env but should return structured response
-    assert resp.status_code in (200, 502)
+    assert resp.status_code in (200, 503)
+    body = resp.json()
+    assert body["status"] in ("healthy", "degraded", "down")
+    assert "services" in body
+    assert "ollama" in body["services"]
+    assert "qdrant" in body["services"]
+    assert "litellm" in body["services"]
+    assert "remote_provider" in body["services"]
