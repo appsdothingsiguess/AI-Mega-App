@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import argparse
+import asyncio
 import itertools
+import json
 import random
 import sys
 import threading
@@ -16,7 +18,7 @@ from fastapi import FastAPI, File, HTTPException, UploadFile
 from fastapi import status as http_status
 from fastapi.responses import FileResponse, JSONResponse
 
-from app.chat_service import ChatService
+from app.chat_orchestrator import ChatOrchestrator
 from app.config import Settings, get_settings
 from app.settings_store import (
     SettingsValidationError,
@@ -27,6 +29,7 @@ from app.settings_store import (
 from app.terminal_input import ChatInputSession
 from app.lmstudio_client import LMStudioClient, LMStudioError, LMStudioModelError
 from app import lmstudio_server_config as lm_server_cfg
+from app.message_parts import UserTurn
 from app.project_manager import ProjectManager, ProjectNotFoundError, ThreadNotFoundError
 from app.schemas import (
     ChatResponse,
@@ -159,12 +162,61 @@ class _ClaudeSpinner:
             self._thread.join(timeout=1.0)
 
 
-def _services() -> tuple[Settings, ProjectManager, ChatService, LMStudioClient]:
+def _services() -> tuple[Settings, ProjectManager, ChatOrchestrator, LMStudioClient]:
     settings = get_settings()
     projects = ProjectManager(settings)
     lm = LMStudioClient(settings)
-    chat = ChatService(settings, projects, lm)
-    return settings, projects, chat, lm
+
+    from app.adapters.classifier_qwen import QwenClassifierAdapter
+    from app.adapters.embedding_nomic import NomicEmbeddingAdapter
+    from app.adapters.qdrant_store import QdrantAdapter
+    from app.model_scheduler import get_model_scheduler
+    from app.router import HybridRouter
+
+    classifier = QwenClassifierAdapter(settings)
+    router = HybridRouter(settings, classifier)
+    embedding = NomicEmbeddingAdapter(settings)
+    vector_store = QdrantAdapter(settings)
+    scheduler = get_model_scheduler(settings) if settings.ollama.scheduler_enabled else None
+
+    orchestrator = ChatOrchestrator(
+        router=router,
+        vector_store=vector_store,
+        embedding_service=embedding,
+        vision_service=None,
+        model_scheduler=scheduler,
+        settings=settings,
+        projects=projects,
+    )
+    return settings, projects, orchestrator, lm
+
+
+async def _collect_chat_response(
+    orchestrator: ChatOrchestrator,
+    project_id: str,
+    thread_id: str,
+    content: str | UserTurn,
+) -> ChatResponse:
+    """Collect streamed SSE events into a ChatResponse for backward-compatible API."""
+    reply_parts: list[str] = []
+    retrieved_chunks: list[dict[str, Any]] = []
+    async for event_str in orchestrator.handle_message(project_id, thread_id, content):
+        event = json.loads(event_str)
+        event_type = event.get("type")
+        if event_type == "chunk":
+            reply_parts.append(event.get("content", ""))
+        elif event_type == "sources":
+            retrieved_chunks = event.get("chunks", [])
+        elif event_type == "error":
+            raise HTTPException(
+                status_code=502,
+                detail=event.get("message", "Chat error"),
+            )
+    return ChatResponse(
+        thread_id=thread_id,
+        reply="".join(reply_parts),
+        retrieved_chunks=retrieved_chunks,
+    )
 
 
 def _sanitize_upload_filename(name: str | None) -> str:
@@ -607,19 +659,23 @@ def api_get_messages(project_id: str, thread_id: str) -> list[dict[str, Any]]:
     "/projects/{project_id}/threads/{thread_id}/messages",
     response_model=ChatResponse,
 )
-def api_send_message(
+async def api_send_message(
     project_id: str,
     thread_id: str,
     body: MessageCreate,
 ) -> ChatResponse:
-    _, projects, chat, _ = _services()
+    _, projects, orchestrator, _ = _services()
     try:
-        return chat.send_message(project_id, thread_id, body.content)
+        return await _collect_chat_response(
+            orchestrator, project_id, thread_id, body.content
+        )
     except ProjectNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except ThreadNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
-    except LMStudioError as exc:
+    except HTTPException:
+        raise
+    except Exception as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
 
 
@@ -861,12 +917,26 @@ def run_cli(argv: list[str] | None = None) -> int:
                 if user_turn.is_empty:
                     continue
                 try:
+                    async def _stream_reply() -> str:
+                        parts: list[str] = []
+                        async for event_str in chat.handle_message(
+                            project_id, thread_id, user_turn
+                        ):
+                            event = json.loads(event_str)
+                            if event.get("type") == "chunk":
+                                parts.append(event.get("content", ""))
+                            elif event.get("type") == "error":
+                                raise RuntimeError(
+                                    event.get("message", "Chat error")
+                                )
+                        return "".join(parts)
+
                     with _ClaudeSpinner():
-                        response = chat.send_message(project_id, thread_id, user_turn)
-                except LMStudioError as exc:
+                        reply = asyncio.run(_stream_reply())
+                except (LMStudioError, RuntimeError) as exc:
                     print(f"error: {exc}", file=sys.stderr)
                     continue
-                print(f"• {response.reply}")
+                print(f"• {reply}")
             return 0
 
         if args.command == "serve":
