@@ -331,15 +331,17 @@ export default function ChatView({
             break;
 
           case "debug":
-            setTraceEntries((prev) => [
-              ...prev,
-              {
-                id: `${Date.now()}-${prev.length}`,
-                timestamp: new Date().toISOString(),
-                stage: event.stage,
-                data: event.data,
-              },
-            ]);
+            if (sseTraceEnabled) {
+              setTraceEntries((prev) => [
+                ...prev,
+                {
+                  id: `${Date.now()}-${prev.length}`,
+                  timestamp: new Date().toISOString(),
+                  stage: event.stage,
+                  data: event.data,
+                },
+              ]);
+            }
             break;
 
           case "done":
@@ -512,12 +514,14 @@ export default function ChatView({
         </div>
       </div>
 
-      <DebugTracePanel
-        entries={traceEntries}
-        visible={debugTraceOpen}
-        sseTraceEnabled={sseTraceEnabled}
-        onClear={() => setTraceEntries([])}
-      />
+      {sseTraceEnabled && (
+        <DebugTracePanel
+          entries={traceEntries}
+          visible={debugTraceOpen}
+          sseTraceEnabled={sseTraceEnabled}
+          onClear={() => setTraceEntries([])}
+        />
+      )}
     </div>
   );
 }

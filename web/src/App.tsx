@@ -205,14 +205,22 @@ export default function App() {
 
       <StatusBar
         modelLoading={modelLoading}
-        debugTraceOpen={debugTraceOpen}
-        onToggleDebugTrace={() => setDebugTraceOpen((v) => !v)}
+        {...(sseTraceEnabled
+          ? {
+              debugTraceOpen,
+              onToggleDebugTrace: () => setDebugTraceOpen((v) => !v),
+            }
+          : {})}
       />
 
       {showSettings && (
         <SettingsModal
           onClose={() => setShowSettings(false)}
-          onSaved={(s) => setSseTraceEnabled(Boolean(s.debug?.sse_trace))}
+          onSaved={(s) => {
+            const enabled = Boolean(s.debug?.sse_trace);
+            setSseTraceEnabled(enabled);
+            if (!enabled) setDebugTraceOpen(false);
+          }}
         />
       )}
     </div>
