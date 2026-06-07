@@ -128,6 +128,23 @@ def test_thread_delete_clear_rename(manager: ProjectManager) -> None:
         manager.get_thread_messages("threads-proj", thread.id)
 
 
+def test_append_message_persists_model_on_assistant(
+    manager: ProjectManager,
+) -> None:
+    manager.init_project("Model Label", project_id="model-label")
+    thread = manager.create_thread("model-label", title="main")
+    manager.append_message(
+        "model-label",
+        thread.id,
+        "assistant",
+        "Hello from DeepSeek",
+        model="remote/deepseek-v4-pro",
+    )
+
+    messages = manager.get_thread_messages("model-label", thread.id)
+    assert messages[-1]["model"] == "remote/deepseek-v4-pro"
+
+
 def test_add_file_copies_to_docs(manager: ProjectManager, tmp_path: Path) -> None:
 
     manager.init_project("Upload", project_id="upload")

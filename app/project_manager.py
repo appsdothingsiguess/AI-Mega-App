@@ -644,6 +644,8 @@ class ProjectManager:
 
         attachments: list[dict[str, Any]] | None = None,
 
+        model: str | None = None,
+
     ) -> dict[str, Any]:
 
         path = self._thread_messages_path(project_id, thread_id)
@@ -663,6 +665,10 @@ class ProjectManager:
         if attachments:
 
             record["attachments"] = attachments
+
+        if model is not None:
+
+            record["model"] = model
 
         data.setdefault("messages", []).append(record)
 
