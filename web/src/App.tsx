@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import ProjectSidebar from "./components/ProjectSidebar";
+import ProjectGrid from "./components/ProjectGrid";
 import SourcesPanel from "./components/SourcesPanel";
 import ChatView from "./components/ChatView";
 import InstructionsPanel from "./components/InstructionsPanel";
@@ -9,9 +10,15 @@ import {
   DEFAULT_TOOL_TOGGLES,
   ToolTogglesState,
 } from "./components/ToolToggles";
-import { getSettings } from "./api/client";
+import { getSettings, listProjects, createProject } from "./api/client";
+
+export type AppView = "home-chat" | "projects" | "project-workspace";
+
+const HOME_PROJECT_NAME = "__home__";
 
 export default function App() {
+  const [view, setView] = useState<AppView>("home-chat");
+  const [homeProjectId, setHomeProjectId] = useState<string | null>(null);
   const [selectedProject, setSelectedProject] = useState<string | null>(null);
   const [threadId, setThreadId] = useState<string | null>(null);
   const [showSettings, setShowSettings] = useState(false);
@@ -49,14 +56,54 @@ export default function App() {
       });
   }, []);
 
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const list = await listProjects();
+        let home = list.find((p) => p.name === HOME_PROJECT_NAME);
+        if (!home) {
+          home = await createProject(HOME_PROJECT_NAME);
+        }
+        if (!cancelled) {
+          setHomeProjectId(home.id);
+        }
+      } catch {
+        // home project bootstrap is best-effort
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
   const resetConversationState = useCallback(() => {
     setModelOverride(null);
     setToolToggles(DEFAULT_TOOL_TOGGLES);
     setModelLoading(null);
   }, []);
 
+  const activeProjectId =
+    view === "home-chat"
+      ? homeProjectId
+      : view === "project-workspace"
+        ? selectedProject
+        : null;
+
+  const handleNavChange = (next: AppView) => {
+    setView(next);
+    if (next === "projects") {
+      setThreadId(null);
+      resetConversationState();
+    }
+    if (next === "home-chat") {
+      resetConversationState();
+    }
+  };
+
   const handleSelectProject = (id: string) => {
     setSelectedProject(id);
+    setView("project-workspace");
     setThreadId(null);
     resetConversationState();
   };
@@ -82,55 +129,78 @@ export default function App() {
     setModelLoading(null);
   }, []);
 
+  const settingsButton = (
+    <div style={styles.settingsFooter}>
+      <button
+        style={styles.settingsBtn}
+        onClick={() => setShowSettings(true)}
+        title="Settings"
+      >
+        ⚙ Settings
+      </button>
+    </div>
+  );
+
   return (
     <div style={styles.app}>
       <div style={styles.main}>
-        <div style={styles.left}>
-          <ProjectSidebar
-            view={view}
-            projectId={activeProjectId}
-            onNavChange={handleNavChange}
-            threadId={threadId}
-            onThreadSelect={handleThreadSelect}
-            onThreadsChange={notifyThreadsChanged}
+        {view === "projects" ? (
+          <ProjectGrid
+            onSelectProject={handleSelectProject}
             threadsVersion={threadsVersion}
           />
-          <SourcesPanel
-            projectId={selectedProject}
-            onSourcesChange={notifySourcesChanged}
-          />
-        </div>
+        ) : (
+          <>
+            <div style={styles.left}>
+              <ProjectSidebar
+                view={view}
+                projectId={activeProjectId}
+                onNavChange={handleNavChange}
+                threadId={threadId}
+                onThreadSelect={handleThreadSelect}
+                onThreadsChange={notifyThreadsChanged}
+                threadsVersion={threadsVersion}
+              />
+              {view === "project-workspace" && (
+                <SourcesPanel
+                  projectId={selectedProject}
+                  onSourcesChange={notifySourcesChanged}
+                />
+              )}
+              {view === "home-chat" && settingsButton}
+            </div>
 
-        <div style={styles.center}>
-          <ChatView
-            projectId={selectedProject}
-            threadId={threadId}
-            sourcesVersion={sourcesVersion}
-            threadsVersion={threadsVersion}
-            onThreadsChange={notifyThreadsChanged}
-            modelOverride={modelOverride}
-            onModelOverrideChange={setModelOverride}
-            toolToggles={toolToggles}
-            onToolTogglesChange={setToolToggles}
-            onModelLoading={handleModelLoading}
-            onClearModelLoading={handleClearModelLoading}
-            debugTraceOpen={debugTraceOpen}
-            sseTraceEnabled={sseTraceEnabled}
-          />
-        </div>
-
-        <div style={styles.right}>
-          <InstructionsPanel projectId={selectedProject} />
-          <div style={styles.settingsFooter}>
-            <button
-              style={styles.settingsBtn}
-              onClick={() => setShowSettings(true)}
-              title="Settings"
+            <div
+              style={{
+                ...styles.center,
+                ...(view === "home-chat" ? styles.centerNoRight : {}),
+              }}
             >
-              ⚙ Settings
-            </button>
-          </div>
-        </div>
+              <ChatView
+                projectId={activeProjectId}
+                threadId={threadId}
+                sourcesVersion={sourcesVersion}
+                threadsVersion={threadsVersion}
+                onThreadsChange={notifyThreadsChanged}
+                modelOverride={modelOverride}
+                onModelOverrideChange={setModelOverride}
+                toolToggles={toolToggles}
+                onToolTogglesChange={setToolToggles}
+                onModelLoading={handleModelLoading}
+                onClearModelLoading={handleClearModelLoading}
+                debugTraceOpen={debugTraceOpen}
+                sseTraceEnabled={sseTraceEnabled}
+              />
+            </div>
+
+            {view === "project-workspace" && (
+              <div style={styles.right}>
+                <InstructionsPanel projectId={selectedProject} />
+                {settingsButton}
+              </div>
+            )}
+          </>
+        )}
       </div>
 
       <StatusBar
@@ -180,6 +250,9 @@ const styles: Record<string, React.CSSProperties> = {
     flexDirection: "column",
     overflow: "hidden",
     borderRight: "1px solid var(--border)",
+  },
+  centerNoRight: {
+    borderRight: "none",
   },
   right: {
     width: 300,
