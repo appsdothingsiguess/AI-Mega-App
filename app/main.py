@@ -175,6 +175,7 @@ def _build_services(
     from app.adapters.classifier_qwen import QwenClassifierAdapter
     from app.adapters.embedding_nomic import NomicEmbeddingAdapter
     from app.adapters.qdrant_store import QdrantAdapter
+    from app.adapters.search_ddg import DuckDuckGoSearchAdapter
     from app.model_scheduler import get_model_scheduler
     from app.router import HybridRouter
 
@@ -183,12 +184,14 @@ def _build_services(
     embedding = NomicEmbeddingAdapter(settings)
     vector_store = QdrantAdapter(settings)
     scheduler = get_model_scheduler(settings) if settings.ollama.scheduler_enabled else None
+    search = DuckDuckGoSearchAdapter()
 
     orchestrator = ChatOrchestrator(
         router=router,
         vector_store=vector_store,
         embedding_service=embedding,
         vision_service=None,
+        search_service=search,
         model_scheduler=scheduler,
         settings=settings,
         projects=projects,
