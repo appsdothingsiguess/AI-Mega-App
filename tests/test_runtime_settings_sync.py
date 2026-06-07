@@ -12,14 +12,13 @@ from app.settings_store import init_settings_store, update_settings
 
 
 def test_apply_runtime_settings_syncs_orchestrator_debug_flags() -> None:
-    settings, projects, orchestrator, lm, _vector_store = _build_services()
+    settings, projects, orchestrator, _vector_store = _build_services()
     orchestrator.settings = orchestrator.settings.model_copy(
         update={"debug": DebugSettings(sse_trace=False, router_decisions=False)}
     )
     app.state.settings = settings
     app.state.orchestrator = orchestrator
     app.state.projects = projects
-    app.state.lm = lm
 
     fresh = settings.model_copy(
         update={"debug": DebugSettings(sse_trace=True, router_decisions=True)}
@@ -47,7 +46,7 @@ def test_settings_reload_from_disk_syncs_orchestrator_sse_trace(
     get_settings.cache_clear()
     init_settings_store()
 
-    settings, projects_mgr, orchestrator, lm, _vector_store = _build_services(
+    settings, projects_mgr, orchestrator, _vector_store = _build_services(
         get_settings()
     )
     orchestrator.settings = orchestrator.settings.model_copy(
@@ -56,7 +55,6 @@ def test_settings_reload_from_disk_syncs_orchestrator_sse_trace(
     app.state.settings = settings
     app.state.orchestrator = orchestrator
     app.state.projects = projects_mgr
-    app.state.lm = lm
 
     update_settings({"debug": {"sse_trace": True}})
     fresh = get_settings()

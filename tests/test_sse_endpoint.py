@@ -79,11 +79,10 @@ def client() -> TestClient:
 @pytest.fixture
 def fake_orchestrator(client: TestClient) -> _FakeOrchestrator:
     fake = _FakeOrchestrator()
-    settings, projects, _orchestrator, lm, vector_store = _build_services()
+    settings, projects, _orchestrator, vector_store = _build_services()
     app.state.settings = settings
     app.state.projects = projects
     app.state.orchestrator = fake
-    app.state.lm = lm
     app.state.vector_store = vector_store
     return fake
 
@@ -96,7 +95,7 @@ def project_and_thread(client: TestClient) -> tuple[str, str]:
 
 
 def test_build_services_wires_search_service() -> None:
-    settings, _, orchestrator, _, _ = _build_services()
+    settings, _, orchestrator, _ = _build_services()
     assert orchestrator.search_service is not None
 
 
@@ -190,11 +189,10 @@ def test_sse_handles_client_disconnect(
 ) -> None:
     project_id, thread_id = project_and_thread
     fake = _FakeOrchestrator(raise_cancelled=True)
-    settings, projects, _orchestrator, lm, vector_store = _build_services()
+    settings, projects, _orchestrator, vector_store = _build_services()
     app.state.settings = settings
     app.state.projects = projects
     app.state.orchestrator = fake
-    app.state.lm = lm
     app.state.vector_store = vector_store
 
     with client.stream(
