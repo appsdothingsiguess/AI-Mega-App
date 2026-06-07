@@ -395,6 +395,26 @@ export default function SettingsModal({ onClose, onSaved }: Props) {
                 }
                 rows={8}
               />
+              <div style={{ ...styles.sectionTitle, marginTop: 16 }}>
+                Default assistant prompt
+              </div>
+              <p style={styles.hint}>
+                Applied to every chat. Project instructions are appended below this.
+                Use {"{project_name}"} for the project name.
+              </p>
+              <textarea
+                style={styles.textarea}
+                value={form.assistant?.system_prompt ?? ""}
+                onChange={(e) =>
+                  patch((f) => ({
+                    ...f,
+                    assistant: {
+                      system_prompt: e.target.value,
+                    },
+                  }))
+                }
+                rows={10}
+              />
             </section>
           )}
 

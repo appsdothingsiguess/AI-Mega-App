@@ -10,8 +10,15 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import litellm.exceptions
 import pytest
 
-from app.chat_orchestrator import ChatOrchestrator
-from app.config import DebugSettings, ModelsConfig, OllamaSettings, Settings
+from app.chat_orchestrator import ChatOrchestrator, _format_tool_appendix
+from app.config import (
+    AssistantSettings,
+    DebugSettings,
+    DEFAULT_ASSISTANT_PROMPT,
+    ModelsConfig,
+    OllamaSettings,
+    Settings,
+)
 from app.message_parts import ImagePart, UserTurn
 from app.project_manager import ProjectManager
 from app.types import RouteResult, RouteSource, SearchResult
@@ -804,3 +811,60 @@ async def test_routed_sse_and_persisted_model(
     messages = manager.get_thread_messages(project_id, thread_id)
     assistant_msgs = [m for m in messages if m["role"] == "assistant"]
     assert assistant_msgs[-1]["model"] == "remote/deepseek-v4-pro"
+
+
+def test_platform_prompt_order(
+    orchestrator: ChatOrchestrator,
+    manager: ProjectManager,
+    thread_ids: tuple[str, str],
+) -> None:
+    project_id, _thread_id = thread_ids
+    manager.update_system_prompt(project_id, "Custom project tone instructions.")
+
+    messages = orchestrator._build_messages(
+        project_id,
+        UserTurn.from_text("Hello"),
+        [],
+        [],
+        "general_chat",
+        [],
+    )
+    system_content = messages[0]["content"]
+    platform_pos = system_content.find("Prompter X")
+    project_pos = system_content.find("## Project instructions")
+    assert platform_pos >= 0
+    assert project_pos >= 0
+    assert platform_pos < project_pos
+
+
+def test_tool_appendix_when_tools_assigned() -> None:
+    appendix = _format_tool_appendix(["web_search"])
+    assert "## Available tools" in appendix
+    assert "web_search" in appendix
+    assert "Search the web for current information" in appendix
+    assert "Do not emit tool calls as plain JSON" in appendix
+
+
+def test_default_assistant_prompt_from_settings(
+    orchestrator: ChatOrchestrator,
+    thread_ids: tuple[str, str],
+) -> None:
+    project_id, _thread_id = thread_ids
+    custom_prompt = 'You are TestBot for "{project_name}". Use tools when needed.'
+    orchestrator.settings = orchestrator.settings.model_copy(
+        update={"assistant": AssistantSettings(system_prompt=custom_prompt)}
+    )
+
+    messages = orchestrator._build_messages(
+        project_id,
+        UserTurn.from_text("Hi"),
+        [],
+        [],
+        "general_chat",
+        ["web_search"],
+    )
+    system_content = messages[0]["content"]
+    project = orchestrator.projects.get_project(project_id)
+    assert f'You are TestBot for "{project.name}"' in system_content
+    assert "## Available tools" in system_content
+    assert DEFAULT_ASSISTANT_PROMPT != custom_prompt

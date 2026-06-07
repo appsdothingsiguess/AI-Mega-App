@@ -112,6 +112,34 @@ def _format_retrieved_context(chunks: list[SearchResult]) -> str:
     return "\n\n---\n\n".join(parts)
 
 
+def _format_tool_appendix(tools: list[str]) -> str:
+    lines = [
+        "## Available tools",
+        f"Tools enabled for this turn: {', '.join(tools)}",
+        "",
+    ]
+    for name in tools:
+        schema = _TOOL_SCHEMAS.get(name)
+        description = ""
+        if schema:
+            fn = schema.get("function", schema)
+            if isinstance(fn, dict):
+                description = str(fn.get("description", ""))
+        if description:
+            lines.append(f"- {name}: {description}")
+        else:
+            lines.append(f"- {name}")
+    lines.extend(
+        [
+            "",
+            "Call tools through the provided function interface. "
+            "Wait for tool results before giving your final answer. "
+            "Do not emit tool calls as plain JSON in your reply text.",
+        ]
+    )
+    return "\n".join(lines)
+
+
 class ChatOrchestrator:
     """Central request handler. Coordinates routing, retrieval, tool execution, and streaming."""
 
@@ -282,7 +310,7 @@ class ChatOrchestrator:
 
         history = self.projects.get_thread_messages(project_id, thread_id)
         messages = self._build_messages(
-            project_id, turn, retrieved, history, intent
+            project_id, turn, retrieved, history, intent, tools
         )
         if sse_trace:
             yield debug_event(
@@ -412,24 +440,24 @@ class ChatOrchestrator:
         retrieved: list[SearchResult],
         history: list[dict[str, Any]],
         intent: str,
+        tools: list[str],
     ) -> list[dict[str, Any]]:
         project = self.projects.get_project(project_id)
-        system_sections: list[str] = [
-            f"You are a project assistant for '{project.name}'.",
-            "Use the project instructions and retrieved document excerpts when answering.",
-            "If context does not contain the answer, say so clearly.",
-        ]
+        platform = self.settings.assistant.system_prompt.replace(
+            "{project_name}", project.name
+        )
+        sections: list[str] = [platform.strip()]
+        if tools:
+            sections.append(_format_tool_appendix(tools))
         if project.system_prompt.strip():
-            system_sections.append(
-                "## Project instructions\n" + project.system_prompt.strip()
-            )
+            sections.append("## Project instructions\n" + project.system_prompt.strip())
 
         context_block = _format_retrieved_context(retrieved)
         if context_block:
-            system_sections.append("## Retrieved project context\n" + context_block)
+            sections.append("## Retrieved project context\n" + context_block)
 
         messages: list[dict[str, Any]] = [
-            {"role": "system", "content": "\n\n".join(system_sections)}
+            {"role": "system", "content": "\n\n".join(sections)}
         ]
 
         recent = history[-_MAX_HISTORY_TURNS:]

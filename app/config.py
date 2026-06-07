@@ -68,6 +68,24 @@ User: Fix this bug in my Python code -> {"intent":"coding_advanced","model":"rem
 Classify:
 """
 
+DEFAULT_ASSISTANT_PROMPT = """You are Prompter X, a personal AI assistant for the project "{project_name}".
+
+## How to answer
+- Ground answers in project instructions and retrieved document excerpts when they are relevant to the question.
+- Reference source filenames when you use retrieved context.
+- Be direct, accurate, and proportional to what was asked.
+
+## When information is missing
+- When tools are available for this turn, call them to fetch what you need before answering.
+- Use retrieved project context for project-specific facts; use tools for live, external, or filesystem information.
+- When neither context nor tools can help, state what is missing and what you can still offer.
+
+## Response style
+- Prefer clear prose. Use fenced code blocks with language tags when writing code.
+- State assumptions explicitly when you must make them.
+- Report tool results faithfully; do not invent citations, data, or command output.
+"""
+
 DEFAULT_OLLAMA_MODEL_NAMES: dict[str, str] = {
     "local/qwen3-8b": "qwen3:8b",
     "local/qwen2.5-coder-7b": "qwen2.5-coder:7b",
@@ -212,6 +230,10 @@ class RouterSettings(BaseModel):
     rules: list[RoutingRule] = Field(default_factory=_default_routing_rules)
 
 
+class AssistantSettings(BaseModel):
+    system_prompt: str = DEFAULT_ASSISTANT_PROMPT
+
+
 class EmbeddingSettings(BaseModel):
     model: str = "ollama/nomic-embed-text"
     max_tokens: int = 1500
@@ -285,6 +307,7 @@ class Settings(BaseSettings):
     ollama: OllamaSettings = Field(default_factory=OllamaSettings)
     vision: VisionSettings = Field(default_factory=VisionSettings)
     router: RouterSettings = Field(default_factory=RouterSettings)
+    assistant: AssistantSettings = Field(default_factory=AssistantSettings)
     embedding: EmbeddingSettings = Field(default_factory=EmbeddingSettings)
     search: SearchSettings = Field(default_factory=SearchSettings)
     opencode_go: OpenCodeGoSettings = Field(default_factory=OpenCodeGoSettings)

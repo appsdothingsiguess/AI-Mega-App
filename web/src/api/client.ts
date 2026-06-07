@@ -111,6 +111,10 @@ export interface RouterSettings {
   rules: RoutingRule[];
 }
 
+export interface AssistantSettings {
+  system_prompt: string;
+}
+
 export interface EmbeddingSettings {
   model: string;
   max_tokens: number;
@@ -185,6 +189,7 @@ export interface SettingsSnapshot {
   ollama_model_names: Record<string, string>;
   vision: VisionSettings;
   router: RouterSettings;
+  assistant?: AssistantSettings;
   embedding: EmbeddingSettings;
   search: SearchSettings;
   ollama: OllamaSettings;
