@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import ProjectSidebar from "./components/ProjectSidebar";
+import ProjectGrid from "./components/ProjectGrid";
 import SourcesPanel from "./components/SourcesPanel";
 import ChatView from "./components/ChatView";
 import InstructionsPanel from "./components/InstructionsPanel";
@@ -128,55 +129,78 @@ export default function App() {
     setModelLoading(null);
   }, []);
 
+  const settingsButton = (
+    <div style={styles.settingsFooter}>
+      <button
+        style={styles.settingsBtn}
+        onClick={() => setShowSettings(true)}
+        title="Settings"
+      >
+        ⚙ Settings
+      </button>
+    </div>
+  );
+
   return (
     <div style={styles.app}>
       <div style={styles.main}>
-        <div style={styles.left}>
-          <ProjectSidebar
-            view={view}
-            projectId={activeProjectId}
-            onNavChange={handleNavChange}
-            threadId={threadId}
-            onThreadSelect={handleThreadSelect}
-            onThreadsChange={notifyThreadsChanged}
+        {view === "projects" ? (
+          <ProjectGrid
+            onSelectProject={handleSelectProject}
             threadsVersion={threadsVersion}
           />
-          <SourcesPanel
-            projectId={selectedProject}
-            onSourcesChange={notifySourcesChanged}
-          />
-        </div>
+        ) : (
+          <>
+            <div style={styles.left}>
+              <ProjectSidebar
+                view={view}
+                projectId={activeProjectId}
+                onNavChange={handleNavChange}
+                threadId={threadId}
+                onThreadSelect={handleThreadSelect}
+                onThreadsChange={notifyThreadsChanged}
+                threadsVersion={threadsVersion}
+              />
+              {view === "project-workspace" && (
+                <SourcesPanel
+                  projectId={selectedProject}
+                  onSourcesChange={notifySourcesChanged}
+                />
+              )}
+              {view === "home-chat" && settingsButton}
+            </div>
 
-        <div style={styles.center}>
-          <ChatView
-            projectId={activeProjectId}
-            threadId={threadId}
-            sourcesVersion={sourcesVersion}
-            threadsVersion={threadsVersion}
-            onThreadsChange={notifyThreadsChanged}
-            modelOverride={modelOverride}
-            onModelOverrideChange={setModelOverride}
-            toolToggles={toolToggles}
-            onToolTogglesChange={setToolToggles}
-            onModelLoading={handleModelLoading}
-            onClearModelLoading={handleClearModelLoading}
-            debugTraceOpen={debugTraceOpen}
-            sseTraceEnabled={sseTraceEnabled}
-          />
-        </div>
-
-        <div style={styles.right}>
-          <InstructionsPanel projectId={selectedProject} />
-          <div style={styles.settingsFooter}>
-            <button
-              style={styles.settingsBtn}
-              onClick={() => setShowSettings(true)}
-              title="Settings"
+            <div
+              style={{
+                ...styles.center,
+                ...(view === "home-chat" ? styles.centerNoRight : {}),
+              }}
             >
-              ⚙ Settings
-            </button>
-          </div>
-        </div>
+              <ChatView
+                projectId={activeProjectId}
+                threadId={threadId}
+                sourcesVersion={sourcesVersion}
+                threadsVersion={threadsVersion}
+                onThreadsChange={notifyThreadsChanged}
+                modelOverride={modelOverride}
+                onModelOverrideChange={setModelOverride}
+                toolToggles={toolToggles}
+                onToolTogglesChange={setToolToggles}
+                onModelLoading={handleModelLoading}
+                onClearModelLoading={handleClearModelLoading}
+                debugTraceOpen={debugTraceOpen}
+                sseTraceEnabled={sseTraceEnabled}
+              />
+            </div>
+
+            {view === "project-workspace" && (
+              <div style={styles.right}>
+                <InstructionsPanel projectId={selectedProject} />
+                {settingsButton}
+              </div>
+            )}
+          </>
+        )}
       </div>
 
       <StatusBar
@@ -226,6 +250,9 @@ const styles: Record<string, React.CSSProperties> = {
     flexDirection: "column",
     overflow: "hidden",
     borderRight: "1px solid var(--border)",
+  },
+  centerNoRight: {
+    borderRight: "none",
   },
   right: {
     width: 300,
