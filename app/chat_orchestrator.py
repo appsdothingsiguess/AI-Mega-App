@@ -212,6 +212,31 @@ def _format_retrieved_context(chunks: list[SearchResult]) -> str:
     return "\n\n---\n\n".join(parts)
 
 
+def _format_tool_parameter_lines(schema: dict[str, Any]) -> list[str]:
+    fn = schema.get("function", schema)
+    if not isinstance(fn, dict):
+        return []
+    params = fn.get("parameters")
+    if not isinstance(params, dict):
+        return []
+    properties = params.get("properties")
+    if not isinstance(properties, dict):
+        return []
+    required = set(params.get("required") or [])
+    param_lines: list[str] = []
+    for param_name, param_schema in properties.items():
+        if not isinstance(param_schema, dict):
+            continue
+        param_type = param_schema.get("type", "string")
+        param_desc = str(param_schema.get("description", "")).strip()
+        req_label = "required" if param_name in required else "optional"
+        detail = f"{param_name} ({param_type}, {req_label})"
+        if param_desc:
+            detail += f": {param_desc}"
+        param_lines.append(f"    - {detail}")
+    return param_lines
+
+
 def _format_tool_appendix(tools: list[str]) -> str:
     lines = [
         "## Available tools",
@@ -238,6 +263,50 @@ def _format_tool_appendix(tools: list[str]) -> str:
         ]
     )
     return "\n".join(lines)
+
+
+def _format_deepseek_tool_appendix(tools: list[str]) -> str:
+    tool_names = ", ".join(tools)
+    example_name = tools[0] if tools else "tool_name"
+    lines = [
+        "## Available tools",
+        f"Tools enabled for this turn: {tool_names}",
+        "",
+        "You MUST call these tools when they are required to answer the user's question.",
+        "Do not guess, speculate, or rely on training data for facts that require a tool.",
+        "",
+        "## How to call tools (DeepSeek R1)",
+        "Native tool_calls are unavailable for this model.",
+        "Finish your internal reasoning first, then output ONLY one JSON object — no markdown fences, no prose:",
+        '{"name":"<tool_name>","arguments":{...}}',
+        f'Use exact tool names from: {tool_names}. Use "arguments" (not "parameters").',
+        f'Example: {{"name":"{example_name}","arguments":{{"query":"your search query"}}}}',
+        "Do not output empty {}. Call the tool first, wait for results, then answer in plain text.",
+        "",
+        "## Tool reference",
+    ]
+    for name in tools:
+        schema = _TOOL_SCHEMAS.get(name)
+        description = ""
+        if schema:
+            fn = schema.get("function", schema)
+            if isinstance(fn, dict):
+                description = str(fn.get("description", "")).strip()
+        if description:
+            lines.append(f"- {name}: {description}")
+        else:
+            lines.append(f"- {name}")
+        if schema:
+            param_lines = _format_tool_parameter_lines(schema)
+            if param_lines:
+                lines.extend(param_lines)
+    return "\n".join(lines)
+
+
+def _format_tool_instructions(tools: list[str], model_alias: str = "") -> str:
+    if _is_deepseek_r1_model(model_alias):
+        return _format_deepseek_tool_appendix(tools)
+    return _format_tool_appendix(tools)
 
 
 class ChatOrchestrator:
@@ -410,7 +479,7 @@ class ChatOrchestrator:
 
         history = self.projects.get_thread_messages(project_id, thread_id)
         messages = self._build_messages(
-            project_id, turn, retrieved, history, intent, tools
+            project_id, turn, retrieved, history, intent, tools, model_alias
         )
         if sse_trace:
             yield debug_event(
@@ -542,6 +611,7 @@ class ChatOrchestrator:
         history: list[dict[str, Any]],
         intent: str,
         tools: list[str],
+        model_alias: str = "",
     ) -> list[dict[str, Any]]:
         project = self.projects.get_project(project_id)
         platform = self.settings.assistant.system_prompt.replace(
@@ -549,7 +619,7 @@ class ChatOrchestrator:
         )
         sections: list[str] = [platform.strip()]
         if tools:
-            sections.append(_format_tool_appendix(tools))
+            sections.append(_format_tool_instructions(tools, model_alias))
         if project.system_prompt.strip():
             sections.append("## Project instructions\n" + project.system_prompt.strip())
 
@@ -758,10 +828,14 @@ class ChatOrchestrator:
                     user_preview[:200],
                 )
             _t_llm_start = time.perf_counter()
+            # DeepSeek R1 uses appendix-based tool calling; passing tools= to
+            # LiteLLM strips reasoning_content from every chunk. Keep
+            # active_tool_schemas non-None so the fallback parser below still fires.
+            _api_tool_schemas = None if is_deepseek else active_tool_schemas
             try:
                 response = await litellm.acompletion(
                     messages=messages,
-                    tools=active_tool_schemas,
+                    tools=_api_tool_schemas,
                     stream=True,
                     **litellm_kwargs,
                 )
