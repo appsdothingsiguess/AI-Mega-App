@@ -14,6 +14,7 @@ interface Props {
   role: "user" | "assistant" | "system";
   content: string;
   createdAt?: string;
+  model?: string;
   isStreaming?: boolean;
   tools?: ToolEvent[];
   sources?: SourceChunk[];
@@ -66,6 +67,7 @@ export default function MessageBubble({
   role,
   content,
   createdAt,
+  model,
   isStreaming,
   tools,
   sources,
@@ -98,7 +100,14 @@ export default function MessageBubble({
           <ArtifactRenderer content={content} isStreaming={isStreaming} />
         )}
         {error && <div style={styles.inlineError}>{error}</div>}
-        {time && !isStreaming && <div style={styles.timeAssistant}>{time}</div>}
+        {(model || (time && !isStreaming)) && (
+          <div style={styles.metaRow}>
+            {model && <span style={styles.modelLabel}>{model}</span>}
+            {time && !isStreaming && (
+              <span style={styles.timeAssistant}>{time}</span>
+            )}
+          </div>
+        )}
       </div>
     </div>
   );
@@ -148,10 +157,22 @@ const styles: Record<string, React.CSSProperties> = {
     flex: 1,
     minWidth: 0,
   },
-  timeAssistant: {
+  metaRow: {
+    display: "flex",
+    justifyContent: "space-between",
+    alignItems: "center",
     marginTop: 4,
+    gap: 8,
+  },
+  modelLabel: {
     fontSize: 10,
     color: "var(--text-dim)",
+    fontFamily: "var(--font-mono)",
+  },
+  timeAssistant: {
+    fontSize: 10,
+    color: "var(--text-dim)",
+    marginLeft: "auto",
   },
   inlineError: {
     marginTop: 8,

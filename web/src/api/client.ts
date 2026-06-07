@@ -49,6 +49,7 @@ export interface MessageRecord {
   role: "user" | "assistant" | "system";
   content: string;
   created_at: string;
+  model?: string;
 }
 
 export interface DocFileInfo {
@@ -258,8 +259,9 @@ export type SseEvent =
   | { type: "tool_result"; name: string; output: string }
   | { type: "sources"; chunks: SourceChunk[] }
   | { type: "model_loading"; model: string; estimated_seconds: number }
+  | { type: "routed"; model: string; intent: string }
   | { type: "debug"; stage: string; data: Record<string, unknown> }
-  | { type: "done"; usage: Record<string, unknown> }
+  | { type: "done"; usage: Record<string, unknown>; model?: string }
   | { type: "error"; message: string };
 
 export class StreamChatError extends Error {

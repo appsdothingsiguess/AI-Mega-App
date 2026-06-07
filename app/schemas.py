@@ -63,6 +63,7 @@ class MessageRecord(BaseModel):
     role: str
     content: str
     created_at: datetime
+    model: str | None = None
 
 
 class ChatResponse(BaseModel):

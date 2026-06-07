@@ -64,6 +64,7 @@ export interface StreamingMessage {
   role: "user" | "assistant";
   content: string;
   created_at: string;
+  model?: string;
   isStreaming?: boolean;
   tools?: ToolEvent[];
   sources?: SourceChunk[];
@@ -101,6 +102,7 @@ function toDisplayMessage(m: MessageRecord): StreamingMessage {
     role: m.role as "user" | "assistant",
     content: m.content,
     created_at: m.created_at,
+    model: m.model,
   };
 }
 
@@ -274,6 +276,13 @@ export default function ChatView({
             });
             break;
 
+          case "routed":
+            updateStreamingMessage((msg) => ({
+              ...msg,
+              model: event.model,
+            }));
+            break;
+
           case "sources":
             updateStreamingMessage((msg) => ({
               ...msg,
@@ -337,6 +346,7 @@ export default function ChatView({
             updateStreamingMessage((msg) => ({
               ...msg,
               isStreaming: false,
+              model: msg.model ?? event.model,
             }));
             break;
         }
@@ -440,6 +450,7 @@ export default function ChatView({
             role={m.role}
             content={m.content}
             createdAt={m.created_at}
+            model={m.model}
             isStreaming={m.isStreaming}
             tools={m.tools}
             sources={m.sources}
