@@ -2,28 +2,27 @@
 
 from __future__ import annotations
 
-from unittest.mock import AsyncMock, patch
+from unittest.mock import MagicMock, patch
 
 import pytest
-from duckduckgo_search.exceptions import RatelimitException
+from ddgs.exceptions import DDGSException, RatelimitException
 
 from app.adapters.search_ddg import DuckDuckGoSearchAdapter
 from app.protocols import SearchService
 
 
-def _mock_ddgs(*, atext_return=None, atext_side_effect=None) -> AsyncMock:
-    mock_ddgs = AsyncMock()
-    if atext_side_effect is not None:
-        mock_ddgs.atext = AsyncMock(side_effect=atext_side_effect)
+def _mock_ddgs(*, text_return=None, text_side_effect=None) -> MagicMock:
+    mock_ddgs = MagicMock()
+    if text_side_effect is not None:
+        mock_ddgs.text.side_effect = text_side_effect
     else:
-        mock_ddgs.atext = AsyncMock(return_value=atext_return or [])
-    mock_ddgs.__aenter__ = AsyncMock(return_value=mock_ddgs)
-    mock_ddgs.__aexit__ = AsyncMock(return_value=None)
+        mock_ddgs.text.return_value = text_return or []
     return mock_ddgs
 
 
 def test_adapter_satisfies_search_service_protocol() -> None:
-    adapter = DuckDuckGoSearchAdapter()
+    with patch("app.adapters.search_ddg.DDGS"):
+        adapter = DuckDuckGoSearchAdapter()
     assert isinstance(adapter, SearchService)
 
 
@@ -33,9 +32,9 @@ async def test_search_returns_mapped_results() -> None:
         {"title": "Python", "href": "https://python.org", "body": "Official site"},
         {"title": "Docs", "href": "https://docs.python.org", "body": "Documentation"},
     ]
-    mock_ddgs = _mock_ddgs(atext_return=raw)
+    mock_ddgs = _mock_ddgs(text_return=raw)
 
-    with patch("app.adapters.search_ddg.AsyncDDGS", return_value=mock_ddgs):
+    with patch("app.adapters.search_ddg.DDGS", return_value=mock_ddgs):
         adapter = DuckDuckGoSearchAdapter()
         results = await adapter.search("python", max_results=2)
 
@@ -45,14 +44,14 @@ async def test_search_returns_mapped_results() -> None:
     assert results[0].text == "Official site"
     assert results[0].score == 0.0
     assert results[1].title == "Docs"
-    mock_ddgs.atext.assert_awaited_once_with("python", max_results=2)
+    mock_ddgs.text.assert_called_once_with("python", max_results=2)
 
 
 @pytest.mark.asyncio
 async def test_search_handles_ddg_errors() -> None:
-    mock_ddgs = _mock_ddgs(atext_side_effect=RatelimitException("rate limited"))
+    mock_ddgs = _mock_ddgs(text_side_effect=DDGSException("provider error"))
 
-    with patch("app.adapters.search_ddg.AsyncDDGS", return_value=mock_ddgs):
+    with patch("app.adapters.search_ddg.DDGS", return_value=mock_ddgs):
         adapter = DuckDuckGoSearchAdapter()
         results = await adapter.search("python")
 
@@ -60,10 +59,21 @@ async def test_search_handles_ddg_errors() -> None:
 
 
 @pytest.mark.asyncio
-async def test_search_empty_results() -> None:
-    mock_ddgs = _mock_ddgs(atext_return=[])
+async def test_search_rate_limit_returns_structured_error() -> None:
+    mock_ddgs = _mock_ddgs(text_side_effect=RatelimitException("202 Ratelimit"))
 
-    with patch("app.adapters.search_ddg.AsyncDDGS", return_value=mock_ddgs):
+    with patch("app.adapters.search_ddg.DDGS", return_value=mock_ddgs):
+        adapter = DuckDuckGoSearchAdapter()
+        results = await adapter.search("python")
+
+    assert results == {"error": "rate_limited", "provider": "duckduckgo"}
+
+
+@pytest.mark.asyncio
+async def test_search_empty_results() -> None:
+    mock_ddgs = _mock_ddgs(text_return=[])
+
+    with patch("app.adapters.search_ddg.DDGS", return_value=mock_ddgs):
         adapter = DuckDuckGoSearchAdapter()
         results = await adapter.search("obscure query with no hits")
 

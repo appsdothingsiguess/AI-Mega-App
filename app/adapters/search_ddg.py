@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import time
 
-from duckduckgo_search import AsyncDDGS
-from duckduckgo_search.exceptions import DuckDuckGoSearchException
+from ddgs import DDGS
+from ddgs.exceptions import DDGSException, RatelimitException
 
 from app.types import SearchResult
 
@@ -25,14 +26,29 @@ def _map_result(item: dict[str, str]) -> SearchResult:
 class DuckDuckGoSearchAdapter:
     """SearchService implementation using DuckDuckGo."""
 
+    def __init__(self) -> None:
+        self._ddgs = DDGS()
+
     async def search(self, query: str, max_results: int = 10) -> list[SearchResult]:
         logger.info("Search query=%r max_results=%d", query, max_results)
         start = time.perf_counter()
 
         try:
-            async with AsyncDDGS() as ddgs:
-                raw = await ddgs.atext(query, max_results=max_results)
-        except DuckDuckGoSearchException as exc:
+            raw = await asyncio.to_thread(
+                self._ddgs.text,
+                query,
+                max_results=max_results,
+            )
+        except RatelimitException as exc:
+            latency_ms = (time.perf_counter() - start) * 1000
+            logger.warning(
+                "DuckDuckGo rate limited for query=%r after %.1fms: %s",
+                query,
+                latency_ms,
+                exc,
+            )
+            return {"error": "rate_limited", "provider": "duckduckgo"}
+        except DDGSException as exc:
             latency_ms = (time.perf_counter() - start) * 1000
             logger.warning(
                 "DuckDuckGo search failed for query=%r after %.1fms: %s",
