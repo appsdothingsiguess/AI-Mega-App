@@ -266,7 +266,7 @@ class RagSettings(BaseModel):
 
 
 class HealthSettings(BaseModel):
-    classifier_timeout_s: float = 3.0
+    classifier_timeout_s: float = 30.0
     ollama_fallback_to_remote: bool = True
 
 

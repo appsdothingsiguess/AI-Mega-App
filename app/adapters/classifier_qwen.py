@@ -42,8 +42,9 @@ class QwenClassifierAdapter:
             },
         }
 
+        timeout_s = self.settings.health.classifier_timeout_s or 30.0
         try:
-            async with httpx.AsyncClient() as client:
+            async with httpx.AsyncClient(timeout=timeout_s) as client:
                 response = await client.post(
                     f"{self.settings.ollama.base_url}/api/generate",
                     json=payload,
@@ -75,7 +76,7 @@ class QwenClassifierAdapter:
 
     def _parse_output(self, response_text: str) -> ClassifierOutput:
         try:
-            data = json.loads(response_text)
+            data = json.loads(self._extract_json(response_text))
         except json.JSONDecodeError:
             return self._fallback()
 
@@ -100,6 +101,23 @@ class QwenClassifierAdapter:
             tools=tools,
             confidence=parsed_confidence,
         )
+
+    @staticmethod
+    def _extract_json(response_text: str) -> str:
+        """Return the first JSON object substring from model output."""
+        text = response_text.strip()
+        if text.startswith("```"):
+            lines = text.splitlines()
+            if lines and lines[0].startswith("```"):
+                lines = lines[1:]
+            if lines and lines[-1].strip() == "```":
+                lines = lines[:-1]
+            text = "\n".join(lines).strip()
+        start = text.find("{")
+        end = text.rfind("}")
+        if start != -1 and end != -1 and end > start:
+            return text[start : end + 1]
+        return text
 
     def _fallback(self) -> ClassifierOutput:
         return ClassifierOutput(intent="general_chat", tools=[], confidence=0.0)

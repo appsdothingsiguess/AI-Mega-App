@@ -77,6 +77,10 @@ class HybridRouter:
                 timeout=timeout_s,
             )
         except TimeoutError:
+            logger.warning(
+                "Classifier timed out after %ss; falling back to general_chat",
+                timeout_s,
+            )
             output = ClassifierOutput(intent="general_chat", tools=[], confidence=0.0)
 
         result = RouteResult(

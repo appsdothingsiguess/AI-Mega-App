@@ -110,3 +110,44 @@ async def test_classify_returns_fallback_on_parse_failure() -> None:
     assert result.intent == "general_chat"
     assert result.tools == []
     assert result.confidence == 0.0
+
+
+def test_extract_json_strips_markdown_fence() -> None:
+    wrapped = '```json\n{"intent":"web_search","tools":["web_search"]}\n```'
+    assert QwenClassifierAdapter._extract_json(wrapped) == (
+        '{"intent":"web_search","tools":["web_search"]}'
+    )
+
+
+def test_extract_json_finds_object_in_prose() -> None:
+    text = 'Here is the result: {"intent":"bash","tools":["bash"]} thanks'
+    assert QwenClassifierAdapter._extract_json(text) == (
+        '{"intent":"bash","tools":["bash"]}'
+    )
+
+
+@pytest.mark.asyncio
+async def test_classify_parses_markdown_wrapped_json() -> None:
+    adapter = QwenClassifierAdapter(_settings())
+    post = AsyncMock(
+        return_value=_mock_response(
+            '```json\n'
+            + json.dumps(
+                {
+                    "intent": "web_search",
+                    "tools": ["web_search"],
+                    "confidence": 0.5,
+                }
+            )
+            + "\n```"
+        )
+    )
+
+    with patch("app.adapters.classifier_qwen.httpx.AsyncClient") as client_cls:
+        client = AsyncMock()
+        client.post = post
+        client_cls.return_value.__aenter__.return_value = client
+        result = await adapter.classify("What's the weather?")
+
+    assert result.intent == "web_search"
+    assert result.tools == ["web_search"]
