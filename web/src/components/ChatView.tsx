@@ -386,10 +386,7 @@ export default function ChatView({
   if (!projectId) {
     return (
       <div style={styles.empty}>
-        <div style={styles.emptyIcon}>🧠</div>
-        <div style={styles.emptyText}>
-          Select or create a project to start chatting
-        </div>
+        <div style={styles.emptyText}>Loading…</div>
       </div>
     );
   }
