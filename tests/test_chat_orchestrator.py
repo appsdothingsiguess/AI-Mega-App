@@ -15,6 +15,7 @@ from app.config import (
     AssistantSettings,
     DebugSettings,
     DEFAULT_ASSISTANT_PROMPT,
+    HealthSettings,
     ModelsConfig,
     OllamaSettings,
     Settings,
@@ -409,6 +410,7 @@ async def test_classifier_timeout_fallback(
         )
 
     orchestrator_deps["router"].route = _slow_route
+    orchestrator.settings = _settings(health=HealthSettings(classifier_timeout_s=0.5))
 
     with patch(
         "app.chat_orchestrator.litellm.acompletion",
@@ -420,7 +422,7 @@ async def test_classifier_timeout_fallback(
         )
         elapsed = asyncio.get_running_loop().time() - started
 
-    assert elapsed < 4.5
+    assert elapsed < 2.0
     assert events[-1]["type"] == "done"
     orchestrator_deps["router"].resolve_model.assert_called_with("general_chat")
 

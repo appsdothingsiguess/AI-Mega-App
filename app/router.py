@@ -70,7 +70,7 @@ class HybridRouter:
                 self._log_decision(message, "keyword", result)
                 return result
 
-        timeout_s = self.settings.health.classifier_timeout_s or 3.0
+        timeout_s = self.settings.health.classifier_timeout_s or 30.0
         try:
             output = await asyncio.wait_for(
                 self.classifier.classify(message),

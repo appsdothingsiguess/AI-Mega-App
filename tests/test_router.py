@@ -28,7 +28,7 @@ def _settings(
     *,
     rules: list[RoutingRule],
     rules_enabled: bool = True,
-    timeout_s: float = 3.0,
+    timeout_s: float = 30.0,
 ) -> Settings:
     return Settings(
         projects_dir="./projects",

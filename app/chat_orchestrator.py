@@ -39,7 +39,6 @@ logger_llm = logging.getLogger("prompter.llm")
 logger_mcp = logging.getLogger("prompter.mcp")
 logger_router = logging.getLogger("prompter.router")
 
-_CLASSIFIER_ROUTE_TIMEOUT_S = 3.0
 _DEFAULT_MODEL_LOAD_ESTIMATE_S = 34
 _MAX_HISTORY_TURNS = 20
 _LLM_LOG_TEXT_MAX = 2000
@@ -475,10 +474,11 @@ class ChatOrchestrator:
         )
 
     async def _route_with_fallback(self, text: str) -> RouteResult:
+        timeout_s = self.settings.health.classifier_timeout_s or 30.0
         try:
             return await asyncio.wait_for(
                 self.router.route(text),
-                timeout=_CLASSIFIER_ROUTE_TIMEOUT_S,
+                timeout=timeout_s,
             )
         except TimeoutError:
             return RouteResult(
