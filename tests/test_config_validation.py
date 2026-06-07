@@ -131,7 +131,9 @@ async def test_unreachable_ollama_is_error_when_local_models_configured(
 
 
 @pytest.mark.asyncio
-async def test_unreachable_qdrant_is_warning_only(tmp_path: Path) -> None:
+async def test_unreachable_qdrant_is_warning_only(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     litellm_path = tmp_path / "litellm_config.yaml"
     _write_litellm_config(
         litellm_path,
@@ -143,7 +145,7 @@ async def test_unreachable_qdrant_is_warning_only(tmp_path: Path) -> None:
             "remote/kimi-k2-6",
         ],
     )
-    settings = _settings(tmp_path)
+    settings = _settings(tmp_path, monkeypatch)
 
     with patch("app.config_validation.httpx.AsyncClient") as client_cls:
         client = AsyncMock()

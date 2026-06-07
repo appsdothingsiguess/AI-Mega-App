@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from pathlib import Path
 
 import pytest
 
@@ -146,7 +147,12 @@ async def test_classifier_timeout_falls_back_to_general_chat() -> None:
     assert result.source is RouteSource.CLASSIFIER
 
 
-def test_resolve_model_covers_all_intents() -> None:
+def test_resolve_model_covers_all_intents(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    isolated = tmp_path / "isolated_settings.json"
+    isolated.write_text("{}", encoding="utf-8")
+    monkeypatch.setenv("SETTINGS_JSON_PATH", str(isolated))
     settings = _settings(rules=[])
     router = HybridRouter(
         settings,
