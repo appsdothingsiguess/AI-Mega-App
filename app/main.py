@@ -25,6 +25,8 @@ from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from app.chat_orchestrator import ChatOrchestrator
 from app.config import Settings, get_settings
 from app.config_validation import _parse_litellm_config, validate_config
+from app.logging_setup import configure_logging
+from app.turn_tracker import TurnTracker
 from app.settings_store import (
     SettingsValidationError,
     init_settings_store,
@@ -167,6 +169,7 @@ class _ClaudeSpinner:
 
 def _build_services(
     settings: Settings | None = None,
+    turn_tracker: TurnTracker | None = None,
 ) -> tuple[Settings, ProjectManager, ChatOrchestrator, LMStudioClient, Any]:
     settings = settings or get_settings()
     projects = ProjectManager(settings)
@@ -195,6 +198,7 @@ def _build_services(
         model_scheduler=scheduler,
         settings=settings,
         projects=projects,
+        turn_tracker=turn_tracker,
     )
     return settings, projects, orchestrator, lm, vector_store
 
@@ -202,6 +206,11 @@ def _build_services(
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     settings = get_settings()
+    configure_logging(settings)  # FIRST — before any other init
+
+    turn_tracker = TurnTracker()
+    app.state.turn_tracker = turn_tracker
+
     errors, warnings = await validate_config(settings)
     startup_errors = [
         err for err in errors if not err.startswith("Ollama unreachable")
@@ -214,7 +223,9 @@ async def lifespan(app: FastAPI):
     if startup_errors:
         raise RuntimeError("; ".join(startup_errors))
 
-    settings, projects, orchestrator, lm, vector_store = _build_services(settings)
+    settings, projects, orchestrator, lm, vector_store = _build_services(
+        settings, turn_tracker=turn_tracker
+    )
     app.state.settings = settings
     app.state.projects = projects
     app.state.orchestrator = orchestrator
@@ -384,6 +395,31 @@ async def api_health() -> JSONResponse:
     body = {"status": status, "services": services}
     code = http_status.HTTP_200_OK if status == "healthy" else http_status.HTTP_503_SERVICE_UNAVAILABLE
     return JSONResponse(content=body, status_code=code)
+
+
+# ---------------------------------------------------------------------------
+# Debug
+# ---------------------------------------------------------------------------
+
+@app.get("/debug/last-turn")
+async def api_debug_last_turn() -> JSONResponse:
+    settings, _, _, _ = _services()
+    if not settings.debug.sse_trace:
+        raise HTTPException(status_code=403, detail="Debug endpoints disabled. Enable settings.debug.sse_trace.")
+    tracker: TurnTracker = app.state.turn_tracker
+    record = tracker.last()
+    if record is None:
+        return JSONResponse(status_code=204, content=None)
+    return JSONResponse(tracker.to_json(record))
+
+
+@app.get("/debug/turns")
+async def api_debug_turns() -> JSONResponse:
+    settings, _, _, _ = _services()
+    if not settings.debug.sse_trace:
+        raise HTTPException(status_code=403, detail="Debug endpoints disabled. Enable settings.debug.sse_trace.")
+    tracker: TurnTracker = app.state.turn_tracker
+    return JSONResponse([tracker.to_json(r) for r in tracker.all()])
 
 
 # ---------------------------------------------------------------------------

@@ -466,7 +466,7 @@ async def test_debug_events_emitted_when_sse_trace_enabled(
 
     debug_events = [event for event in events if event.get("type") == "debug"]
     stages = [event["stage"] for event in debug_events]
-    assert stages == ["route", "rag", "messages", "llm_request", "llm_response"]
+    assert stages == ["route", "rag", "messages", "llm_request", "llm_complete", "llm_response"]
     route = debug_events[0]["data"]
     assert route["intent"] == "general_chat"
     assert route["model_alias"] == "remote/deepseek-v4-pro"
@@ -569,9 +569,11 @@ async def test_debug_tool_stages_when_tools_fire(
         "messages",
         "tools",
         "llm_request",
+        "llm_complete",
         "llm_response",
         "tool_dispatch",
         "llm_request",
+        "llm_complete",
         "llm_response",
     ]
     tools_event = next(event for event in debug_events if event["stage"] == "tools")

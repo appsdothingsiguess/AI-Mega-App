@@ -5,7 +5,10 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import time
+import uuid
 from collections.abc import AsyncIterator
+from datetime import datetime, timezone
 from typing import Any
 
 import litellm
@@ -28,6 +31,7 @@ from app.project_manager import ProjectManager
 from app.protocols import EmbeddingService, SearchService, VectorStore, VisionService
 from app.router import HybridRouter
 from app.tools import web_search as web_search_tool
+from app.turn_tracker import TurnRecord, TurnTracker
 from app.types import RouteResult, RouteSource, SearchResult, ToolCallDelta
 
 logger_llm = logging.getLogger("prompter.llm")
@@ -121,6 +125,7 @@ class ChatOrchestrator:
         settings: Settings,
         projects: ProjectManager,
         search_service: SearchService | None = None,
+        turn_tracker: TurnTracker | None = None,
     ) -> None:
         self.router = router
         self.vector_store = vector_store
@@ -130,6 +135,7 @@ class ChatOrchestrator:
         self.settings = settings
         self.projects = projects
         self.search_service = search_service
+        self.turn_tracker = turn_tracker
 
     async def handle_message(
         self,
@@ -138,24 +144,45 @@ class ChatOrchestrator:
         user_content: str | UserTurn,
     ) -> AsyncIterator[str]:
         """Return a streaming async iterator of SSE event JSON strings."""
+        _t_start = time.perf_counter()
         turn = self._parse_turn(user_content)
         self.projects.sync_docs(project_id)
         sse_trace = self.settings.debug.sse_trace
+
+        user_text = turn.text_for_retrieval()
+        turn_record = TurnRecord(
+            turn_id=str(uuid.uuid4()),
+            timestamp=datetime.now(tz=timezone.utc).isoformat(),
+            project_id=project_id,
+            thread_id=thread_id,
+            user_input=user_text[:500],
+        )
 
         route: RouteResult | None = None
         if turn.has_images():
             intent = "vision"
             tools: list[str] = []
+            _t_route_done = time.perf_counter()
+            turn_record.intent = intent
+            turn_record.route_source = RouteSource.VISION_OVERRIDE.value
+            turn_record.route_confidence = 1.0
         else:
             route = await self._route_with_fallback(turn.text_for_retrieval())
+            _t_route_done = time.perf_counter()
             intent = route.intent
             tools = list(route.tools)
+            turn_record.intent = intent
+            turn_record.route_source = route.source.value
+            turn_record.route_confidence = route.confidence
 
         model_alias = self.router.resolve_model(intent)
+        turn_record.model_alias = model_alias
+        turn_record.tools_available = list(tools)
 
         yield json.dumps({"type": "routed", "model": model_alias, "intent": intent})
 
         if route is not None:
+            route_elapsed = (_t_route_done - _t_start) * 1000
             route_payload = {
                 "intent": route.intent,
                 "tools": route.tools,
@@ -164,7 +191,7 @@ class ChatOrchestrator:
                 "model_alias": model_alias,
             }
             if sse_trace:
-                yield debug_event("route", route_payload)
+                yield debug_event("route", route_payload, elapsed_ms=route_elapsed)
             if self.settings.debug.router_decisions:
                 logger_router.info(json.dumps(route_payload))
 
@@ -204,10 +231,23 @@ class ChatOrchestrator:
             self.projects.append_message(
                 project_id, thread_id, "assistant", result, model=model_alias
             )
+            turn_record.total_elapsed_ms = (time.perf_counter() - _t_start) * 1000
+            if self.turn_tracker:
+                self.turn_tracker.record(turn_record)
             return
 
+        _t_rag_start = time.perf_counter()
         retrieved = await self._retrieve(project_id, turn)
+        _t_rag_done = time.perf_counter()
+
+        turn_record.rag_chunks_retrieved = len(retrieved)
+        turn_record.rag_sources = [
+            {"source": c.source, "score": c.score, "title": c.title}
+            for c in retrieved
+        ]
+
         if sse_trace:
+            rag_elapsed = (_t_rag_done - _t_rag_start) * 1000
             yield debug_event(
                 "rag",
                 {
@@ -221,6 +261,7 @@ class ChatOrchestrator:
                         for chunk in retrieved
                     ],
                 },
+                elapsed_ms=rag_elapsed,
             )
         if retrieved:
             yield json.dumps(
@@ -241,13 +282,44 @@ class ChatOrchestrator:
             )
         self._persist_user_message(project_id, thread_id, turn)
 
-        async for event in self._execute_with_tools(
-            model_alias, messages, tools, sse_trace=sse_trace
-        ):
-            parsed = json.loads(event)
-            if parsed.get("type") == "chunk":
-                reply_parts.append(parsed.get("content", ""))
-            yield event
+        # Mutable dict for _execute_with_tools to write timing/usage back.
+        phase_data: dict[str, Any] = {
+            "llm_iterations": 0,
+            "tools_invoked": [],
+            "token_usage": None,
+            "llm_elapsed_ms": 0.0,
+            "tools_elapsed_ms": 0.0,
+            "resolved_model": "",
+            "api_base": None,
+        }
+
+        try:
+            async for event in self._execute_with_tools(
+                model_alias, messages, tools, sse_trace=sse_trace, phase_data=phase_data
+            ):
+                parsed = json.loads(event)
+                if parsed.get("type") == "chunk":
+                    reply_parts.append(parsed.get("content", ""))
+                yield event
+        except Exception as exc:
+            turn_record.error = str(exc)
+            raise
+        finally:
+            _t_end = time.perf_counter()
+            turn_record.llm_iterations = phase_data["llm_iterations"]
+            turn_record.tools_invoked = phase_data["tools_invoked"]
+            turn_record.token_usage = phase_data["token_usage"]
+            turn_record.resolved_model = phase_data["resolved_model"]
+            turn_record.api_base = phase_data["api_base"]
+            turn_record.total_elapsed_ms = (_t_end - _t_start) * 1000
+            turn_record.phase_timings = {
+                "route": (_t_route_done - _t_start) * 1000,
+                "rag": (_t_rag_done - _t_rag_start) * 1000,
+                "llm": phase_data["llm_elapsed_ms"],
+                "tools": phase_data["tools_elapsed_ms"],
+            }
+            if self.turn_tracker:
+                self.turn_tracker.record(turn_record)
 
         self.projects.append_message(
             project_id, thread_id, "assistant", "".join(reply_parts), model=model_alias
@@ -384,6 +456,7 @@ class ChatOrchestrator:
         max_iterations: int = 5,
         *,
         sse_trace: bool = False,
+        phase_data: dict[str, Any] | None = None,
     ) -> AsyncIterator[str]:
         tool_schemas = [self._get_tool_schema(t) for t in tools] if tools else None
         try:
@@ -393,8 +466,15 @@ class ChatOrchestrator:
             yield json.dumps({"type": "done", "usage": {}, "model": model})
             return
 
+        if phase_data is not None:
+            phase_data["resolved_model"] = litellm_kwargs.get("model", "")
+            phase_data["api_base"] = litellm_kwargs.get("api_base")
+
         iteration = 0
         tools_emitted = False
+        _total_llm_ms = 0.0
+        _total_tools_ms = 0.0
+        _last_token_usage: dict[str, Any] | None = None
 
         while iteration < max_iterations:
             iteration += 1
@@ -430,6 +510,7 @@ class ChatOrchestrator:
                 litellm_kwargs.get("model"),
                 iteration,
             )
+            _t_llm_start = time.perf_counter()
             try:
                 response = await litellm.acompletion(
                     messages=messages,
@@ -440,8 +521,10 @@ class ChatOrchestrator:
 
                 text_buffer = ""
                 tool_calls: list[ToolCallDelta] = []
+                last_chunk: Any = None
 
                 async for chunk in response:
+                    last_chunk = chunk
                     if not chunk.choices:
                         continue
                     delta = chunk.choices[0].delta
@@ -463,6 +546,33 @@ class ChatOrchestrator:
                 yield json.dumps({"type": "error", "message": user_msg})
                 yield json.dumps({"type": "done", "usage": {}})
                 return
+
+            _llm_elapsed = (time.perf_counter() - _t_llm_start) * 1000
+            _total_llm_ms += _llm_elapsed
+
+            # Capture token usage from last chunk if available.
+            if last_chunk is not None:
+                raw_usage = getattr(last_chunk, "usage", None)
+                if raw_usage is not None:
+                    try:
+                        _last_token_usage = dict(raw_usage) if hasattr(raw_usage, "__iter__") else {
+                            "prompt_tokens": getattr(raw_usage, "prompt_tokens", None),
+                            "completion_tokens": getattr(raw_usage, "completion_tokens", None),
+                            "total_tokens": getattr(raw_usage, "total_tokens", None),
+                        }
+                    except Exception:
+                        _last_token_usage = None
+
+            if sse_trace:
+                yield debug_event(
+                    "llm_complete",
+                    {
+                        "iteration": iteration,
+                        "text_length": len(text_buffer),
+                        "token_usage": _last_token_usage,
+                    },
+                    elapsed_ms=_llm_elapsed,
+                )
 
             if sse_trace:
                 yield debug_event(
@@ -496,7 +606,21 @@ class ChatOrchestrator:
                         "input": tool_input,
                     }
                 )
+                _t_tool_start = time.perf_counter()
                 result = await self._dispatch_tool(tc.name, tc.arguments)
+                _tool_elapsed = (time.perf_counter() - _t_tool_start) * 1000
+                _total_tools_ms += _tool_elapsed
+
+                if phase_data is not None:
+                    input_summary = str(tool_input)[:200] if tool_input else ""
+                    output_summary = result[:200] if isinstance(result, str) else str(result)[:200]
+                    phase_data["tools_invoked"].append({
+                        "name": tc.name,
+                        "input_summary": input_summary,
+                        "output_summary": output_summary,
+                        "elapsed_ms": round(_tool_elapsed, 1),
+                    })
+
                 if sse_trace:
                     yield debug_event(
                         "tool_dispatch",
@@ -505,6 +629,7 @@ class ChatOrchestrator:
                             "arguments": tc.arguments,
                             "result": result,
                         },
+                        elapsed_ms=_tool_elapsed,
                     )
                 messages.append(
                     {
@@ -528,6 +653,12 @@ class ChatOrchestrator:
                     "message": f"Tool loop hit {max_iterations} iteration limit",
                 }
             )
+
+        if phase_data is not None:
+            phase_data["llm_iterations"] = iteration
+            phase_data["token_usage"] = _last_token_usage
+            phase_data["llm_elapsed_ms"] = _total_llm_ms
+            phase_data["tools_elapsed_ms"] = _total_tools_ms
 
         yield json.dumps({"type": "done", "usage": {}, "model": model})
 

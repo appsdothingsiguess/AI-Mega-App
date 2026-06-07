@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import re
 from copy import deepcopy
+from datetime import datetime, timezone
 from typing import Any
 
 _SENSITIVE_KEYS = frozenset(
@@ -83,8 +84,14 @@ def sanitize_messages_for_trace(
     return redact_dict({"messages": sanitized})["messages"]
 
 
-def debug_event(stage: str, data: dict[str, Any]) -> str:
+def debug_event(stage: str, data: dict[str, Any], elapsed_ms: float | None = None) -> str:
     """Build a redacted debug SSE JSON frame."""
-    return json.dumps(
-        {"type": "debug", "stage": stage, "data": redact_dict(data)}
-    )
+    payload: dict[str, Any] = {
+        "type": "debug",
+        "stage": stage,
+        "data": redact_dict(data),
+        "timestamp": datetime.now(tz=timezone.utc).isoformat(),
+    }
+    if elapsed_ms is not None:
+        payload["elapsed_ms"] = round(elapsed_ms, 1)
+    return json.dumps(payload)

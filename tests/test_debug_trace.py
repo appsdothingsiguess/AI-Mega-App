@@ -69,7 +69,7 @@ def test_redact_list_values() -> None:
 def test_debug_event_shape() -> None:
     frame = debug_event("route", {"intent": "general_chat", "confidence": 0.9})
     parsed = json.loads(frame)
-    assert set(parsed.keys()) == {"type", "stage", "data"}
+    assert set(parsed.keys()) == {"type", "stage", "data", "timestamp"}
     assert parsed["type"] == "debug"
     assert parsed["stage"] == "route"
     assert parsed["data"]["intent"] == "general_chat"
@@ -89,6 +89,7 @@ def test_debug_event_never_contains_api_key() -> None:
     parsed = json.loads(frame)
     assert parsed["type"] == "debug"
     assert parsed["stage"] == "llm_request"
+    assert "timestamp" in parsed
     assert parsed["data"]["api_key"] == _REDACTED
 
 
