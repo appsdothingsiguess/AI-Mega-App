@@ -331,32 +331,6 @@ class Settings(BaseSettings):
         validation_alias="DATA_DIR",
     )
 
-    # Legacy LM Studio fields (deprecated — kept for backward compatibility).
-    lmstudio_mode: Literal["llm", "rest"] = Field(
-        default="llm",
-        validation_alias="LMSTUDIO_MODE",
-    )
-    lmstudio_base_url: str = Field(
-        default="http://localhost:1234",
-        validation_alias="LMSTUDIO_BASE_URL",
-    )
-    lmstudio_model: str = Field(
-        default="gemma-4-e4b-it",
-        validation_alias="LMSTUDIO_MODEL",
-    )
-    lmstudio_api_token: str | None = Field(
-        default=None,
-        validation_alias="LMSTUDIO_API_TOKEN",
-    )
-    lmstudio_vision_model: str | None = Field(
-        default=None,
-        validation_alias="LMSTUDIO_VISION_MODEL",
-    )
-    lmstudio_supports_vision: Literal["auto", "true", "false"] = Field(
-        default="auto",
-        validation_alias="LMSTUDIO_SUPPORTS_VISION",
-    )
-
     # Legacy flat RAG/debug fields used by existing modules and settings_store.
     debug_prompts: bool = Field(
         default=False,
@@ -408,10 +382,7 @@ class Settings(BaseSettings):
         return self.ollama_model_names[alias]
 
     def auth_headers(self) -> dict[str, str]:
-        headers: dict[str, str] = {"Content-Type": "application/json"}
-        if self.lmstudio_api_token:
-            headers["Authorization"] = f"Bearer {self.lmstudio_api_token}"
-        return headers
+        return {"Content-Type": "application/json"}
 
 
 @lru_cache

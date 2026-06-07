@@ -207,40 +207,6 @@ export type SettingsUpdate = {
     : SettingsSnapshot[K];
 };
 
-export interface LmModelInfo {
-  key: string;
-  display_name: string;
-  type: string;
-  loaded: boolean;
-  vision: boolean;
-  params_string: string | null;
-}
-
-export interface LmModelsResponse {
-  models: LmModelInfo[];
-  selected_model: string;
-  mode: string;
-}
-
-export interface LmModelLoadResponse {
-  ok: boolean;
-  model: string;
-  status: string;
-  instance_id: string | null;
-  load_time_seconds: number | null;
-  message: string;
-}
-
-export interface LmServerStatus {
-  config_found: boolean;
-  config_path: string | null;
-  port: number;
-  network_interface: string;
-  serve_on_local_network: boolean;
-  access_urls: string[];
-  restart_required_note: string | null;
-}
-
 // ---- SSE streaming chat ----
 
 export interface SourceChunk {
@@ -427,22 +393,6 @@ export const updateSettings = (updates: SettingsUpdate) =>
   apiFetch<SettingsSnapshot>("/settings", {
     method: "PUT",
     body: JSON.stringify(updates),
-  });
-
-export const getLmModels = () => apiFetch<LmModelsResponse>("/lmstudio/models");
-
-export const loadLmModel = (model: string, context_length?: number) =>
-  apiFetch<LmModelLoadResponse>("/lmstudio/models/load", {
-    method: "POST",
-    body: JSON.stringify({ model, context_length }),
-  });
-
-export const getLmServer = () => apiFetch<LmServerStatus>("/lmstudio/server");
-
-export const updateLmServer = (serve_on_local_network: boolean) =>
-  apiFetch<LmServerStatus>("/lmstudio/server", {
-    method: "PUT",
-    body: JSON.stringify({ serve_on_local_network }),
   });
 
 // ---- Projects ----

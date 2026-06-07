@@ -34,8 +34,6 @@ from app.settings_store import (
     update_settings,
 )
 from app.terminal_input import ChatInputSession
-from app.lmstudio_client import LMStudioClient, LMStudioError, LMStudioModelError
-from app import lmstudio_server_config as lm_server_cfg
 from app.message_parts import UserTurn
 from app.project_manager import ProjectManager, ProjectNotFoundError, ThreadNotFoundError
 from app.schemas import (
@@ -46,12 +44,6 @@ from app.schemas import (
     ProjectCreate,
     ProjectDetail,
     ProjectSummary,
-    LmModelInfo,
-    LmModelLoadRequest,
-    LmModelLoadResponse,
-    LmModelsResponse,
-    LmServerStatus,
-    LmServerUpdate,
     SettingsSnapshot,
     SettingsUpdate,
     SourcesState,
@@ -170,10 +162,9 @@ class _ClaudeSpinner:
 def _build_services(
     settings: Settings | None = None,
     turn_tracker: TurnTracker | None = None,
-) -> tuple[Settings, ProjectManager, ChatOrchestrator, LMStudioClient, Any]:
+) -> tuple[Settings, ProjectManager, ChatOrchestrator, Any]:
     settings = settings or get_settings()
     projects = ProjectManager(settings)
-    lm = LMStudioClient(settings)
 
     from app.adapters.classifier_qwen import QwenClassifierAdapter
     from app.adapters.embedding_nomic import NomicEmbeddingAdapter
@@ -200,7 +191,7 @@ def _build_services(
         projects=projects,
         turn_tracker=turn_tracker,
     )
-    return settings, projects, orchestrator, lm, vector_store
+    return settings, projects, orchestrator, vector_store
 
 
 @asynccontextmanager
@@ -223,13 +214,12 @@ async def lifespan(app: FastAPI):
     if startup_errors:
         raise RuntimeError("; ".join(startup_errors))
 
-    settings, projects, orchestrator, lm, vector_store = _build_services(
+    settings, projects, orchestrator, vector_store = _build_services(
         settings, turn_tracker=turn_tracker
     )
     app.state.settings = settings
     app.state.projects = projects
     app.state.orchestrator = orchestrator
-    app.state.lm = lm
     app.state.vector_store = vector_store
 
     yield
@@ -239,12 +229,12 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(
     title="Prompter",
-    description="Local project assistant with LM Studio",
+    description="Local project assistant",
     lifespan=lifespan,
 )
 
 
-def _services() -> tuple[Settings, ProjectManager, ChatOrchestrator, LMStudioClient]:
+def _services() -> tuple[Settings, ProjectManager, ChatOrchestrator]:
     if (
         getattr(app.state, "orchestrator", None) is not None
         and getattr(app.state, "settings", None) is not None
@@ -253,10 +243,9 @@ def _services() -> tuple[Settings, ProjectManager, ChatOrchestrator, LMStudioCli
             app.state.settings,
             app.state.projects,
             app.state.orchestrator,
-            app.state.lm,
         )
-    settings, projects, orchestrator, lm, _vector_store = _build_services()
-    return settings, projects, orchestrator, lm
+    settings, projects, orchestrator, _vector_store = _build_services()
+    return settings, projects, orchestrator
 
 
 def _apply_runtime_settings(fresh: Settings) -> None:
@@ -390,7 +379,7 @@ async def _build_health_report(settings: Settings) -> tuple[str, dict[str, Any]]
 
 @app.get("/health")
 async def api_health() -> JSONResponse:
-    settings, _, _, _ = _services()
+    settings, _, _ = _services()
     status, services = await _build_health_report(settings)
     body = {"status": status, "services": services}
     code = http_status.HTTP_200_OK if status == "healthy" else http_status.HTTP_503_SERVICE_UNAVAILABLE
@@ -403,7 +392,7 @@ async def api_health() -> JSONResponse:
 
 @app.get("/debug/last-turn")
 async def api_debug_last_turn() -> JSONResponse:
-    settings, _, _, _ = _services()
+    settings, _, _ = _services()
     if not settings.debug.sse_trace:
         raise HTTPException(status_code=403, detail="Debug endpoints disabled. Enable settings.debug.sse_trace.")
     tracker: TurnTracker = app.state.turn_tracker
@@ -415,7 +404,7 @@ async def api_debug_last_turn() -> JSONResponse:
 
 @app.get("/debug/turns")
 async def api_debug_turns() -> JSONResponse:
-    settings, _, _, _ = _services()
+    settings, _, _ = _services()
     if not settings.debug.sse_trace:
         raise HTTPException(status_code=403, detail="Debug endpoints disabled. Enable settings.debug.sse_trace.")
     tracker: TurnTracker = app.state.turn_tracker
@@ -446,108 +435,12 @@ def api_update_settings(body: SettingsUpdate) -> SettingsSnapshot:
 
 
 # ---------------------------------------------------------------------------
-# LM Studio models & server
-# ---------------------------------------------------------------------------
-
-def _lm_server_status() -> LmServerStatus:
-    config, path = lm_server_cfg.read_config()
-    port = int(config.get("port", 1234))
-    iface = str(config.get("networkInterface", "127.0.0.1"))
-    on_net = lm_server_cfg.serve_on_local_network(config)
-    return LmServerStatus(
-        config_found=path is not None,
-        config_path=str(path) if path else None,
-        port=port,
-        network_interface=iface,
-        serve_on_local_network=on_net,
-        access_urls=lm_server_cfg.build_access_urls(port, on_network=on_net),
-    )
-
-
-@app.get("/lmstudio/models", response_model=LmModelsResponse)
-@app.get("/lmstudio/models/", response_model=LmModelsResponse, include_in_schema=False)
-def api_lmstudio_models() -> LmModelsResponse:
-    settings, _, _, lm = _services()
-    try:
-        catalog = lm.list_models_catalog()
-    except LMStudioError as exc:
-        raise HTTPException(status_code=502, detail=str(exc)) from exc
-    return LmModelsResponse(
-        models=[
-            LmModelInfo(
-                key=m.key,
-                display_name=m.display_name,
-                type=m.type,
-                loaded=m.loaded,
-                vision=m.vision,
-                params_string=m.params_string,
-            )
-            for m in catalog
-        ],
-        selected_model=settings.lmstudio_model,
-        mode=settings.lmstudio_mode,
-    )
-
-
-@app.post("/lmstudio/models/load", response_model=LmModelLoadResponse)
-@app.post(
-    "/lmstudio/models/load/",
-    response_model=LmModelLoadResponse,
-    include_in_schema=False,
-)
-def api_lmstudio_load_model(body: LmModelLoadRequest) -> LmModelLoadResponse:
-    _, _, _, lm = _services()
-    try:
-        result = lm.load_model(body.model, context_length=body.context_length)
-    except LMStudioModelError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-    except LMStudioError as exc:
-        raise HTTPException(status_code=502, detail=str(exc)) from exc
-    return LmModelLoadResponse(
-        ok=result.ok,
-        model=result.model,
-        status=result.status,
-        instance_id=result.instance_id,
-        load_time_seconds=result.load_time_seconds,
-        message=result.message,
-    )
-
-
-@app.get("/lmstudio/server", response_model=LmServerStatus)
-def api_lmstudio_server_get() -> LmServerStatus:
-    return _lm_server_status()
-
-
-@app.put("/lmstudio/server", response_model=LmServerStatus)
-@app.put("/lmstudio/server/", response_model=LmServerStatus, include_in_schema=False)
-def api_lmstudio_server_put(body: LmServerUpdate) -> LmServerStatus:
-    try:
-        config, path, note = lm_server_cfg.write_serve_on_local_network(
-            body.serve_on_local_network
-        )
-    except OSError as exc:
-        raise HTTPException(status_code=500, detail=f"Could not write config: {exc}") from exc
-    port = int(config.get("port", 1234))
-    iface = str(config.get("networkInterface", "127.0.0.1"))
-    on_net = lm_server_cfg.serve_on_local_network(config)
-    return LmServerStatus(
-        config_found=True,
-        config_path=str(path),
-        port=port,
-        network_interface=iface,
-        serve_on_local_network=on_net,
-        access_urls=lm_server_cfg.build_access_urls(port, on_network=on_net),
-        restart_required_note=note,
-    )
-
-
-# ---------------------------------------------------------------------------
 # Projects
 # ---------------------------------------------------------------------------
 
 @app.post("/projects/init", response_model=ProjectDetail, status_code=http_status.HTTP_201_CREATED)
 def api_init_project(body: ProjectCreate) -> ProjectDetail:
-    _, projects, _, _ = _services()
+    _, projects, _ = _services()
     try:
         return projects.init_project(body.name, instructions=body.system_prompt or None)
     except FileExistsError as exc:
@@ -556,7 +449,7 @@ def api_init_project(body: ProjectCreate) -> ProjectDetail:
 
 @app.post("/projects", response_model=ProjectDetail, status_code=http_status.HTTP_201_CREATED)
 def api_create_project(body: ProjectCreate) -> ProjectDetail:
-    _, projects, _, _ = _services()
+    _, projects, _ = _services()
     try:
         return projects.create_project(
             body.name,
@@ -569,13 +462,13 @@ def api_create_project(body: ProjectCreate) -> ProjectDetail:
 
 @app.get("/projects", response_model=list[ProjectSummary])
 def api_list_projects() -> list[ProjectSummary]:
-    _, projects, _, _ = _services()
+    _, projects, _ = _services()
     return projects.list_projects()
 
 
 @app.get("/projects/{project_id}", response_model=ProjectDetail)
 def api_get_project(project_id: str) -> ProjectDetail:
-    _, projects, _, _ = _services()
+    _, projects, _ = _services()
     try:
         return projects.get_project(project_id)
     except ProjectNotFoundError as exc:
@@ -588,7 +481,7 @@ def api_get_project(project_id: str) -> ProjectDetail:
 
 @app.get("/projects/{project_id}/instructions", response_model=InstructionsResponse)
 def api_get_instructions(project_id: str) -> InstructionsResponse:
-    _, projects, _, _ = _services()
+    _, projects, _ = _services()
     try:
         content = projects.read_system_prompt(project_id)
         return InstructionsResponse(content=content)
@@ -598,7 +491,7 @@ def api_get_instructions(project_id: str) -> InstructionsResponse:
 
 @app.put("/projects/{project_id}/instructions", response_model=InstructionsResponse)
 def api_update_instructions(project_id: str, body: InstructionsUpdate) -> InstructionsResponse:
-    _, projects, _, _ = _services()
+    _, projects, _ = _services()
     try:
         projects.update_system_prompt(project_id, body.content)
         return InstructionsResponse(content=body.content)
@@ -612,7 +505,7 @@ def api_update_instructions(project_id: str, body: InstructionsUpdate) -> Instru
 
 @app.post("/projects/{project_id}/sync", response_model=SyncResponse)
 def api_sync(project_id: str) -> SyncResponse:
-    _, projects, _, _ = _services()
+    _, projects, _ = _services()
     try:
         ingested = projects.sync_docs(project_id)
         return SyncResponse(chunk_count=len(ingested))
@@ -626,7 +519,7 @@ def api_sync(project_id: str) -> SyncResponse:
 
 @app.get("/projects/{project_id}/sources", response_model=SourcesState)
 def api_get_sources(project_id: str) -> SourcesState:
-    _, projects, _, _ = _services()
+    _, projects, _ = _services()
     try:
         return projects.list_doc_files(project_id)
     except ProjectNotFoundError as exc:
@@ -635,7 +528,7 @@ def api_get_sources(project_id: str) -> SourcesState:
 
 @app.put("/projects/{project_id}/sources", response_model=SourcesState)
 def api_update_sources(project_id: str, body: SourcesUpdate) -> SourcesState:
-    _, projects, _, _ = _services()
+    _, projects, _ = _services()
     try:
         projects.set_enabled_sources(
             project_id,
@@ -656,7 +549,7 @@ async def api_upload_sources(
     project_id: str,
     files: list[UploadFile] = File(...),
 ) -> SourcesState:
-    settings, projects, _, _ = _services()
+    settings, projects, _ = _services()
     try:
         projects._require_project(project_id)
     except ProjectNotFoundError as exc:
@@ -695,7 +588,7 @@ async def api_upload_sources(
 @app.delete("/projects/{project_id}/sources/{filename}", status_code=http_status.HTTP_204_NO_CONTENT)
 def api_delete_source(project_id: str, filename: str) -> None:
     safe_name = _sanitize_upload_filename(filename)
-    _, projects, _, _ = _services()
+    _, projects, _ = _services()
     try:
         projects.delete_doc_file(project_id, safe_name)
     except ProjectNotFoundError as exc:
@@ -712,7 +605,7 @@ def api_delete_source(project_id: str, filename: str) -> None:
 )
 def api_add_file(project_id: str, upload: UploadFile = File(...)) -> dict[str, Any]:
     """Upload a file into the project's ``docs/`` folder and ingest it."""
-    _, projects, _, _ = _services()
+    _, projects, _ = _services()
 
     settings = get_settings()
     safe_name = _sanitize_upload_filename(upload.filename)
@@ -753,7 +646,7 @@ def api_add_file(project_id: str, upload: UploadFile = File(...)) -> dict[str, A
 
 @app.get("/projects/{project_id}/threads", response_model=list[ThreadSummary])
 def api_list_threads(project_id: str) -> list[ThreadSummary]:
-    _, projects, _, _ = _services()
+    _, projects, _ = _services()
     try:
         return projects.list_threads(project_id)
     except ProjectNotFoundError as exc:
@@ -766,7 +659,7 @@ def api_list_threads(project_id: str) -> list[ThreadSummary]:
     status_code=http_status.HTTP_201_CREATED,
 )
 def api_create_thread(project_id: str, body: ThreadCreate) -> ThreadSummary:
-    _, projects, _, _ = _services()
+    _, projects, _ = _services()
     try:
         return projects.create_thread(project_id, body.title)
     except ProjectNotFoundError as exc:
@@ -778,7 +671,7 @@ def api_create_thread(project_id: str, body: ThreadCreate) -> ThreadSummary:
     status_code=http_status.HTTP_204_NO_CONTENT,
 )
 def api_delete_thread(project_id: str, thread_id: str) -> None:
-    _, projects, _, _ = _services()
+    _, projects, _ = _services()
     try:
         projects.delete_thread(project_id, thread_id)
     except ProjectNotFoundError as exc:
@@ -792,7 +685,7 @@ def api_delete_thread(project_id: str, thread_id: str) -> None:
     response_model=ThreadSummary,
 )
 def api_clear_thread_messages(project_id: str, thread_id: str) -> ThreadSummary:
-    _, projects, _, _ = _services()
+    _, projects, _ = _services()
     try:
         return projects.clear_thread_messages(project_id, thread_id)
     except ProjectNotFoundError as exc:
@@ -808,7 +701,7 @@ def api_clear_thread_messages(project_id: str, thread_id: str) -> ThreadSummary:
 def api_rename_thread(
     project_id: str, thread_id: str, body: ThreadRename
 ) -> ThreadSummary:
-    _, projects, _, _ = _services()
+    _, projects, _ = _services()
     try:
         return projects.rename_thread(project_id, thread_id, body.title)
     except ProjectNotFoundError as exc:
@@ -828,7 +721,7 @@ class ChatStreamRequest(MessageCreate):
 
 @app.get("/projects/{project_id}/threads/{thread_id}/messages")
 def api_get_messages(project_id: str, thread_id: str) -> list[dict[str, Any]]:
-    _, projects, _, _ = _services()
+    _, projects, _ = _services()
     try:
         return projects.get_thread_messages(project_id, thread_id)
     except ProjectNotFoundError as exc:
@@ -843,7 +736,7 @@ async def api_chat_sse(
     thread_id: str,
     body: ChatStreamRequest,
 ) -> StreamingResponse:
-    _, projects, orchestrator, _ = _services()
+    _, projects, orchestrator = _services()
     try:
         projects.get_thread_messages(project_id, thread_id)
     except ProjectNotFoundError as exc:
@@ -910,7 +803,7 @@ def _register_spa() -> None:
     def spa_path(spa_path: str) -> FileResponse:
         # Never serve the SPA for API paths (avoids swallowing /settings etc.)
         root = spa_path.split("/", 1)[0]
-        if root in {"health", "settings", "projects", "lmstudio", "docs", "openapi.json", "api"}:
+        if root in {"health", "settings", "projects", "docs", "openapi.json", "api"}:
             raise HTTPException(status_code=404, detail="Not Found")
         candidate = _WEB_DIST / spa_path
         if candidate.is_file():
@@ -939,11 +832,11 @@ def _resolve_cli_project(projects: ProjectManager, parts: list[str]) -> str:
 def build_cli_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="prompter",
-        description="Local project assistant (LM Studio backend)",
+        description="Local project assistant",
     )
     sub = parser.add_subparsers(dest="command", required=True)
 
-    sub.add_parser("health", help="Check LM Studio connectivity and model")
+    sub.add_parser("health", help="Check service health (Ollama, Qdrant, LiteLLM, remote)")
 
     init = sub.add_parser("init", help="Scaffold a new project folder under projects/")
     init.add_argument("name", help="Project display name")
@@ -1004,16 +897,18 @@ def _load_system_prompt(value: str | None) -> str | None:
 def run_cli(argv: list[str] | None = None) -> int:
     parser = build_cli_parser()
     args = parser.parse_args(argv)
-    settings, projects, chat, lm = _services()
+    settings, projects, chat = _services()
 
     try:
         if args.command == "health":
-            health = lm.health_check()
-            print(f"ok={health.ok} mode={health.mode} model={health.model}")
-            print(health.message)
-            if health.available_models:
-                print("available models (sample):", ", ".join(health.available_models[:10]))
-            return 0 if health.ok else 1
+            status, services = asyncio.run(_build_health_report(settings))
+            print(f"status={status}")
+            for name, svc in services.items():
+                line = f"{name}: {svc.get('status', 'unknown')}"
+                if svc.get("error"):
+                    line += f" ({svc['error']})"
+                print(line)
+            return 0 if status == "healthy" else 1
 
         if args.command == "init":
             detail = projects.init_project(args.name, project_id=args.project_id)
@@ -1133,7 +1028,7 @@ def run_cli(argv: list[str] | None = None) -> int:
 
                     with _ClaudeSpinner():
                         reply = asyncio.run(_stream_reply())
-                except (LMStudioError, RuntimeError) as exc:
+                except RuntimeError as exc:
                     print(f"error: {exc}", file=sys.stderr)
                     continue
                 print(f"• {reply}")

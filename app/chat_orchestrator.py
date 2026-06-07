@@ -477,7 +477,9 @@ class ChatOrchestrator:
                 }
             )
 
-        history = self.projects.get_thread_messages(project_id, thread_id)
+        history = await asyncio.to_thread(
+            self.projects.get_thread_messages, project_id, thread_id
+        )
         messages = self._build_messages(
             project_id, turn, retrieved, history, intent, tools, model_alias
         )
@@ -486,7 +488,9 @@ class ChatOrchestrator:
                 "messages",
                 {"messages": sanitize_messages_for_trace(messages)},
             )
-        self._persist_user_message(project_id, thread_id, turn)
+        await asyncio.to_thread(
+            self._persist_user_message, project_id, thread_id, turn
+        )
 
         # Mutable dict for _execute_with_tools to write timing/usage back.
         phase_data: dict[str, Any] = {
@@ -527,8 +531,13 @@ class ChatOrchestrator:
             if self.turn_tracker:
                 self.turn_tracker.record(turn_record)
 
-        self.projects.append_message(
-            project_id, thread_id, "assistant", "".join(reply_parts), model=model_alias
+        await asyncio.to_thread(
+            self.projects.append_message,
+            project_id,
+            thread_id,
+            "assistant",
+            "".join(reply_parts),
+            model=model_alias,
         )
 
     def _parse_turn(self, user_content: str | UserTurn) -> UserTurn:

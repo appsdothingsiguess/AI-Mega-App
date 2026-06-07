@@ -19,7 +19,6 @@ export default defineConfig({
       "/health": proxyApi(),
       "/settings": proxyApi(),
       "/projects": proxyApi(),
-      "/lmstudio": proxyApi(),
     },
   },
   build: {
