@@ -9,9 +9,15 @@ import {
   DEFAULT_TOOL_TOGGLES,
   ToolTogglesState,
 } from "./components/ToolToggles";
-import { getSettings } from "./api/client";
+import { getSettings, listProjects, createProject } from "./api/client";
+
+export type AppView = "home-chat" | "projects" | "project-workspace";
+
+const HOME_PROJECT_NAME = "__home__";
 
 export default function App() {
+  const [view, setView] = useState<AppView>("home-chat");
+  const [homeProjectId, setHomeProjectId] = useState<string | null>(null);
   const [selectedProject, setSelectedProject] = useState<string | null>(null);
   const [threadId, setThreadId] = useState<string | null>(null);
   const [showSettings, setShowSettings] = useState(false);
@@ -49,14 +55,54 @@ export default function App() {
       });
   }, []);
 
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const list = await listProjects();
+        let home = list.find((p) => p.name === HOME_PROJECT_NAME);
+        if (!home) {
+          home = await createProject(HOME_PROJECT_NAME);
+        }
+        if (!cancelled) {
+          setHomeProjectId(home.id);
+        }
+      } catch {
+        // home project bootstrap is best-effort
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
   const resetConversationState = useCallback(() => {
     setModelOverride(null);
     setToolToggles(DEFAULT_TOOL_TOGGLES);
     setModelLoading(null);
   }, []);
 
+  const activeProjectId =
+    view === "home-chat"
+      ? homeProjectId
+      : view === "project-workspace"
+        ? selectedProject
+        : null;
+
+  const handleNavChange = (next: AppView) => {
+    setView(next);
+    if (next === "projects") {
+      setThreadId(null);
+      resetConversationState();
+    }
+    if (next === "home-chat") {
+      resetConversationState();
+    }
+  };
+
   const handleSelectProject = (id: string) => {
     setSelectedProject(id);
+    setView("project-workspace");
     setThreadId(null);
     resetConversationState();
   };
@@ -102,7 +148,7 @@ export default function App() {
 
         <div style={styles.center}>
           <ChatView
-            projectId={selectedProject}
+            projectId={activeProjectId}
             threadId={threadId}
             sourcesVersion={sourcesVersion}
             threadsVersion={threadsVersion}
