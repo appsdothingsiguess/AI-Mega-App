@@ -9,6 +9,15 @@ from collections.abc import AsyncIterator
 from typing import Any
 
 import litellm
+from litellm.exceptions import (
+    APIConnectionError,
+    AuthenticationError,
+    ContextWindowExceededError,
+    NotFoundError,
+    RateLimitError,
+    ServiceUnavailableError,
+    Timeout,
+)
 
 from app.config import Settings
 from app.debug_trace import debug_event, sanitize_messages_for_trace
@@ -68,6 +77,23 @@ def _serialize_search_result(result: SearchResult) -> dict[str, Any]:
         "score": result.score,
         "metadata": result.metadata,
     }
+
+
+def _user_safe_error(exc: Exception) -> str:
+    """Map LiteLLM/provider errors to user-safe messages without leaking secrets."""
+    if isinstance(exc, AuthenticationError):
+        return "Authentication failed. Check your API key configuration."
+    if isinstance(exc, RateLimitError):
+        return "Rate limit exceeded. Please try again later."
+    if isinstance(exc, ContextWindowExceededError):
+        return "The conversation exceeded the model's context window."
+    if isinstance(exc, NotFoundError):
+        return "The requested model was not found."
+    if isinstance(exc, (APIConnectionError, ServiceUnavailableError)):
+        return "Could not reach the model provider. Please try again later."
+    if isinstance(exc, Timeout):
+        return "The model request timed out. Please try again."
+    return str(exc)
 
 
 def _format_retrieved_context(chunks: list[SearchResult]) -> str:
@@ -400,28 +426,39 @@ class ChatOrchestrator:
                 litellm_kwargs.get("model"),
                 iteration,
             )
-            response = await litellm.acompletion(
-                messages=messages,
-                tools=tool_schemas,
-                stream=True,
-                **litellm_kwargs,
-            )
+            try:
+                response = await litellm.acompletion(
+                    messages=messages,
+                    tools=tool_schemas,
+                    stream=True,
+                    **litellm_kwargs,
+                )
 
-            text_buffer = ""
-            tool_calls: list[ToolCallDelta] = []
+                text_buffer = ""
+                tool_calls: list[ToolCallDelta] = []
 
-            async for chunk in response:
-                if not chunk.choices:
-                    continue
-                delta = chunk.choices[0].delta
+                async for chunk in response:
+                    if not chunk.choices:
+                        continue
+                    delta = chunk.choices[0].delta
 
-                if delta.content:
-                    text_buffer += delta.content
-                    yield json.dumps({"type": "chunk", "content": delta.content})
+                    if delta.content:
+                        text_buffer += delta.content
+                        yield json.dumps({"type": "chunk", "content": delta.content})
 
-                if delta.tool_calls:
-                    for tc_delta in delta.tool_calls:
-                        _merge_tool_call_delta(tool_calls, tc_delta)
+                    if delta.tool_calls:
+                        for tc_delta in delta.tool_calls:
+                            _merge_tool_call_delta(tool_calls, tc_delta)
+            except Exception as exc:
+                logger_llm.exception(
+                    "LiteLLM completion failed alias=%s model=%s",
+                    model,
+                    litellm_kwargs.get("model"),
+                )
+                user_msg = _user_safe_error(exc)
+                yield json.dumps({"type": "error", "message": user_msg})
+                yield json.dumps({"type": "done", "usage": {}})
+                return
 
             if sse_trace:
                 yield debug_event(

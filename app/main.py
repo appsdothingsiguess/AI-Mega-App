@@ -823,6 +823,14 @@ async def api_chat_sse(
                 thread_id,
             )
             raise
+        except Exception:
+            logger.exception(
+                "Unhandled exception in SSE stream project=%s thread=%s",
+                project_id,
+                thread_id,
+            )
+            yield f'data: {json.dumps({"type": "error", "message": "Internal server error"})}\n\n'
+            yield f'data: {json.dumps({"type": "done", "usage": {}})}\n\n'
 
     return StreamingResponse(event_generator(), media_type="text/event-stream")
 

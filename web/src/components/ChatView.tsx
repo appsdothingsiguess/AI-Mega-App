@@ -343,7 +343,15 @@ export default function ChatView({
       }
 
       setMessages((prev) =>
-        prev.map((m) => (m.isStreaming ? { ...m, isStreaming: false } : m)),
+        prev.map((m) =>
+          m.isStreaming
+            ? {
+                ...m,
+                isStreaming: false,
+                error: m.error ?? (!m.content ? "Connection lost" : undefined),
+              }
+            : m,
+        ),
       );
 
       getSources(projectId)
