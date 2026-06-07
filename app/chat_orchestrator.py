@@ -43,6 +43,10 @@ _CLASSIFIER_ROUTE_TIMEOUT_S = 3.0
 _DEFAULT_MODEL_LOAD_ESTIMATE_S = 34
 _MAX_HISTORY_TURNS = 20
 _LLM_LOG_TEXT_MAX = 2000
+_SYNTHESIS_NUDGE = (
+    "Using the tool results above, answer the original question in clear plain text. "
+    "Do not call any tools or output JSON."
+)
 
 _TOOL_SCHEMAS: dict[str, dict[str, Any]] = {
     "web_search": web_search_tool.TOOL_SCHEMA,
@@ -577,6 +581,87 @@ class ChatOrchestrator:
 
         return messages
 
+    async def _stream_final_answer(
+        self,
+        model: str,
+        messages: list[dict[str, Any]],
+        litellm_kwargs: dict[str, Any],
+        *,
+        sse_trace: bool = False,
+        iteration: int = 0,
+    ) -> AsyncIterator[str]:
+        """Force a text-only completion after tool results (local models that re-call tools)."""
+        synthesis_messages = [
+            *messages,
+            {"role": "user", "content": _SYNTHESIS_NUDGE},
+        ]
+        if sse_trace:
+            yield debug_event(
+                "llm_request",
+                {
+                    "alias": model,
+                    "resolved_model": litellm_kwargs.get("model"),
+                    "api_base": litellm_kwargs.get("api_base"),
+                    "iteration": iteration,
+                    "synthesis": True,
+                },
+            )
+
+        _t_start = time.perf_counter()
+        try:
+            response = await litellm.acompletion(
+                messages=synthesis_messages,
+                stream=True,
+                tools=None,
+                **litellm_kwargs,
+            )
+            text_buffer = ""
+            async for chunk in response:
+                if not chunk.choices:
+                    continue
+                delta = chunk.choices[0].delta
+                if delta.content:
+                    cleaned = _strip_tool_json_from_text(delta.content)
+                    if cleaned:
+                        text_buffer += cleaned
+                        yield json.dumps({"type": "chunk", "content": cleaned})
+        except Exception as exc:
+            logger_llm.exception(
+                "Synthesis completion failed model=%s",
+                litellm_kwargs.get("model"),
+            )
+            yield json.dumps({"type": "error", "message": _user_safe_error(exc)})
+            return
+
+        elapsed_ms = (time.perf_counter() - _t_start) * 1000
+        if sse_trace:
+            yield debug_event(
+                "llm_complete",
+                {
+                    "iteration": iteration,
+                    "text_length": len(text_buffer),
+                    "synthesis": True,
+                },
+                elapsed_ms=elapsed_ms,
+            )
+            yield debug_event(
+                "llm_response",
+                {
+                    "text_length": len(text_buffer),
+                    "text": text_buffer,
+                    "text_preview": text_buffer[:200],
+                    "synthesis": True,
+                },
+            )
+
+        if not text_buffer.strip():
+            yield json.dumps(
+                {
+                    "type": "error",
+                    "message": "Model did not produce an answer after tool results.",
+                }
+            )
+
     async def _execute_with_tools(
         self,
         model: str,
@@ -601,6 +686,8 @@ class ChatOrchestrator:
 
         iteration = 0
         tools_emitted = False
+        tools_round_complete = False
+        synthesis_attempted = False
         _total_llm_ms = 0.0
         _total_tools_ms = 0.0
         _last_token_usage: dict[str, Any] | None = None
@@ -608,6 +695,7 @@ class ChatOrchestrator:
 
         while iteration < max_iterations:
             iteration += 1
+            active_tool_schemas = None if tools_round_complete else tool_schemas
             if sse_trace and tool_schemas and not tools_emitted:
                 yield debug_event(
                     "tools",
@@ -668,7 +756,7 @@ class ChatOrchestrator:
             try:
                 response = await litellm.acompletion(
                     messages=messages,
-                    tools=tool_schemas,
+                    tools=active_tool_schemas,
                     stream=True,
                     **litellm_kwargs,
                 )
@@ -677,7 +765,7 @@ class ChatOrchestrator:
                 reasoning_buffer = ""
                 tool_calls: list[ToolCallDelta] = []
                 last_chunk: Any = None
-                defer_content = bool(tool_schemas) or is_deepseek
+                defer_content = bool(active_tool_schemas) or is_deepseek
 
                 async for chunk in response:
                     last_chunk = chunk
@@ -721,7 +809,7 @@ class ChatOrchestrator:
                 reasoning_buffer += inline_reasoning
 
             fallback_used = False
-            if not tool_calls and text_buffer.strip() and tool_schemas:
+            if not tool_calls and text_buffer.strip() and active_tool_schemas:
                 extracted = _extract_tool_calls_from_text(text_buffer, tools)
                 if extracted:
                     tool_calls = extracted
@@ -735,6 +823,16 @@ class ChatOrchestrator:
                                 "tool_names": [tc.name for tc in tool_calls],
                             },
                         )
+
+            if tools_round_complete:
+                if tool_calls:
+                    logger_llm.warning(
+                        "Model requested tools after tool round; ignoring alias=%s iteration=%s",
+                        model,
+                        iteration,
+                    )
+                    tool_calls = []
+                text_buffer = _strip_tool_json_from_text(text_buffer)
 
             if not tool_calls and defer_content and text_buffer:
                 yield json.dumps({"type": "chunk", "content": text_buffer})
@@ -803,6 +901,20 @@ class ChatOrchestrator:
                     )
 
             if not tool_calls:
+                if (
+                    tools_round_complete
+                    and not text_buffer.strip()
+                    and not synthesis_attempted
+                ):
+                    synthesis_attempted = True
+                    async for event in self._stream_final_answer(
+                        model,
+                        messages,
+                        litellm_kwargs,
+                        sse_trace=sse_trace,
+                        iteration=iteration,
+                    ):
+                        yield event
                 break
 
             assistant_msg: dict[str, Any] = {
@@ -866,7 +978,19 @@ class ChatOrchestrator:
                     }
                 )
 
-        if iteration >= max_iterations:
+            tools_round_complete = True
+
+        if iteration >= max_iterations and tools_round_complete and not synthesis_attempted:
+            synthesis_attempted = True
+            async for event in self._stream_final_answer(
+                model,
+                messages,
+                litellm_kwargs,
+                sse_trace=sse_trace,
+                iteration=iteration,
+            ):
+                yield event
+        elif iteration >= max_iterations:
             yield json.dumps(
                 {
                     "type": "error",

@@ -175,7 +175,11 @@ async def _fake_tool_then_text_stream(*_args, **_kwargs):
         yield _FakeChunk(_FakeDelta(content=text))
 
 
-async def _fake_tool_only_stream(*_args, **_kwargs):
+async def _fake_tool_only_stream(*_args, **kwargs):
+    if kwargs.get("tools") is None:
+        async for chunk in _fake_text_stream():
+            yield chunk
+        return
     yield _FakeChunk(
         _FakeDelta(
             tool_calls=[
@@ -339,9 +343,12 @@ async def test_tool_loop_limit(
             orchestrator, project_id, thread_id, "Keep searching"
         )
 
-    error_events = [event for event in events if event["type"] == "error"]
-    assert error_events
-    assert "5 iteration limit" in error_events[0]["message"]
+    tool_calls = [event for event in events if event["type"] == "tool_call"]
+    assert len(tool_calls) == 1
+    chunk_text = "".join(
+        event.get("content", "") for event in events if event["type"] == "chunk"
+    )
+    assert "Hello" in chunk_text
     assert events[-1]["type"] == "done"
 
 
@@ -875,6 +882,52 @@ async def _fake_text_json_tool_stream(*_args, **_kwargs):
         {"name": "web_search", "arguments": {"query": "S&P 500 close Friday"}}
     )
     yield _FakeChunk(_FakeDelta(content=payload))
+
+
+@pytest.mark.asyncio
+async def test_repeated_tool_json_triggers_single_search_then_synthesis(
+    orchestrator: ChatOrchestrator,
+    orchestrator_deps: dict,
+    thread_ids: tuple[str, str],
+) -> None:
+    """Local models that only emit tool JSON must not loop searches until max_iterations."""
+    project_id, thread_id = thread_ids
+    orchestrator_deps["router"].route = AsyncMock(
+        return_value=RouteResult(
+            intent="web_search",
+            tools=["web_search"],
+            confidence=1.0,
+            source=RouteSource.KEYWORD,
+        )
+    )
+
+    call_count = 0
+
+    async def _always_tool_json_then_text(*_args, **kwargs):
+        nonlocal call_count
+        call_count += 1
+        if kwargs.get("tools") is None:
+            async for chunk in _fake_text_stream():
+                yield chunk
+            return
+        async for chunk in _fake_text_json_tool_stream():
+            yield chunk
+
+    with patch(
+        "app.chat_orchestrator.litellm.acompletion",
+        side_effect=_always_tool_json_then_text,
+    ):
+        events = await _collect_events(
+            orchestrator, project_id, thread_id, "LA weather tomorrow"
+        )
+
+    tool_calls = [event for event in events if event["type"] == "tool_call"]
+    assert len(tool_calls) == 1
+    chunk_text = "".join(
+        event.get("content", "") for event in events if event["type"] == "chunk"
+    )
+    assert "Hello" in chunk_text
+    assert call_count == 2
 
 
 @pytest.mark.asyncio
