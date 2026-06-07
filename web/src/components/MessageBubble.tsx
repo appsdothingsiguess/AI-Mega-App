@@ -30,6 +30,16 @@ function formatToolOutput(output: string): string {
   }
 }
 
+const DSML_PIPES = /[|｜]+/; // matches ASCII | and fullwidth ｜ (U+FF5C)
+const DSML_BLOCK_RE = new RegExp(
+  `<${DSML_PIPES.source}DSML${DSML_PIPES.source}tool_calls>[\\s\\S]*</${DSML_PIPES.source}DSML${DSML_PIPES.source}tool_calls>`,
+  "gi"
+);
+
+function stripToolMarkup(content: string): string {
+  return content.replace(DSML_BLOCK_RE, "").trim();
+}
+
 function ToolSection({ tools }: { tools: ToolEvent[] }) {
   const [open, setOpen] = useState(true);
   if (tools.length === 0) return null;
@@ -90,6 +100,8 @@ export default function MessageBubble({
     );
   }
 
+  const displayContent = role === "assistant" ? stripToolMarkup(content) : content;
+
   return (
     <div style={styles.assistantRow}>
       <div style={styles.assistantDot}>•</div>
@@ -97,7 +109,7 @@ export default function MessageBubble({
         {tools && tools.length > 0 && <ToolSection tools={tools} />}
         {sources && sources.length > 0 && <SourceCitations sources={sources} />}
         {(content || isStreaming) && (
-          <ArtifactRenderer content={content} isStreaming={isStreaming} />
+          <ArtifactRenderer content={displayContent} isStreaming={isStreaming} />
         )}
         {error && <div style={styles.inlineError}>{error}</div>}
         {(model || (time && !isStreaming)) && (
