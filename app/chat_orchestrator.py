@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import re
 import time
 import uuid
 from collections.abc import AsyncIterator
@@ -49,7 +50,7 @@ _TOOL_SCHEMAS: dict[str, dict[str, Any]] = {
 
 def _merge_tool_call_delta(accumulated: list[ToolCallDelta], delta: Any) -> None:
     """Merge streaming tool_call deltas by index."""
-    idx = delta.index
+    idx = delta.index if delta.index is not None else 0
     while len(accumulated) <= idx:
         accumulated.append(ToolCallDelta())
     if delta.id:
@@ -58,6 +59,96 @@ def _merge_tool_call_delta(accumulated: list[ToolCallDelta], delta: Any) -> None
         accumulated[idx].name = delta.function.name
     if delta.function and delta.function.arguments:
         accumulated[idx].arguments += delta.function.arguments
+
+
+_DEEPSEEK_THINKING_RE = re.compile(
+    r"<\s*(?:think|redacted_thinking)\s*>.*?<\s*/\s*(?:think|redacted_thinking)\s*>",
+    re.DOTALL | re.IGNORECASE,
+)
+
+
+def _is_deepseek_r1_model(model_alias: str, resolved_model: str | None = None) -> bool:
+    combined = f"{model_alias} {resolved_model or ''}".lower()
+    return "deepseek-r1" in combined
+
+
+def _strip_deepseek_reasoning(text: str) -> tuple[str, str]:
+    reasoning_parts = _DEEPSEEK_THINKING_RE.findall(text)
+    cleaned = _DEEPSEEK_THINKING_RE.sub("", text).strip()
+    return cleaned, "".join(reasoning_parts)
+
+
+def _parse_single_tool_call_object(
+    parsed: dict[str, Any], available_tools: list[str]
+) -> ToolCallDelta | None:
+    name: str | None = None
+    arguments: Any = {}
+
+    if parsed.get("name") in available_tools:
+        name = str(parsed["name"])
+        arguments = parsed.get("arguments", {})
+    elif isinstance(parsed.get("function"), dict):
+        fn = parsed["function"]
+        if fn.get("name") in available_tools:
+            name = str(fn["name"])
+            arguments = fn.get("arguments", {})
+
+    if not name:
+        return None
+
+    if isinstance(arguments, str):
+        args_str = arguments
+    else:
+        args_str = json.dumps(arguments if isinstance(arguments, dict) else {})
+
+    return ToolCallDelta(
+        id=f"call_{uuid.uuid4().hex[:12]}",
+        name=name,
+        arguments=args_str,
+    )
+
+
+def _extract_tool_calls_from_text(
+    text: str, available_tools: list[str]
+) -> list[ToolCallDelta]:
+    candidates = [text.strip()]
+    candidates.extend(
+        block.strip()
+        for block in re.findall(
+            r"```(?:json)?\s*\n?(.*?)\n?```", text, re.DOTALL | re.IGNORECASE
+        )
+        if block.strip()
+    )
+
+    for candidate in candidates:
+        try:
+            parsed = json.loads(candidate)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(parsed, dict):
+            continue
+        tool_call = _parse_single_tool_call_object(parsed, available_tools)
+        if tool_call is not None:
+            return [tool_call]
+    return []
+
+
+def _strip_tool_json_from_text(text: str) -> str:
+    cleaned = text
+    for match in re.finditer(
+        r"```(?:json)?\s*\n?(.*?)\n?```", text, re.DOTALL | re.IGNORECASE
+    ):
+        try:
+            json.loads(match.group(1).strip())
+            cleaned = cleaned.replace(match.group(0), "")
+        except json.JSONDecodeError:
+            continue
+    stripped = cleaned.strip()
+    try:
+        json.loads(stripped)
+        return ""
+    except json.JSONDecodeError:
+        return stripped
 
 
 def _parse_tool_input(arguments: str) -> dict[str, Any] | str:
@@ -512,6 +603,7 @@ class ChatOrchestrator:
         _total_llm_ms = 0.0
         _total_tools_ms = 0.0
         _last_token_usage: dict[str, Any] | None = None
+        is_deepseek = _is_deepseek_r1_model(model, litellm_kwargs.get("model"))
 
         while iteration < max_iterations:
             iteration += 1
@@ -557,8 +649,10 @@ class ChatOrchestrator:
                 )
 
                 text_buffer = ""
+                reasoning_buffer = ""
                 tool_calls: list[ToolCallDelta] = []
                 last_chunk: Any = None
+                defer_content = bool(tool_schemas) or is_deepseek
 
                 async for chunk in response:
                     last_chunk = chunk
@@ -566,9 +660,18 @@ class ChatOrchestrator:
                         continue
                     delta = chunk.choices[0].delta
 
+                    reasoning_part = getattr(delta, "reasoning_content", None) or getattr(
+                        delta, "thinking", None
+                    )
+                    if reasoning_part:
+                        reasoning_buffer += reasoning_part
+
                     if delta.content:
                         text_buffer += delta.content
-                        yield json.dumps({"type": "chunk", "content": delta.content})
+                        if not defer_content:
+                            yield json.dumps(
+                                {"type": "chunk", "content": delta.content}
+                            )
 
                     if delta.tool_calls:
                         for tc_delta in delta.tool_calls:
@@ -586,6 +689,30 @@ class ChatOrchestrator:
 
             _llm_elapsed = (time.perf_counter() - _t_llm_start) * 1000
             _total_llm_ms += _llm_elapsed
+
+            resolved_model = litellm_kwargs.get("model")
+            if _is_deepseek_r1_model(model, resolved_model):
+                text_buffer, inline_reasoning = _strip_deepseek_reasoning(text_buffer)
+                reasoning_buffer += inline_reasoning
+
+            fallback_used = False
+            if not tool_calls and text_buffer.strip() and tool_schemas:
+                extracted = _extract_tool_calls_from_text(text_buffer, tools)
+                if extracted:
+                    tool_calls = extracted
+                    text_buffer = _strip_tool_json_from_text(text_buffer)
+                    fallback_used = True
+                    if sse_trace:
+                        yield debug_event(
+                            "tool_call_fallback",
+                            {
+                                "source": "text_json",
+                                "tool_names": [tc.name for tc in tool_calls],
+                            },
+                        )
+
+            if not tool_calls and defer_content and text_buffer:
+                yield json.dumps({"type": "chunk", "content": text_buffer})
 
             # Capture token usage from last chunk if available.
             if last_chunk is not None:
@@ -667,6 +794,11 @@ class ChatOrchestrator:
                             "result": result,
                         },
                         elapsed_ms=_tool_elapsed,
+                    )
+                if not tc.id:
+                    logger_mcp.warning(
+                        "Tool result appended with empty tool_call_id name=%s",
+                        tc.name,
                     )
                 messages.append(
                     {

@@ -868,3 +868,106 @@ def test_default_assistant_prompt_from_settings(
     assert f'You are TestBot for "{project.name}"' in system_content
     assert "## Available tools" in system_content
     assert DEFAULT_ASSISTANT_PROMPT != custom_prompt
+
+
+async def _fake_text_json_tool_stream(*_args, **_kwargs):
+    payload = json.dumps(
+        {"name": "web_search", "arguments": {"query": "S&P 500 close Friday"}}
+    )
+    yield _FakeChunk(_FakeDelta(content=payload))
+
+
+@pytest.mark.asyncio
+async def test_text_json_tool_call_fallback(
+    orchestrator: ChatOrchestrator,
+    orchestrator_deps: dict,
+    thread_ids: tuple[str, str],
+) -> None:
+    project_id, thread_id = thread_ids
+    orchestrator_deps["router"].route = AsyncMock(
+        return_value=RouteResult(
+            intent="web_search",
+            tools=["web_search"],
+            confidence=1.0,
+            source=RouteSource.KEYWORD,
+        )
+    )
+    orchestrator_deps["router"].resolve_model = MagicMock(
+        return_value="local/qwen3-8b"
+    )
+
+    call_count = 0
+
+    async def _json_then_text(*_args, **_kwargs):
+        nonlocal call_count
+        call_count += 1
+        if call_count == 1:
+            async for chunk in _fake_text_json_tool_stream():
+                yield chunk
+        else:
+            async for chunk in _fake_text_stream():
+                yield chunk
+
+    with patch(
+        "app.chat_orchestrator.litellm.acompletion",
+        side_effect=_json_then_text,
+    ):
+        events = await _collect_events(
+            orchestrator, project_id, thread_id, "S&P 500 close Friday"
+        )
+
+    tool_calls = [event for event in events if event["type"] == "tool_call"]
+    assert len(tool_calls) >= 1
+    assert tool_calls[0]["name"] == "web_search"
+    assert tool_calls[0]["input"] == {"query": "S&P 500 close Friday"}
+
+    chunk_text = "".join(
+        event.get("content", "") for event in events if event["type"] == "chunk"
+    )
+    assert "web_search" not in chunk_text
+    assert "S&P 500 close Friday" not in chunk_text or "Hello" in chunk_text
+
+
+async def _fake_deepseek_reasoning_stream(*_args, **_kwargs):
+    think_block = "<think>secret reasoning</think>"
+    yield _FakeChunk(_FakeDelta(content=f"{think_block}Hello world"))
+
+
+@pytest.mark.asyncio
+async def test_deepseek_reasoning_stripped(
+    orchestrator: ChatOrchestrator,
+    orchestrator_deps: dict,
+    manager: ProjectManager,
+    settings: Settings,
+    thread_ids: tuple[str, str],
+) -> None:
+    project_id, thread_id = thread_ids
+    orchestrator.settings = settings.model_copy(
+        update={
+            "models": ModelsConfig(general_chat="local/deepseek-r1-8b"),
+            "ollama_model_names": {"local/deepseek-r1-8b": "deepseek-r1:8b"},
+        }
+    )
+    orchestrator_deps["router"].resolve_model = MagicMock(
+        return_value="local/deepseek-r1-8b"
+    )
+
+    with patch(
+        "app.chat_orchestrator.litellm.acompletion",
+        side_effect=_fake_deepseek_reasoning_stream,
+    ):
+        events = await _collect_events(
+            orchestrator, project_id, thread_id, "Explain recursion briefly"
+        )
+
+    chunk_text = "".join(
+        event.get("content", "") for event in events if event["type"] == "chunk"
+    )
+    assert "secret reasoning" not in chunk_text
+    assert "Hello world" in chunk_text
+
+    messages = manager.get_thread_messages(project_id, thread_id)
+    assistant_msgs = [m for m in messages if m["role"] == "assistant"]
+    assert assistant_msgs
+    assert "secret reasoning" not in assistant_msgs[-1]["content"]
+    assert "Hello world" in assistant_msgs[-1]["content"]
