@@ -1,18 +1,17 @@
 import { useCallback, useEffect, useState } from "react";
 import {
-  listProjects,
-  createProject,
   listThreads,
   createThread,
   deleteThread,
   clearThreadMessages,
-  ProjectSummary,
   ThreadSummary,
 } from "../api/client";
+import type { AppView } from "../App";
 
 interface Props {
-  selectedId: string | null;
-  onSelect: (id: string) => void;
+  view: AppView;
+  projectId: string | null;
+  onNavChange: (view: AppView) => void;
   threadId: string | null;
   onThreadSelect: (id: string | null) => void;
   onThreadsChange?: () => void;
@@ -31,47 +30,32 @@ function threadLabel(t: ThreadSummary): string {
 }
 
 export default function ProjectSidebar({
-  selectedId,
-  onSelect,
+  view,
+  projectId,
+  onNavChange,
   threadId,
   onThreadSelect,
   onThreadsChange,
   threadsVersion = 0,
 }: Props) {
-  const [projects, setProjects] = useState<ProjectSummary[]>([]);
   const [threads, setThreads] = useState<ThreadSummary[]>([]);
-  const [creating, setCreating] = useState(false);
-  const [newName, setNewName] = useState("");
   const [error, setError] = useState<string | null>(null);
-  const [loading, setLoading] = useState(true);
   const [threadsLoading, setThreadsLoading] = useState(false);
   const [threadBusy, setThreadBusy] = useState<string | null>(null);
 
-  const refreshProjects = async () => {
-    try {
-      const list = await listProjects();
-      setProjects(list);
-    } catch {
-      // ignore
-    } finally {
-      setLoading(false);
-    }
-  };
-
   const loadThreads = useCallback(
     async (opts?: { autoSelect?: boolean }) => {
-      if (!selectedId) {
+      if (!projectId) {
         setThreads([]);
         return;
       }
       setThreadsLoading(true);
       try {
-        let list = sortThreads(await listThreads(selectedId));
+        let list = sortThreads(await listThreads(projectId));
         if (list.length === 0 && opts?.autoSelect !== false) {
-          const t = await createThread(selectedId, "Chat");
+          const t = await createThread(projectId, "Chat");
           list = [t];
           onThreadsChange?.();
-          await refreshProjects();
         }
         setThreads(list);
         if (opts?.autoSelect !== false) {
@@ -87,62 +71,38 @@ export default function ProjectSidebar({
         setThreadsLoading(false);
       }
     },
-    [selectedId, threadId, onThreadSelect, onThreadsChange],
+    [projectId, threadId, onThreadSelect, onThreadsChange],
   );
 
   useEffect(() => {
-    refreshProjects();
-  }, []);
-
-  useEffect(() => {
-    refreshProjects();
-  }, [threadsVersion]);
-
-  useEffect(() => {
     setError(null);
-    if (!selectedId) {
+    if (!projectId) {
       setThreads([]);
       return;
     }
     loadThreads({ autoSelect: true });
-  }, [selectedId]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [projectId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
-    if (!selectedId) return;
+    if (!projectId) return;
     loadThreads({ autoSelect: false });
   }, [threadsVersion]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const handleCreate = async () => {
-    const name = newName.trim();
-    if (!name) return;
-    try {
-      setError(null);
-      const proj = await createProject(name);
-      setProjects((p) => [...p, proj]);
-      onSelect(proj.id);
-      setCreating(false);
-      setNewName("");
-    } catch (e: unknown) {
-      setError(e instanceof Error ? e.message : "Failed to create project");
-    }
-  };
-
   const handleNewChat = async () => {
-    if (!selectedId) return;
+    if (!projectId) return;
     try {
       setError(null);
-      const t = await createThread(selectedId);
+      const t = await createThread(projectId);
       setThreads((prev) => sortThreads([t, ...prev]));
       onThreadSelect(t.id);
       onThreadsChange?.();
-      await refreshProjects();
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : "Failed to create chat");
     }
   };
 
   const handleClearThread = async (id: string) => {
-    if (!selectedId) return;
+    if (!projectId) return;
     if (
       !window.confirm(
         "Clear all messages in this chat? The chat will remain in the list.",
@@ -153,7 +113,7 @@ export default function ProjectSidebar({
     setThreadBusy(id);
     try {
       setError(null);
-      const updated = await clearThreadMessages(selectedId, id);
+      const updated = await clearThreadMessages(projectId, id);
       setThreads((prev) =>
         prev.map((t) => (t.id === id ? { ...t, ...updated } : t)),
       );
@@ -166,7 +126,7 @@ export default function ProjectSidebar({
   };
 
   const handleDeleteThread = async (id: string) => {
-    if (!selectedId) return;
+    if (!projectId) return;
     if (
       !window.confirm(
         "Delete this chat permanently? This cannot be undone.",
@@ -177,10 +137,10 @@ export default function ProjectSidebar({
     setThreadBusy(id);
     try {
       setError(null);
-      await deleteThread(selectedId, id);
+      await deleteThread(projectId, id);
       const remaining = threads.filter((t) => t.id !== id);
       if (remaining.length === 0) {
-        const t = await createThread(selectedId, "Chat");
+        const t = await createThread(projectId, "Chat");
         setThreads([t]);
         onThreadSelect(t.id);
       } else {
@@ -188,7 +148,6 @@ export default function ProjectSidebar({
         if (threadId === id) onThreadSelect(remaining[0].id);
       }
       onThreadsChange?.();
-      await refreshProjects();
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : "Failed to delete chat");
     } finally {
@@ -196,93 +155,61 @@ export default function ProjectSidebar({
     }
   };
 
+  const showThreads = view === "home-chat" || view === "project-workspace";
+
   return (
     <div style={styles.root}>
-      <div style={styles.projectsSection}>
-        <div style={styles.header}>
-          <span style={styles.title}>Projects</span>
-          <button
-            style={styles.newBtn}
-            onClick={() => {
-              setCreating(true);
-              setNewName("");
-              setError(null);
-            }}
-            title="New project"
-          >
-            +
-          </button>
-        </div>
-
-        {creating && (
-          <div style={styles.createBox}>
-            <input
-              autoFocus
-              style={styles.nameInput}
-              value={newName}
-              placeholder="Project name…"
-              onChange={(e) => setNewName(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === "Enter") handleCreate();
-                if (e.key === "Escape") setCreating(false);
-              }}
-            />
-            <div style={{ display: "flex", gap: 4, marginTop: 6 }}>
-              <button style={styles.confirmBtn} onClick={handleCreate}>
-                Create
-              </button>
-              <button style={styles.cancelBtn} onClick={() => setCreating(false)}>
-                Cancel
-              </button>
-            </div>
-            {error && <div style={styles.errorText}>{error}</div>}
-          </div>
-        )}
-
-        <div style={styles.projectList}>
-          {loading && <div style={styles.muted}>Loading…</div>}
-          {!loading && projects.length === 0 && (
-            <div style={styles.muted}>No projects yet</div>
-          )}
-          {projects.map((p) => (
-            <button
-              key={p.id}
-              style={{
-                ...styles.projectItem,
-                ...(p.id === selectedId ? styles.projectItemActive : {}),
-              }}
-              onClick={() => onSelect(p.id)}
-            >
-              <div style={styles.projectName}>{p.name}</div>
-              <div style={styles.projectMeta}>
-                {p.file_count} file{p.file_count !== 1 ? "s" : ""} ·{" "}
-                {p.thread_count} chat{p.thread_count !== 1 ? "s" : ""}
-              </div>
-            </button>
-          ))}
-        </div>
+      <div style={styles.nav}>
+        <button
+          style={{
+            ...styles.navItem,
+            ...(view === "home-chat" ? styles.navItemActive : {}),
+          }}
+          onClick={() => onNavChange("home-chat")}
+          title="New chat"
+        >
+          <span style={styles.navIcon}>💬</span>
+          <span>New Chat</span>
+        </button>
+        <button
+          style={{
+            ...styles.navItem,
+            ...(view === "projects" || view === "project-workspace"
+              ? styles.navItemActive
+              : {}),
+          }}
+          onClick={() => onNavChange("projects")}
+          title="Projects"
+        >
+          <span style={styles.navIcon}>📁</span>
+          <span>Projects</span>
+        </button>
       </div>
 
-      {selectedId && (
+      {showThreads && (
         <div style={styles.threadsSection}>
           <div style={styles.header}>
             <span style={styles.title}>Chats</span>
             <button
               style={styles.newBtn}
               onClick={handleNewChat}
+              disabled={!projectId}
               title="New chat"
             >
               +
             </button>
           </div>
 
-          {error && !creating && (
-            <div style={styles.errorBanner}>{error}</div>
-          )}
+          {error && <div style={styles.errorBanner}>{error}</div>}
 
           <div style={styles.threadList}>
-            {threadsLoading && <div style={styles.muted}>Loading chats…</div>}
-            {!threadsLoading && threads.length === 0 && (
+            {!projectId && (
+              <div style={styles.muted}>Loading…</div>
+            )}
+            {projectId && threadsLoading && (
+              <div style={styles.muted}>Loading chats…</div>
+            )}
+            {projectId && !threadsLoading && threads.length === 0 && (
               <div style={styles.muted}>No chats yet</div>
             )}
             {threads.map((t) => (
@@ -334,18 +261,40 @@ const styles: Record<string, React.CSSProperties> = {
   root: {
     display: "flex",
     flexDirection: "column",
-    flex: "1 1 55%",
-    minHeight: 120,
+    flex: 1,
+    minHeight: 0,
     overflow: "hidden",
-    borderBottom: "1px solid var(--border)",
   },
-  projectsSection: {
+  nav: {
     display: "flex",
     flexDirection: "column",
-    flex: "0 1 42%",
-    minHeight: 96,
-    maxHeight: "42%",
-    overflow: "hidden",
+    gap: 2,
+    padding: "10px 8px",
+    borderBottom: "1px solid var(--border)",
+    flexShrink: 0,
+  },
+  navItem: {
+    display: "flex",
+    alignItems: "center",
+    gap: 10,
+    width: "100%",
+    textAlign: "left",
+    padding: "9px 10px",
+    borderRadius: "var(--radius-sm)",
+    fontSize: 14,
+    fontWeight: 500,
+    color: "var(--text-muted)",
+  },
+  navItemActive: {
+    background: "var(--accent-dim)",
+    color: "var(--text)",
+    borderLeft: "2px solid var(--accent)",
+    paddingLeft: 8,
+  },
+  navIcon: {
+    fontSize: 16,
+    lineHeight: 1,
+    flexShrink: 0,
   },
   threadsSection: {
     display: "flex",
@@ -353,7 +302,6 @@ const styles: Record<string, React.CSSProperties> = {
     flex: 1,
     minHeight: 0,
     overflow: "hidden",
-    borderTop: "1px solid var(--border)",
   },
   header: {
     display: "flex",
@@ -383,37 +331,6 @@ const styles: Record<string, React.CSSProperties> = {
     color: "var(--accent)",
     fontWeight: 700,
   },
-  createBox: {
-    padding: "10px 10px 6px",
-    borderBottom: "1px solid var(--border)",
-    flexShrink: 0,
-  },
-  nameInput: {
-    width: "100%",
-    padding: "6px 8px",
-    borderRadius: "var(--radius-sm)",
-  },
-  confirmBtn: {
-    flex: 1,
-    padding: "5px 0",
-    background: "var(--accent)",
-    color: "#000",
-    borderRadius: "var(--radius-sm)",
-    fontWeight: 600,
-    fontSize: 12,
-  },
-  cancelBtn: {
-    flex: 1,
-    padding: "5px 0",
-    background: "var(--bg-hover)",
-    borderRadius: "var(--radius-sm)",
-    fontSize: 12,
-  },
-  errorText: {
-    marginTop: 4,
-    fontSize: 11,
-    color: "var(--danger)",
-  },
   errorBanner: {
     margin: "0 10px 6px",
     padding: "6px 10px",
@@ -422,11 +339,6 @@ const styles: Record<string, React.CSSProperties> = {
     color: "var(--danger)",
     fontSize: 11,
     flexShrink: 0,
-  },
-  projectList: {
-    flex: 1,
-    overflowY: "auto",
-    padding: "4px 0",
   },
   threadList: {
     flex: 1,
@@ -437,27 +349,6 @@ const styles: Record<string, React.CSSProperties> = {
     padding: "12px",
     color: "var(--text-muted)",
     fontSize: 12,
-  },
-  projectItem: {
-    width: "100%",
-    textAlign: "left",
-    padding: "9px 12px",
-    borderRadius: 0,
-    borderBottom: "1px solid transparent",
-    display: "block",
-  },
-  projectItemActive: {
-    background: "var(--accent-dim)",
-    borderLeft: "2px solid var(--accent)",
-    paddingLeft: 10,
-  },
-  projectName: {
-    fontWeight: 500,
-    marginBottom: 2,
-  },
-  projectMeta: {
-    fontSize: 11,
-    color: "var(--text-muted)",
   },
   threadRow: {
     display: "flex",

@@ -133,8 +133,9 @@ export default function App() {
       <div style={styles.main}>
         <div style={styles.left}>
           <ProjectSidebar
-            selectedId={selectedProject}
-            onSelect={handleSelectProject}
+            view={view}
+            projectId={activeProjectId}
+            onNavChange={handleNavChange}
             threadId={threadId}
             onThreadSelect={handleThreadSelect}
             onThreadsChange={notifyThreadsChanged}
