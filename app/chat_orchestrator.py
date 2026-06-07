@@ -127,6 +127,8 @@ class ChatOrchestrator:
 
         model_alias = self.router.resolve_model(intent)
 
+        yield json.dumps({"type": "routed", "model": model_alias, "intent": intent})
+
         if route is not None:
             route_payload = {
                 "intent": route.intent,
@@ -172,8 +174,10 @@ class ChatOrchestrator:
                 )
             reply_parts.append(result)
             yield json.dumps({"type": "chunk", "content": result})
-            yield json.dumps({"type": "done", "usage": {}})
-            self.projects.append_message(project_id, thread_id, "assistant", result)
+            yield json.dumps({"type": "done", "usage": {}, "model": model_alias})
+            self.projects.append_message(
+                project_id, thread_id, "assistant", result, model=model_alias
+            )
             return
 
         retrieved = await self._retrieve(project_id, turn)
@@ -220,7 +224,7 @@ class ChatOrchestrator:
             yield event
 
         self.projects.append_message(
-            project_id, thread_id, "assistant", "".join(reply_parts)
+            project_id, thread_id, "assistant", "".join(reply_parts), model=model_alias
         )
 
     def _parse_turn(self, user_content: str | UserTurn) -> UserTurn:
@@ -360,7 +364,7 @@ class ChatOrchestrator:
             litellm_kwargs = resolve_litellm_params(self.settings, model)
         except LitellmAliasError as exc:
             yield json.dumps({"type": "error", "message": str(exc)})
-            yield json.dumps({"type": "done", "usage": {}})
+            yield json.dumps({"type": "done", "usage": {}, "model": model})
             return
 
         iteration = 0
@@ -488,7 +492,7 @@ class ChatOrchestrator:
                 }
             )
 
-        yield json.dumps({"type": "done", "usage": {}})
+        yield json.dumps({"type": "done", "usage": {}, "model": model})
 
     def _get_tool_schema(self, name: str) -> dict[str, Any]:
         if name in _TOOL_SCHEMAS:

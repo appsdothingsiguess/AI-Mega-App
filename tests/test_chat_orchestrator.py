@@ -195,9 +195,18 @@ async def test_basic_chat_flow(
             orchestrator, project_id, thread_id, "Hello there"
         )
 
-    assert events[0] == {"type": "chunk", "content": "Hello"}
-    assert events[1] == {"type": "chunk", "content": " world"}
-    assert events[-1] == {"type": "done", "usage": {}}
+    assert events[0] == {
+        "type": "routed",
+        "model": "remote/deepseek-v4-pro",
+        "intent": "general_chat",
+    }
+    assert events[1] == {"type": "chunk", "content": "Hello"}
+    assert events[2] == {"type": "chunk", "content": " world"}
+    assert events[-1] == {
+        "type": "done",
+        "usage": {},
+        "model": "remote/deepseek-v4-pro",
+    }
     orchestrator_deps["router"].route.assert_awaited_once()
     assert mock_completion.await_args.kwargs["model"] == "openai/deepseek-v4-pro"
     assert mock_completion.await_args.kwargs["api_base"] == "https://opencode.ai/zen/go/v1"
@@ -231,9 +240,18 @@ async def test_vision_path(
     mock_completion.assert_not_called()
     orchestrator_deps["router"].route.assert_not_called()
     orchestrator_deps["vision"].analyze.assert_awaited_once()
-    assert events[0]["type"] == "chunk"
-    assert events[0]["content"] == "Vision analysis result"
-    assert events[-1]["type"] == "done"
+    assert events[0] == {
+        "type": "routed",
+        "model": "remote/deepseek-v4-pro",
+        "intent": "vision",
+    }
+    assert events[1]["type"] == "chunk"
+    assert events[1]["content"] == "Vision analysis result"
+    assert events[-1] == {
+        "type": "done",
+        "usage": {},
+        "model": "remote/deepseek-v4-pro",
+    }
 
 
 @pytest.mark.asyncio
@@ -413,9 +431,14 @@ async def test_model_loading_event(
             orchestrator, project_id, thread_id, "Run locally"
         )
 
-    assert events[0]["type"] == "model_loading"
-    assert events[0]["model"] == "qwen3:8b"
-    assert events[0]["estimated_seconds"] == 34
+    assert events[0] == {
+        "type": "routed",
+        "model": "local/qwen3-8b",
+        "intent": "general_chat",
+    }
+    assert events[1]["type"] == "model_loading"
+    assert events[1]["model"] == "qwen3:8b"
+    assert events[1]["estimated_seconds"] == 34
     orchestrator_deps["scheduler"].ensure_loaded.assert_awaited_once_with(
         "local/qwen3-8b"
     )
@@ -601,3 +624,31 @@ async def test_no_debug_events_when_sse_trace_disabled(
         )
 
     assert all(event.get("type") != "debug" for event in events)
+
+
+@pytest.mark.asyncio
+async def test_routed_sse_and_persisted_model(
+    orchestrator: ChatOrchestrator,
+    orchestrator_deps: dict,
+    manager: ProjectManager,
+    thread_ids: tuple[str, str],
+) -> None:
+    project_id, thread_id = thread_ids
+    with patch(
+        "app.chat_orchestrator.litellm.acompletion",
+        side_effect=_fake_text_stream,
+    ):
+        events = await _collect_events(
+            orchestrator, project_id, thread_id, "Persist model label"
+        )
+
+    routed = next(event for event in events if event["type"] == "routed")
+    assert routed == {
+        "type": "routed",
+        "model": "remote/deepseek-v4-pro",
+        "intent": "general_chat",
+    }
+
+    messages = manager.get_thread_messages(project_id, thread_id)
+    assistant_msgs = [m for m in messages if m["role"] == "assistant"]
+    assert assistant_msgs[-1]["model"] == "remote/deepseek-v4-pro"
