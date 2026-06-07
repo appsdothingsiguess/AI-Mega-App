@@ -13,11 +13,6 @@ from app.types import ClassifierOutput
 
 logger = logging.getLogger("prompter.router")
 
-IDENTITY = (
-    "You are Prompter X's local routing classifier. "
-    "Your only job is to classify the user's latest message for routing.\n\n"
-)
-
 
 class QwenClassifierAdapter:
     """Classify user messages with the configured local Ollama classifier."""
@@ -29,7 +24,7 @@ class QwenClassifierAdapter:
         started = time.perf_counter()
         payload = {
             "model": self._ollama_model_name(),
-            "system": IDENTITY + self.settings.router.classifier_prompt,
+            "system": self.settings.router.classifier_prompt,
             "prompt": message,
             "stream": False,
             "keep_alive": self.settings.ollama.keep_alive,

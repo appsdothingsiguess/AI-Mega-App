@@ -7,7 +7,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from app.adapters.classifier_qwen import IDENTITY, QwenClassifierAdapter
+from app.adapters.classifier_qwen import QwenClassifierAdapter
 from app.config import OllamaSettings, RouterSettings, Settings
 
 
@@ -57,7 +57,7 @@ async def test_classify_posts_expected_ollama_payload() -> None:
     assert call.args[0] == "http://ollama.test/api/generate"
     payload = call.kwargs["json"]
     assert payload["model"] == "qwen2.5:1.5b"
-    assert payload["system"] == IDENTITY + "Classify this message."
+    assert payload["system"] == "Classify this message."
     assert payload["prompt"] == "Look up today's weather"
     assert payload["stream"] is False
     assert payload["keep_alive"] == -1
