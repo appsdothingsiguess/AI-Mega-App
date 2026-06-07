@@ -30,9 +30,13 @@ async def _collect_events(
     project_id: str,
     thread_id: str,
     content: str | UserTurn,
+    *,
+    model_override: str | None = None,
 ) -> list[dict]:
     raw: list[str] = []
-    async for event in orchestrator.handle_message(project_id, thread_id, content):
+    async for event in orchestrator.handle_message(
+        project_id, thread_id, content, model_override=model_override
+    ):
         raw.append(event)
     return _parse_events(raw)
 
@@ -658,6 +662,120 @@ async def test_litellm_authentication_error_emits_error_and_done(
     assert "sk-secret123" not in error_events[0]["message"]
     assert "Authentication failed" in error_events[0]["message"]
     assert events[-1] == {"type": "done", "usage": {}}
+
+
+@pytest.mark.asyncio
+async def test_model_override_skips_resolve_model_with_tools(
+    orchestrator: ChatOrchestrator,
+    orchestrator_deps: dict,
+    thread_ids: tuple[str, str],
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    project_id, thread_id = thread_ids
+    orchestrator_deps["router"].route = AsyncMock(
+        return_value=RouteResult(
+            intent="web_search",
+            tools=["web_search"],
+            confidence=1.0,
+            source=RouteSource.KEYWORD,
+        )
+    )
+    orchestrator_deps["router"].resolve_model = MagicMock(
+        return_value="remote/kimi-k2-6"
+    )
+
+    call_count = 0
+
+    async def _tool_then_text(*_args, **_kwargs):
+        nonlocal call_count
+        call_count += 1
+        if call_count == 1:
+            async for chunk in _fake_tool_then_text_stream():
+                yield chunk
+        else:
+            async for chunk in _fake_text_stream():
+                yield chunk
+
+    with caplog.at_level("INFO", logger="prompter.router"):
+        with patch(
+            "app.chat_orchestrator.litellm.acompletion",
+            side_effect=_tool_then_text,
+        ) as mock_completion:
+            events = await _collect_events(
+                orchestrator,
+                project_id,
+                thread_id,
+                "Search for news",
+                model_override="remote/deepseek-v4-pro",
+            )
+
+    orchestrator_deps["router"].route.assert_awaited_once()
+    orchestrator_deps["router"].resolve_model.assert_not_called()
+
+    routed = next(event for event in events if event["type"] == "routed")
+    assert routed == {
+        "type": "routed",
+        "model": "remote/deepseek-v4-pro",
+        "intent": "web_search",
+    }
+
+    types = [event["type"] for event in events]
+    assert "tool_call" in types
+
+    assert mock_completion.await_args.kwargs["model"] == "openai/deepseek-v4-pro"
+    assert (
+        mock_completion.await_args.kwargs["api_base"]
+        == "https://opencode.ai/zen/go/v1"
+    )
+
+    assert any(
+        "model_override applied: remote/deepseek-v4-pro" in record.message
+        for record in caplog.records
+    )
+
+
+@pytest.mark.asyncio
+async def test_model_override_vision_inference_uses_vision_service(
+    orchestrator: ChatOrchestrator,
+    orchestrator_deps: dict,
+    thread_ids: tuple[str, str],
+    tmp_path: Path,
+) -> None:
+    project_id, thread_id = thread_ids
+    image_path = tmp_path / "chart.png"
+    image_path.write_bytes(b"\x89PNG\r\n\x1a\n")
+
+    turn = UserTurn(
+        parts=[
+            ImagePart(
+                attachment_id="img-1",
+                placeholder="[Image #1]",
+                path=image_path,
+                mime="image/png",
+            )
+        ]
+    )
+
+    with patch("app.chat_orchestrator.litellm.acompletion") as mock_completion:
+        events = await _collect_events(
+            orchestrator,
+            project_id,
+            thread_id,
+            turn,
+            model_override="remote/deepseek-v4-pro",
+        )
+
+    mock_completion.assert_not_called()
+    orchestrator_deps["router"].route.assert_not_called()
+    orchestrator_deps["router"].resolve_model.assert_not_called()
+    orchestrator_deps["vision"].analyze.assert_awaited_once()
+
+    routed = next(event for event in events if event["type"] == "routed")
+    assert routed == {
+        "type": "routed",
+        "model": "remote/deepseek-v4-pro",
+        "intent": "vision",
+    }
 
 
 @pytest.mark.asyncio

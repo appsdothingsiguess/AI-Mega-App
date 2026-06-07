@@ -142,6 +142,8 @@ class ChatOrchestrator:
         project_id: str,
         thread_id: str,
         user_content: str | UserTurn,
+        *,
+        model_override: str | None = None,
     ) -> AsyncIterator[str]:
         """Return a streaming async iterator of SSE event JSON strings."""
         _t_start = time.perf_counter()
@@ -175,7 +177,14 @@ class ChatOrchestrator:
             turn_record.route_source = route.source.value
             turn_record.route_confidence = route.confidence
 
-        model_alias = self.router.resolve_model(intent)
+        override = (model_override or "").strip()
+        if override:
+            model_alias = override
+            logger_router.info(
+                "model_override applied: %s (intent=%s)", model_alias, intent
+            )
+        else:
+            model_alias = self.router.resolve_model(intent)
         turn_record.model_alias = model_alias
         turn_record.tools_available = list(tools)
 

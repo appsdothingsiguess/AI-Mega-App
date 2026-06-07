@@ -821,6 +821,11 @@ def api_rename_thread(
 # Messages
 # ---------------------------------------------------------------------------
 
+
+class ChatStreamRequest(MessageCreate):
+    model_override: str | None = None
+
+
 @app.get("/projects/{project_id}/threads/{thread_id}/messages")
 def api_get_messages(project_id: str, thread_id: str) -> list[dict[str, Any]]:
     _, projects, _, _ = _services()
@@ -836,7 +841,7 @@ def api_get_messages(project_id: str, thread_id: str) -> list[dict[str, Any]]:
 async def api_chat_sse(
     project_id: str,
     thread_id: str,
-    body: MessageCreate,
+    body: ChatStreamRequest,
 ) -> StreamingResponse:
     _, projects, orchestrator, _ = _services()
     try:
@@ -849,7 +854,10 @@ async def api_chat_sse(
     async def event_generator() -> AsyncIterator[str]:
         try:
             async for event in orchestrator.handle_message(
-                project_id, thread_id, body.content
+                project_id,
+                thread_id,
+                body.content,
+                model_override=body.model_override,
             ):
                 yield f"data: {event}\n\n"
         except asyncio.CancelledError:
