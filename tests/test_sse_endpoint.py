@@ -35,6 +35,8 @@ class _FakeOrchestrator:
         project_id: str,
         thread_id: str,
         user_content: str | Any,
+        *,
+        model_override: str | None = None,
     ) -> AsyncIterator[str]:
         self.handle_calls.append((project_id, thread_id, str(user_content)))
         for event in self.events:
