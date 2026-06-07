@@ -7,6 +7,7 @@ import json
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import litellm.exceptions
 import pytest
 
 from app.chat_orchestrator import ChatOrchestrator
@@ -601,3 +602,61 @@ async def test_no_debug_events_when_sse_trace_disabled(
         )
 
     assert all(event.get("type") != "debug" for event in events)
+
+
+@pytest.mark.asyncio
+async def test_litellm_authentication_error_emits_error_and_done(
+    orchestrator: ChatOrchestrator,
+    thread_ids: tuple[str, str],
+) -> None:
+    project_id, thread_id = thread_ids
+
+    async def _raise_auth_error(*_args, **_kwargs):
+        raise litellm.exceptions.AuthenticationError(
+            message="Invalid API key sk-secret123",
+            llm_provider="openai",
+            model="openai/deepseek-v4-pro",
+        )
+
+    with patch(
+        "app.chat_orchestrator.litellm.acompletion",
+        side_effect=_raise_auth_error,
+    ):
+        events = await _collect_events(
+            orchestrator, project_id, thread_id, "Hello there"
+        )
+
+    error_events = [event for event in events if event["type"] == "error"]
+    assert len(error_events) == 1
+    assert "sk-secret123" not in error_events[0]["message"]
+    assert "Authentication failed" in error_events[0]["message"]
+    assert events[-1] == {"type": "done", "usage": {}}
+
+
+@pytest.mark.asyncio
+async def test_litellm_authentication_error_emits_error_and_done(
+    orchestrator: ChatOrchestrator,
+    thread_ids: tuple[str, str],
+) -> None:
+    project_id, thread_id = thread_ids
+
+    async def _raise_auth_error(*_args, **_kwargs):
+        raise litellm.exceptions.AuthenticationError(
+            message="Invalid API key sk-secret123",
+            llm_provider="openai",
+            model="openai/deepseek-v4-pro",
+        )
+
+    with patch(
+        "app.chat_orchestrator.litellm.acompletion",
+        side_effect=_raise_auth_error,
+    ):
+        events = await _collect_events(
+            orchestrator, project_id, thread_id, "Hello there"
+        )
+
+    error_events = [event for event in events if event["type"] == "error"]
+    assert len(error_events) == 1
+    assert "sk-secret123" not in error_events[0]["message"]
+    assert "Authentication failed" in error_events[0]["message"]
+    assert events[-1] == {"type": "done", "usage": {}}
