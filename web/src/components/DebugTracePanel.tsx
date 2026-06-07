@@ -146,6 +146,52 @@ function formatKeyValues(data: Record<string, unknown>): string {
     .join("\n");
 }
 
+function filterTraceEntries(entries: TraceEntry[], filter: FilterKey): TraceEntry[] {
+  if (filter === "All") {
+    return entries;
+  }
+  const stages = FILTER_STAGES[filter];
+  return entries.filter((entry) => stages.includes(entry.stage));
+}
+
+function formatTraceEntryBlock(entry: TraceEntry): string {
+  const time = new Date(entry.timestamp).toLocaleTimeString();
+  const label = entry.stage.toUpperCase().replace(/_/g, " ");
+  const lines = [
+    `${time}`,
+    label,
+    formatOneLiner(entry),
+    "",
+    formatKeyValues(entry.data),
+  ];
+  if (entry.elapsed_ms != null) {
+    lines.push("", `elapsed_ms: ${entry.elapsed_ms}`);
+  }
+  return lines.join("\n");
+}
+
+function formatTraceExport(entries: TraceEntry[], filter: FilterKey): string {
+  const header = `Debug trace export (${filter}) — ${entries.length} event(s)\n${"=".repeat(48)}\n\n`;
+  return header + entries.map(formatTraceEntryBlock).join("\n\n---\n\n");
+}
+
+async function copyTextToClipboard(text: string): Promise<void> {
+  if (navigator.clipboard?.writeText) {
+    await navigator.clipboard.writeText(text);
+    return;
+  }
+
+  const textarea = document.createElement("textarea");
+  textarea.value = text;
+  textarea.setAttribute("readonly", "");
+  textarea.style.position = "fixed";
+  textarea.style.left = "-9999px";
+  document.body.appendChild(textarea);
+  textarea.select();
+  document.execCommand("copy");
+  document.body.removeChild(textarea);
+}
+
 function EventCard({ entry }: { entry: TraceEntry }) {
   const [open, setOpen] = useState(false);
   const time = new Date(entry.timestamp).toLocaleTimeString();
@@ -240,9 +286,19 @@ export default function DebugTracePanel({
   const [height, setHeight] = useState(220);
   const [turnRecord, setTurnRecord] = useState<TurnRecordSummary | null>(null);
   const [fetchError, setFetchError] = useState<string | null>(null);
+  const [copyStatus, setCopyStatus] = useState<string | null>(null);
   const dragging = useRef(false);
   const dragStartY = useRef(0);
   const dragStartH = useRef(0);
+  const copyStatusTimer = useRef<number | null>(null);
+
+  useEffect(() => {
+    return () => {
+      if (copyStatusTimer.current != null) {
+        window.clearTimeout(copyStatusTimer.current);
+      }
+    };
+  }, []);
 
   useEffect(() => {
     const onMove = (e: MouseEvent) => {
@@ -262,10 +318,7 @@ export default function DebugTracePanel({
 
   if (!visible) return null;
 
-  const filtered =
-    filter === "All"
-      ? entries
-      : entries.filter((e) => FILTER_STAGES[filter].includes(e.stage));
+  const filtered = filterTraceEntries(entries, filter);
 
   const handleFetchLastTurn = async () => {
     if (!lastTurnUrl) return;
@@ -284,6 +337,31 @@ export default function DebugTracePanel({
       setTurnRecord(data as TurnRecordSummary);
     } catch (err) {
       setFetchError(String(err));
+    }
+  };
+
+  const handleCopyTrace = async () => {
+    if (filtered.length === 0) return;
+    setCopyStatus(null);
+    try {
+      await copyTextToClipboard(formatTraceExport(filtered, filter));
+      setCopyStatus("Copied!");
+      if (copyStatusTimer.current != null) {
+        window.clearTimeout(copyStatusTimer.current);
+      }
+      copyStatusTimer.current = window.setTimeout(() => {
+        setCopyStatus(null);
+        copyStatusTimer.current = null;
+      }, 2000);
+    } catch (err) {
+      setCopyStatus("Copy failed");
+      if (copyStatusTimer.current != null) {
+        window.clearTimeout(copyStatusTimer.current);
+      }
+      copyStatusTimer.current = window.setTimeout(() => {
+        setCopyStatus(null);
+        copyStatusTimer.current = null;
+      }, 3000);
     }
   };
 
@@ -324,7 +402,23 @@ export default function DebugTracePanel({
               Fetch last turn
             </button>
           )}
-          <button type="button" style={styles.actionBtn} onClick={() => { onClear(); setTurnRecord(null); setFetchError(null); }}>
+          <button
+            type="button"
+            style={{
+              ...styles.actionBtn,
+              ...(filtered.length === 0 ? styles.actionBtnDisabled : {}),
+            }}
+            onClick={handleCopyTrace}
+            disabled={filtered.length === 0}
+            title={
+              filtered.length === 0
+                ? "No trace events in this filter"
+                : `Copy ${filter} trace (${filtered.length})`
+            }
+          >
+            {copyStatus ?? "Copy"}
+          </button>
+          <button type="button" style={styles.actionBtn} onClick={() => { onClear(); setTurnRecord(null); setFetchError(null); setCopyStatus(null); }}>
             Clear
           </button>
         </div>
@@ -429,6 +523,10 @@ const styles: Record<string, React.CSSProperties> = {
     background: "var(--bg-hover)",
     color: "var(--text-dim)",
     cursor: "pointer",
+  },
+  actionBtnDisabled: {
+    opacity: 0.45,
+    cursor: "not-allowed",
   },
   swimLane: {
     height: 20,
