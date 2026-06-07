@@ -94,6 +94,11 @@ def project_and_thread(client: TestClient) -> tuple[str, str]:
     return project_id, thread_id
 
 
+def test_build_services_wires_search_service() -> None:
+    settings, _, orchestrator, _, _ = _build_services()
+    assert orchestrator.search_service is not None
+
+
 def test_sse_returns_event_stream_content_type(
     client: TestClient,
     fake_orchestrator: _FakeOrchestrator,
