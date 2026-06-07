@@ -696,10 +696,9 @@ class ChatOrchestrator:
                     continue
                 delta = chunk.choices[0].delta
                 if delta.content:
-                    cleaned = _strip_tool_json_from_text(delta.content)
-                    if cleaned:
-                        text_buffer += cleaned
-                        yield json.dumps({"type": "chunk", "content": cleaned})
+                    text_buffer += delta.content
+                    yield json.dumps({"type": "chunk", "content": delta.content})
+            text_buffer = _strip_tool_json_from_text(text_buffer)
         except Exception as exc:
             logger_llm.exception(
                 "Synthesis completion failed model=%s",
