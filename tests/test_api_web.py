@@ -26,7 +26,6 @@ def _patch_settings(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     s = Settings(
         projects_dir=projects,
         data_dir=data,
-        lmstudio_model="test-model",
     )
     get_settings.cache_clear()
     monkeypatch.setattr("app.main.get_settings", lambda: s)

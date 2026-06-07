@@ -16,7 +16,7 @@ def settings(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Settings:
     monkeypatch.chdir(tmp_path)
     projects = tmp_path / "projects"
     projects.mkdir()
-    return Settings(projects_dir=projects, data_dir=tmp_path / "data", lmstudio_model="test-model")
+    return Settings(projects_dir=projects, data_dir=tmp_path / "data")
 
 
 @pytest.fixture

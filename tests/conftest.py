@@ -17,7 +17,6 @@ def settings(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Settings:
     return Settings(
         projects_dir=projects,
         data_dir=tmp_path / "data",
-        lmstudio_model="test-model",
         litellm_config_path=str(repo_root / "litellm_config.yaml"),
     )
 
