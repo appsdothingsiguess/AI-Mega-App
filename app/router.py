@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import re
 from dataclasses import dataclass
@@ -97,15 +98,13 @@ class HybridRouter:
         return getattr(self.settings.models, intent, default_attr)
 
     def _log_decision(self, message: str, layer: str, result: RouteResult) -> None:
-        logger.info(
-            "Routing decision",
-            extra={
-                "input": message,
-                "matched_layer": layer,
-                "intent": result.intent,
-                "tools": result.tools,
-                "model": self.resolve_model(result.intent),
-                "source": result.source.value,
-                "confidence": result.confidence,
-            },
-        )
+        payload = {
+            "input": message,
+            "matched_layer": layer,
+            "intent": result.intent,
+            "tools": result.tools,
+            "model": self.resolve_model(result.intent),
+            "source": result.source.value,
+            "confidence": result.confidence,
+        }
+        logger.info("Routing decision %s", json.dumps(payload, ensure_ascii=False))

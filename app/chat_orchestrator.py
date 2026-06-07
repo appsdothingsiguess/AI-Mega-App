@@ -42,6 +42,7 @@ logger_router = logging.getLogger("prompter.router")
 _CLASSIFIER_ROUTE_TIMEOUT_S = 3.0
 _DEFAULT_MODEL_LOAD_ESTIMATE_S = 34
 _MAX_HISTORY_TURNS = 20
+_LLM_LOG_TEXT_MAX = 2000
 
 _TOOL_SCHEMAS: dict[str, dict[str, Any]] = {
     "web_search": web_search_tool.TOOL_SCHEMA,
@@ -639,6 +640,30 @@ class ChatOrchestrator:
                 litellm_kwargs.get("model"),
                 iteration,
             )
+            if logger_llm.isEnabledFor(logging.DEBUG):
+                system_prompt = next(
+                    (
+                        str(message.get("content", ""))
+                        for message in messages
+                        if message.get("role") == "system"
+                    ),
+                    "",
+                )
+                user_preview = next(
+                    (
+                        str(message.get("content", ""))
+                        for message in reversed(messages)
+                        if message.get("role") == "user"
+                    ),
+                    "",
+                )
+                logger_llm.debug(
+                    "LLM request iteration=%s message_count=%s system_prompt=%s user_preview=%s",
+                    iteration,
+                    len(messages),
+                    system_prompt[:_LLM_LOG_TEXT_MAX],
+                    user_preview[:200],
+                )
             _t_llm_start = time.perf_counter()
             try:
                 response = await litellm.acompletion(
@@ -714,6 +739,19 @@ class ChatOrchestrator:
             if not tool_calls and defer_content and text_buffer:
                 yield json.dumps({"type": "chunk", "content": text_buffer})
 
+            if logger_llm.isEnabledFor(logging.DEBUG):
+                logger_llm.debug(
+                    "LLM response iteration=%s text=%s reasoning=%s tool_calls=%s fallback_used=%s",
+                    iteration,
+                    text_buffer[:_LLM_LOG_TEXT_MAX],
+                    reasoning_buffer[:_LLM_LOG_TEXT_MAX],
+                    [
+                        {"name": tc.name, "arguments": tc.arguments}
+                        for tc in tool_calls
+                    ],
+                    fallback_used,
+                )
+
             # Capture token usage from last chunk if available.
             if last_chunk is not None:
                 raw_usage = getattr(last_chunk, "usage", None)
@@ -743,6 +781,10 @@ class ChatOrchestrator:
                     "llm_response",
                     {
                         "text_length": len(text_buffer),
+                        "text": text_buffer,
+                        "text_preview": text_buffer[:200],
+                        "reasoning": reasoning_buffer or None,
+                        "fallback_used": fallback_used,
                         "tool_calls": [
                             {"name": tc.name, "arguments": tc.arguments}
                             for tc in tool_calls
@@ -750,6 +792,15 @@ class ChatOrchestrator:
                         "had_structured_tool_calls": bool(tool_calls),
                     },
                 )
+                if reasoning_buffer:
+                    yield debug_event(
+                        "llm_reasoning",
+                        {
+                            "iteration": iteration,
+                            "reasoning": reasoning_buffer,
+                            "reasoning_preview": reasoning_buffer[:200],
+                        },
+                    )
 
             if not tool_calls:
                 break

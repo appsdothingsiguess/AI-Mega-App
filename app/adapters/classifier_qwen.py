@@ -57,16 +57,14 @@ class QwenClassifierAdapter:
             result = self._parse_output(response_text)
 
         latency_ms = (time.perf_counter() - started) * 1000
-        logger.info(
-            "Classifier decision",
-            extra={
-                "input": message,
-                "intent": result.intent,
-                "tools": result.tools,
-                "confidence": result.confidence,
-                "latency_ms": round(latency_ms, 2),
-            },
-        )
+        payload = {
+            "input": message,
+            "intent": result.intent,
+            "tools": result.tools,
+            "confidence": result.confidence,
+            "latency_ms": round(latency_ms, 2),
+        }
+        logger.info("Classifier decision %s", json.dumps(payload, ensure_ascii=False))
         return result
 
     def _ollama_model_name(self) -> str:

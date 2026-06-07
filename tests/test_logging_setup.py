@@ -122,6 +122,16 @@ class TestSubsystemOverrides:
             logger = logging.getLogger(logger_name)
             assert logger.level in (logging.DEBUG, logging.WARNING)
 
+    def test_logging_llm_subsystem_toggle(self):
+        subs = {k: False for k in _SUBSYSTEM_LOGGER_MAP}
+        subs["llm"] = True
+        subs["mcp"] = False
+        settings = _make_settings(file_enabled=False, subsystems=subs)
+        configure_logging(settings)
+
+        assert logging.getLogger("prompter.llm").level == logging.DEBUG
+        assert logging.getLogger("prompter.mcp").level == logging.WARNING
+
 
 class TestThirdPartySupression:
     def test_noisy_libs_suppressed(self):

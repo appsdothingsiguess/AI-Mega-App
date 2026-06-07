@@ -22,6 +22,8 @@ _SUBSYSTEM_LOGGER_MAP: dict[str, str] = {
     "search": "prompter.search",
     "rag": "prompter.rag",
     "orchestrator": "prompter.orchestrator",
+    "llm": "prompter.llm",
+    "mcp": "prompter.mcp",
 }
 
 _NOISY_THIRD_PARTY = [

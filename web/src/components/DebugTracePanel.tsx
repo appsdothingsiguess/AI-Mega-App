@@ -36,7 +36,7 @@ const FILTER_STAGES: Record<FilterKey, string[]> = {
   All: [],
   Route: ["route"],
   RAG: ["rag"],
-  LLM: ["llm_request", "llm_complete"],
+  LLM: ["llm_request", "llm_complete", "llm_response", "llm_reasoning", "tool_call_fallback"],
   Tools: ["tools", "tool_call", "tool_result", "tool_dispatch"],
 };
 
@@ -45,6 +45,9 @@ const BADGE_COLORS: Record<string, string> = {
   rag: "#22c55e",
   llm_request: "#f97316",
   llm_complete: "#f97316",
+  llm_response: "#f97316",
+  llm_reasoning: "#fb923c",
+  tool_call_fallback: "#fdba74",
   tools: "#a855f7",
   tool_call: "#a855f7",
   tool_result: "#a855f7",
@@ -95,6 +98,21 @@ function formatOneLiner(entry: TraceEntry): string {
           : "?";
       return `${tokens} tokens${ms} | iteration=${d.iteration ?? 1}`;
     }
+    case "llm_response": {
+      const preview =
+        typeof d.text_preview === "string"
+          ? d.text_preview
+          : typeof d.text === "string"
+            ? d.text.slice(0, 80)
+            : "";
+      const toolCount = Array.isArray(d.tool_calls) ? d.tool_calls.length : 0;
+      const fallback = d.fallback_used ? " | fallback" : "";
+      return `${preview || "(empty)"}${fallback} | tools=${toolCount}${ms}`;
+    }
+    case "llm_reasoning":
+      return `reasoning: ${String(d.reasoning_preview ?? d.reasoning ?? "").slice(0, 80)}${ms}`;
+    case "tool_call_fallback":
+      return `text_json → ${Array.isArray(d.tool_names) ? (d.tool_names as string[]).join(", ") : "?"}`;
     case "tools":
       return `available: ${Array.isArray(d.tool_names) ? (d.tool_names as string[]).join(", ") : "?"}`;
     case "tool_call":
@@ -104,7 +122,15 @@ function formatOneLiner(entry: TraceEntry): string {
     case "tool_dispatch":
       return `${d.name ?? "?"} dispatched${ms}`;
     case "messages": {
-      const msgs = Array.isArray(d.messages) ? d.messages as Array<{ role?: string }> : [];
+      const msgs = Array.isArray(d.messages)
+        ? (d.messages as Array<{ role?: string; content?: string }>)
+        : [];
+      const sysMsg = msgs.find((m) => m.role === "system");
+      const sysPreview =
+        sysMsg?.content != null ? String(sysMsg.content).slice(0, 80) : "";
+      if (sysPreview) {
+        return `system: ${sysPreview}${sysMsg!.content!.length > 80 ? "…" : ""}`;
+      }
       const sys = msgs.filter((m) => m.role === "system").length;
       const hist = msgs.filter((m) => m.role === "user" || m.role === "assistant").length;
       return `system × ${sys} + history × ${hist}`;

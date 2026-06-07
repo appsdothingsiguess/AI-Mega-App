@@ -971,3 +971,30 @@ async def test_deepseek_reasoning_stripped(
     assert assistant_msgs
     assert "secret reasoning" not in assistant_msgs[-1]["content"]
     assert "Hello world" in assistant_msgs[-1]["content"]
+
+
+@pytest.mark.asyncio
+async def test_llm_response_debug_includes_text(
+    orchestrator: ChatOrchestrator,
+    orchestrator_deps: dict,
+    thread_ids: tuple[str, str],
+) -> None:
+    project_id, thread_id = thread_ids
+    orchestrator.settings = orchestrator.settings.model_copy(
+        update={"debug": DebugSettings(sse_trace=True)}
+    )
+
+    with patch(
+        "app.chat_orchestrator.litellm.acompletion",
+        side_effect=_fake_text_stream,
+    ):
+        events = await _collect_events(
+            orchestrator, project_id, thread_id, "Hello there"
+        )
+
+    llm_response = next(
+        event for event in events if event.get("stage") == "llm_response"
+    )
+    assert llm_response["data"]["text"] == "Hello world"
+    assert llm_response["data"]["text_preview"] == "Hello world"
+    assert llm_response["data"]["fallback_used"] is False

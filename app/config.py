@@ -277,6 +277,8 @@ class LoggingSubsystems(BaseModel):
     search: bool = True
     rag: bool = True
     orchestrator: bool = True
+    llm: bool = True
+    mcp: bool = True
 
 
 class LoggingSettings(BaseModel):
