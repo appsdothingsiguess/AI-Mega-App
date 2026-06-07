@@ -55,12 +55,12 @@ function pickVerb() {
   return THINKING_VERBS[Math.floor(Math.random() * THINKING_VERBS.length)];
 }
 
-export function countEnabled(s: SourcesState): number {
+function countEnabled(s: SourcesState): number {
   const enabled = s.files.filter((f) => f.enabled);
   return s.files.length === 0 ? 0 : enabled.length;
 }
 
-export interface StreamingMessage {
+interface StreamingMessage {
   role: "user" | "assistant";
   content: string;
   created_at: string;
