@@ -29,6 +29,10 @@ web/dist/
 # Local runtime data (uploads, UI overrides, legacy project root)
 data/
 
+# Generated / local-only (settings.json created at startup via ensure_settings_file())
+settings.json
+repomix-output.xml
+
 # User projects (sample ships with the repo)
 projects/*
 !projects/sample-project/
