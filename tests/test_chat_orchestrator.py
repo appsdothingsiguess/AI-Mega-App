@@ -983,6 +983,53 @@ async def test_text_json_tool_call_fallback(
     assert "S&P 500 close Friday" not in chunk_text or "Hello" in chunk_text
 
 
+async def _fake_deepseek_empty_json_stream(*_args, **_kwargs):
+    yield _FakeChunk(_FakeDelta(content="{}"))
+
+
+@pytest.mark.asyncio
+async def test_bare_json_with_required_tools_emits_error(
+    orchestrator: ChatOrchestrator,
+    orchestrator_deps: dict,
+    thread_ids: tuple[str, str],
+) -> None:
+    """Models that emit {} instead of tool calls must not leave the user with silence."""
+    project_id, thread_id = thread_ids
+    orchestrator_deps["router"].route = AsyncMock(
+        return_value=RouteResult(
+            intent="web_search",
+            tools=["web_search"],
+            confidence=1.0,
+            source=RouteSource.KEYWORD,
+        )
+    )
+    orchestrator_deps["router"].resolve_model = MagicMock(
+        return_value="local/deepseek-r1-8b"
+    )
+
+    with patch(
+        "app.chat_orchestrator.litellm.acompletion",
+        side_effect=_fake_deepseek_empty_json_stream,
+    ):
+        events = await _collect_events(
+            orchestrator,
+            project_id,
+            thread_id,
+            "okay so what is the weather",
+            model_override="local/deepseek-r1-8b",
+        )
+
+    error_events = [event for event in events if event["type"] == "error"]
+    assert len(error_events) == 1
+    assert "model override" in error_events[0]["message"].lower()
+
+    chunk_text = "".join(
+        event.get("content", "") for event in events if event["type"] == "chunk"
+    )
+    assert chunk_text == ""
+    assert events[-1]["type"] == "done"
+
+
 async def _fake_deepseek_reasoning_stream(*_args, **_kwargs):
     think_block = "<think>secret reasoning</think>"
     yield _FakeChunk(_FakeDelta(content=f"{think_block}Hello world"))

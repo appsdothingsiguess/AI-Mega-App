@@ -46,6 +46,11 @@ _SYNTHESIS_NUDGE = (
     "Using the tool results above, answer the original question in clear plain text. "
     "Do not call any tools or output JSON."
 )
+_TOOLS_REQUIRED_ERROR = (
+    "The selected model did not call the required tools for this request. "
+    "Clear the model override in the selector to use the auto-routed model, "
+    "or choose a tool-capable model."
+)
 
 _TOOL_SCHEMAS: dict[str, dict[str, Any]] = {
     "web_search": web_search_tool.TOOL_SCHEMA,
@@ -834,6 +839,9 @@ class ChatOrchestrator:
                     tool_calls = []
                 text_buffer = _strip_tool_json_from_text(text_buffer)
 
+            if not tool_calls and active_tool_schemas:
+                text_buffer = _strip_tool_json_from_text(text_buffer)
+
             if not tool_calls and defer_content and text_buffer:
                 yield json.dumps({"type": "chunk", "content": text_buffer})
 
@@ -902,6 +910,14 @@ class ChatOrchestrator:
 
             if not tool_calls:
                 if (
+                    active_tool_schemas
+                    and not text_buffer.strip()
+                    and not synthesis_attempted
+                ):
+                    yield json.dumps(
+                        {"type": "error", "message": _TOOLS_REQUIRED_ERROR}
+                    )
+                elif (
                     tools_round_complete
                     and not text_buffer.strip()
                     and not synthesis_attempted
