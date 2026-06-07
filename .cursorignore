@@ -1,4 +1,5 @@
 projects/
+ref_do_not_copy/
 .git/
 node_modules/
 __pycache__/

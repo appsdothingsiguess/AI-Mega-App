@@ -1,3 +1,6 @@
+# Local reference trees (not part of Prompter X; human-only)
+ref_do_not_copy/
+
 # Environment and secrets
 .env
 

@@ -26,6 +26,10 @@ Python 3.12, FastAPI (async), React 18 / Vite / TypeScript, LiteLLM, Ollama (Doc
 | `.env` | API keys only (OPENCODE_API_KEY) | Yes |
 | `litellm_config.yaml` | Model alias → endpoint routing | No |
 
+## Reference Material (blacklisted)
+
+The folder `ref_do_not_copy/` is **excluded from agent context** (`.cursorignore`, `.gitignore`) and **must not be read or copied** — see `.cursor/rules/009-no-ref-do-not-copy.mdc`. Use in-repo docs (e.g. `docs/phase1-search-ddg-resilience.md`) for design handoffs instead.
+
 ## Key Rules
 
 - **Git:** Each task uses branch `phase1/<task-name>`, commits are mandatory at task completion — see `.cursor/rules/008-git-discipline.mdc`. Do not wait for the user to ask.

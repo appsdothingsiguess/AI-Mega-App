@@ -4,11 +4,13 @@
 **Branch:** `main` (post-merge of `phase1/debug-trace-panel`)  
 **Audience:** Agent implementing the remaining Phase 1 gaps
 
-These are the open Phase 1 gaps: **Bugs 1–2** block end-to-end web search and graceful failure UX; **Bugs 3–4** are UI parity gaps vs Claude.ai (navigation + per-reply model label). Kimi model ID (`kimi-k2.6`) is already fixed on `main`.
+These are the open Phase 1 gaps: **Bug 1 (search wiring) is fixed** on `main`; **search DDG resilience** — see [phase1-search-ddg-resilience.md](phase1-search-ddg-resilience.md); **Bugs 2–4** below cover stream errors and UI parity gaps vs Claude.ai (navigation + per-reply model label). Kimi model ID (`kimi-k2.6`) is already fixed on `main`.
 
 ---
 
 ## Bug 1 — Search service not wired at startup
+
+**Status: FIXED** on `main` (branch `phase1/bug1-search-wiring`). Remaining DDG rate-limit / empty-result behavior is documented in [phase1-search-ddg-resilience.md](phase1-search-ddg-resilience.md).
 
 ### Symptom
 
