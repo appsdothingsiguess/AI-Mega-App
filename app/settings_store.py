@@ -63,6 +63,7 @@ def _deep_merge(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any
 _PERSISTED_TOP_LEVEL_KEYS = (
     "models",
     "ollama_model_names",
+    "assistant",
     "vision",
     "router",
     "embedding",

@@ -6,6 +6,7 @@ from typing import Any
 from pydantic import BaseModel, ConfigDict, Field
 
 from app.config import (
+    AssistantSettings,
     DebugSettings,
     EmbeddingSettings,
     HealthSettings,
@@ -141,6 +142,7 @@ class OpenCodeGoSettingsPublic(BaseModel):
 class SettingsSnapshot(BaseModel):
     models: ModelsConfig
     ollama_model_names: dict[str, str]
+    assistant: AssistantSettings = Field(default_factory=AssistantSettings)
     vision: VisionSettings
     router: RouterSettings
     embedding: EmbeddingSettings
@@ -161,6 +163,7 @@ class SettingsUpdate(BaseModel):
 
     models: dict[str, str] | None = None
     ollama_model_names: dict[str, str] | None = None
+    assistant: dict[str, Any] | None = None
     vision: dict[str, Any] | None = None
     router: dict[str, Any] | None = None
     embedding: dict[str, Any] | None = None
