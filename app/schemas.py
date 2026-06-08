@@ -3,7 +3,7 @@
 from datetime import datetime
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from app.config import (
     AssistantSettings,
@@ -58,6 +58,22 @@ class ThreadSummary(BaseModel):
 
 class MessageCreate(BaseModel):
     content: str
+
+
+class ChatStreamRequest(MessageCreate):
+    model_override: str | None = None
+    enabled_tools: list[str] = Field(default_factory=list)
+
+    @model_validator(mode="before")
+    @classmethod
+    def normalize_enabled_tools(cls, data: Any) -> Any:
+        if not isinstance(data, dict):
+            return data
+        raw_enabled = data.get("enabled_tools")
+        if isinstance(raw_enabled, dict):
+            data = dict(data)
+            data["enabled_tools"] = [k for k, v in raw_enabled.items() if v]
+        return data
 
 
 class MessageRecord(BaseModel):

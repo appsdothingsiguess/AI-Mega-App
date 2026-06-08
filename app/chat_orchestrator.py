@@ -341,6 +341,7 @@ class ChatOrchestrator:
         user_content: str | UserTurn,
         *,
         model_override: str | None = None,
+        enabled_tools: list[str] | None = None,
     ) -> AsyncIterator[str]:
         """Return a streaming async iterator of SSE event JSON strings."""
         _t_start = time.perf_counter()
@@ -373,6 +374,9 @@ class ChatOrchestrator:
             turn_record.intent = intent
             turn_record.route_source = route.source.value
             turn_record.route_confidence = route.confidence
+
+        if enabled_tools:
+            tools = [t for t in tools if t in enabled_tools]
 
         override = (model_override or "").strip()
         if override:
@@ -1023,6 +1027,13 @@ class ChatOrchestrator:
             messages.append(assistant_msg)
 
             for tc in tool_calls:
+                if tc.name not in tools:
+                    logger_mcp.warning(
+                        "Skipping dispatch for tool not in allowed set name=%s allowed=%s",
+                        tc.name,
+                        tools,
+                    )
+                    continue
                 tool_input = _parse_tool_input(tc.arguments)
                 yield json.dumps(
                     {

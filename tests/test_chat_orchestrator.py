@@ -40,10 +40,15 @@ async def _collect_events(
     content: str | UserTurn,
     *,
     model_override: str | None = None,
+    enabled_tools: list[str] | None = None,
 ) -> list[dict]:
     raw: list[str] = []
     async for event in orchestrator.handle_message(
-        project_id, thread_id, content, model_override=model_override
+        project_id,
+        thread_id,
+        content,
+        model_override=model_override,
+        enabled_tools=enabled_tools,
     ):
         raw.append(event)
     return _parse_events(raw)
@@ -605,6 +610,59 @@ async def test_debug_tool_stages_when_tools_fire(
     assert dispatch_event["data"]["name"] == "web_search"
     assert dispatch_event["data"]["arguments"] == '{"query": "test"}'
     assert "error" in dispatch_event["data"]["result"]
+
+
+@pytest.mark.asyncio
+async def test_enabled_tools_excludes_routed_tool_from_dispatch(
+    orchestrator: ChatOrchestrator,
+    orchestrator_deps: dict,
+    thread_ids: tuple[str, str],
+) -> None:
+    """UI disabled tools must filter routed tools before schemas and dispatch."""
+    project_id, thread_id = thread_ids
+    orchestrator.settings = orchestrator.settings.model_copy(
+        update={"debug": DebugSettings(sse_trace=True)}
+    )
+    orchestrator_deps["router"].route = AsyncMock(
+        return_value=RouteResult(
+            intent="web_search",
+            tools=["web_search"],
+            confidence=1.0,
+            source=RouteSource.KEYWORD,
+        )
+    )
+    orchestrator_deps["router"].resolve_model = MagicMock(
+        return_value="remote/kimi-k2-6"
+    )
+
+    call_count = 0
+
+    async def _tool_then_text(*_args, **_kwargs):
+        nonlocal call_count
+        call_count += 1
+        if call_count == 1:
+            async for chunk in _fake_tool_then_text_stream():
+                yield chunk
+        else:
+            async for chunk in _fake_text_stream():
+                yield chunk
+
+    with patch(
+        "app.chat_orchestrator.litellm.acompletion",
+        side_effect=_tool_then_text,
+    ):
+        events = await _collect_events(
+            orchestrator,
+            project_id,
+            thread_id,
+            "Search for news",
+            enabled_tools=["file_ops"],
+        )
+
+    debug_events = [event for event in events if event.get("type") == "debug"]
+    tools_events = [event for event in debug_events if event["stage"] == "tools"]
+    assert not tools_events or "web_search" not in tools_events[0]["data"]["tool_names"]
+    assert not any(event["stage"] == "tool_dispatch" for event in debug_events)
 
 
 @pytest.mark.asyncio
