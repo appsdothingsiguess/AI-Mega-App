@@ -9,11 +9,13 @@ const HOME_PROJECT_NAME = "__home__";
 
 interface Props {
   onSelectProject: (id: string) => void;
+  onBack: () => void;
   threadsVersion?: number;
 }
 
 export default function ProjectGrid({
   onSelectProject,
+  onBack,
   threadsVersion = 0,
 }: Props) {
   const [projects, setProjects] = useState<ProjectSummary[]>([]);
@@ -60,6 +62,9 @@ export default function ProjectGrid({
   return (
     <div style={styles.root}>
       <div style={styles.header}>
+        <button style={styles.backBtn} onClick={onBack}>
+          ← Back to chat
+        </button>
         <h1 style={styles.title}>Projects</h1>
         <p style={styles.subtitle}>
           Organize chats with sources and custom instructions
@@ -145,6 +150,18 @@ const styles: Record<string, React.CSSProperties> = {
   },
   header: {
     marginBottom: 28,
+  },
+  backBtn: {
+    display: "inline-flex",
+    alignItems: "center",
+    marginBottom: 12,
+    padding: "6px 10px",
+    borderRadius: "var(--radius-sm)",
+    background: "transparent",
+    color: "var(--text-muted)",
+    fontSize: 13,
+    fontWeight: 500,
+    transition: "background var(--transition), color var(--transition)",
   },
   title: {
     fontSize: 22,
