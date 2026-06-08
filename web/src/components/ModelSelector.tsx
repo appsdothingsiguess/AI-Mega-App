@@ -2,7 +2,6 @@ import { useEffect, useMemo, useState } from "react";
 import {
   getSettings,
   IntentLabel,
-  ModelsConfig,
   SettingsSnapshot,
 } from "../api/client";
 
@@ -24,8 +23,10 @@ interface Props {
   disabled?: boolean;
 }
 
-function uniqueModelAliases(models: ModelsConfig): string[] {
-  return [...new Set(Object.values(models))].sort();
+function uniqueModelAliases(settings: SettingsSnapshot): string[] {
+  const aliases = new Set(Object.values(settings.models));
+  Object.keys(settings.ollama_model_names).forEach((a) => aliases.add(a));
+  return Array.from(aliases).sort();
 }
 
 export default function ModelSelector({
@@ -49,7 +50,7 @@ export default function ModelSelector({
   }, []);
 
   const aliases = useMemo(
-    () => (settings ? uniqueModelAliases(settings.models) : []),
+    () => (settings ? uniqueModelAliases(settings) : []),
     [settings],
   );
 

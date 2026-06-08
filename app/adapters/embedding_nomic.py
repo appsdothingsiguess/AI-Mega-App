@@ -8,6 +8,8 @@ from typing import TYPE_CHECKING
 
 import httpx
 
+from app.protocols import EmbeddingService
+
 if TYPE_CHECKING:
     from app.config import Settings
 
@@ -23,7 +25,7 @@ def _strip_ollama_prefix(model: str) -> str:
     return model
 
 
-class NomicEmbeddingAdapter:
+class NomicEmbeddingAdapter(EmbeddingService):
     """EmbeddingService implementation using Ollama nomic-embed-text."""
 
     def __init__(self, settings: Settings | None = None) -> None:

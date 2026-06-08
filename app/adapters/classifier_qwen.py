@@ -9,12 +9,13 @@ import time
 import httpx
 
 from app.config import Settings
+from app.protocols import Classifier
 from app.types import ClassifierOutput
 
 logger = logging.getLogger("prompter.router")
 
 
-class QwenClassifierAdapter:
+class QwenClassifierAdapter(Classifier):
     """Classify user messages with the configured local Ollama classifier."""
 
     def __init__(self, settings: Settings) -> None:
