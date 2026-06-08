@@ -1202,6 +1202,40 @@ async def test_iter_litellm_chunks_closes_stream_on_disconnect() -> None:
 
 
 @pytest.mark.asyncio
+async def test_iter_litellm_chunks_closes_stream_on_task_cancel() -> None:
+    closed = False
+
+    class _SlowStream:
+        def __aiter__(self) -> "_SlowStream":
+            return self
+
+        async def __anext__(self) -> str:
+            await asyncio.sleep(10)
+            return "chunk"
+
+        async def aclose(self) -> None:
+            nonlocal closed
+            closed = True
+
+    stream = _SlowStream()
+
+    async def _consume() -> list[str]:
+        chunks: list[str] = []
+        async for chunk in _iter_litellm_chunks(stream):
+            chunks.append(chunk)
+        return chunks
+
+    task = asyncio.create_task(_consume())
+    await asyncio.sleep(0.05)
+    task.cancel()
+
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    assert closed
+
+
+@pytest.mark.asyncio
 async def test_handle_message_disconnect_does_not_persist_partial_reply(
     orchestrator: ChatOrchestrator,
     thread_ids: tuple[str, str],

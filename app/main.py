@@ -765,7 +765,11 @@ async def api_chat_sse(
                 enabled_tools=body.enabled_tools,
                 disconnect_event=disconnect_event,
             ):
-                yield f"data: {event}\n\n"
+                try:
+                    yield f"data: {event}\n\n"
+                except (asyncio.CancelledError, GeneratorExit):
+                    disconnect_event.set()
+                    raise
         except asyncio.CancelledError:
             logger.info(
                 "Client disconnected from SSE stream project=%s thread=%s",

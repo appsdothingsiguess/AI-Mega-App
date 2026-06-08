@@ -78,33 +78,38 @@ async def _iter_litellm_chunks(
     """Yield LiteLLM stream chunks; abort and close upstream on client disconnect."""
     aiter_result = response.__aiter__()
     iterator = await aiter_result if inspect.isawaitable(aiter_result) else aiter_result
-    while True:
-        if disconnect_event and disconnect_event.is_set():
-            await _close_litellm_stream(response)
-            raise asyncio.CancelledError("Client disconnected")
-        try:
-            if disconnect_event:
-                chunk_task = asyncio.create_task(iterator.__anext__())
-                disconnect_task = asyncio.create_task(disconnect_event.wait())
-                done, pending = await asyncio.wait(
-                    {chunk_task, disconnect_task},
-                    return_when=asyncio.FIRST_COMPLETED,
-                )
-                if disconnect_task in done:
-                    chunk_task.cancel()
+    try:
+        while True:
+            await asyncio.sleep(0)
+            if disconnect_event and disconnect_event.is_set():
+                await _close_litellm_stream(response)
+                raise asyncio.CancelledError("Client disconnected")
+            try:
+                if disconnect_event:
+                    chunk_task = asyncio.create_task(iterator.__anext__())
+                    disconnect_task = asyncio.create_task(disconnect_event.wait())
+                    done, pending = await asyncio.wait(
+                        {chunk_task, disconnect_task},
+                        return_when=asyncio.FIRST_COMPLETED,
+                    )
+                    if disconnect_task in done:
+                        chunk_task.cancel()
+                        with contextlib.suppress(asyncio.CancelledError):
+                            await chunk_task
+                        await _close_litellm_stream(response)
+                        raise asyncio.CancelledError("Client disconnected")
+                    disconnect_task.cancel()
                     with contextlib.suppress(asyncio.CancelledError):
-                        await chunk_task
-                    await _close_litellm_stream(response)
-                    raise asyncio.CancelledError("Client disconnected")
-                disconnect_task.cancel()
-                with contextlib.suppress(asyncio.CancelledError):
-                    await disconnect_task
-                chunk = chunk_task.result()
-            else:
-                chunk = await iterator.__anext__()
-        except StopAsyncIteration:
-            break
-        yield chunk
+                        await disconnect_task
+                    chunk = chunk_task.result()
+                else:
+                    chunk = await iterator.__anext__()
+            except StopAsyncIteration:
+                break
+            yield chunk
+    except asyncio.CancelledError:
+        await _close_litellm_stream(response)
+        raise
 
 
 def _merge_tool_call_delta(accumulated: list[ToolCallDelta], delta: Any) -> None:
@@ -573,6 +578,8 @@ class ChatOrchestrator:
                 yield event
         except Exception as exc:
             turn_record.error = str(exc)
+            raise
+        except asyncio.CancelledError:
             raise
         finally:
             _t_end = time.perf_counter()

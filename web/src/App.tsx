@@ -16,6 +16,43 @@ export type AppView = "home-chat" | "projects" | "project-workspace";
 
 const HOME_PROJECT_NAME = "__home__";
 
+const STORAGE_MODEL_OVERRIDE = "prompterx_model_override";
+const STORAGE_TOOL_TOGGLES = "prompterx_tool_toggles";
+const STORAGE_DEBUG_ENABLED = "prompterx_debug_enabled";
+
+function readStoredModelOverride(): string | null {
+  try {
+    const raw = localStorage.getItem(STORAGE_MODEL_OVERRIDE);
+    if (raw === null || raw === "") return null;
+    const parsed: unknown = JSON.parse(raw);
+    if (typeof parsed === "string" && parsed.trim()) return parsed;
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+function readStoredToolToggles(): ToolTogglesState {
+  try {
+    const raw = localStorage.getItem(STORAGE_TOOL_TOGGLES);
+    if (!raw) return DEFAULT_TOOL_TOGGLES;
+    const parsed = JSON.parse(raw) as Partial<ToolTogglesState>;
+    return { ...DEFAULT_TOOL_TOGGLES, ...parsed };
+  } catch {
+    return DEFAULT_TOOL_TOGGLES;
+  }
+}
+
+function readStoredDebugEnabled(): boolean {
+  try {
+    const raw = localStorage.getItem(STORAGE_DEBUG_ENABLED);
+    if (raw === null) return false;
+    return JSON.parse(raw) === true;
+  } catch {
+    return false;
+  }
+}
+
 export default function App() {
   const [view, setView] = useState<AppView>("home-chat");
   const [homeProjectId, setHomeProjectId] = useState<string | null>(null);
@@ -25,11 +62,11 @@ export default function App() {
   const [sourcesVersion, setSourcesVersion] = useState(0);
   const [threadsVersion, setThreadsVersion] = useState(0);
 
-  const [modelOverride, setModelOverride] = useState<string | null>(null);
-  const [toolToggles, setToolToggles] = useState<ToolTogglesState>(DEFAULT_TOOL_TOGGLES);
+  const [modelOverride, setModelOverride] = useState(readStoredModelOverride);
+  const [toolToggles, setToolToggles] = useState(readStoredToolToggles);
   const [modelLoading, setModelLoading] = useState<ModelLoadingState | null>(null);
   const [ollamaNameToAlias, setOllamaNameToAlias] = useState<Record<string, string>>({});
-  const [debugTraceOpen, setDebugTraceOpen] = useState(false);
+  const [debugTraceOpen, setDebugTraceOpen] = useState(readStoredDebugEnabled);
   const [sseTraceEnabled, setSseTraceEnabled] = useState(false);
 
   const notifySourcesChanged = useCallback(
@@ -77,9 +114,23 @@ export default function App() {
     };
   }, []);
 
+  useEffect(() => {
+    if (modelOverride === null) {
+      localStorage.removeItem(STORAGE_MODEL_OVERRIDE);
+    } else {
+      localStorage.setItem(STORAGE_MODEL_OVERRIDE, JSON.stringify(modelOverride));
+    }
+  }, [modelOverride]);
+
+  useEffect(() => {
+    localStorage.setItem(STORAGE_TOOL_TOGGLES, JSON.stringify(toolToggles));
+  }, [toolToggles]);
+
+  useEffect(() => {
+    localStorage.setItem(STORAGE_DEBUG_ENABLED, JSON.stringify(debugTraceOpen));
+  }, [debugTraceOpen]);
+
   const resetConversationState = useCallback(() => {
-    setModelOverride(null);
-    setToolToggles(DEFAULT_TOOL_TOGGLES);
     setModelLoading(null);
   }, []);
 
