@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
+import inspect
 import json
 import logging
 import re
@@ -55,6 +57,54 @@ _TOOLS_REQUIRED_ERROR = (
 _TOOL_SCHEMAS: dict[str, dict[str, Any]] = {
     "web_search": web_search_tool.TOOL_SCHEMA,
 }
+
+
+async def _close_litellm_stream(response: Any) -> None:
+    """Close an upstream LiteLLM/Ollama stream so generation stops."""
+    aclose = getattr(response, "aclose", None)
+    if not callable(aclose):
+        return
+    try:
+        await aclose()
+    except Exception:
+        logger_llm.debug("Failed to close LiteLLM stream", exc_info=True)
+
+
+async def _iter_litellm_chunks(
+    response: Any,
+    *,
+    disconnect_event: asyncio.Event | None = None,
+) -> AsyncIterator[Any]:
+    """Yield LiteLLM stream chunks; abort and close upstream on client disconnect."""
+    aiter_result = response.__aiter__()
+    iterator = await aiter_result if inspect.isawaitable(aiter_result) else aiter_result
+    while True:
+        if disconnect_event and disconnect_event.is_set():
+            await _close_litellm_stream(response)
+            raise asyncio.CancelledError("Client disconnected")
+        try:
+            if disconnect_event:
+                chunk_task = asyncio.create_task(iterator.__anext__())
+                disconnect_task = asyncio.create_task(disconnect_event.wait())
+                done, pending = await asyncio.wait(
+                    {chunk_task, disconnect_task},
+                    return_when=asyncio.FIRST_COMPLETED,
+                )
+                if disconnect_task in done:
+                    chunk_task.cancel()
+                    with contextlib.suppress(asyncio.CancelledError):
+                        await chunk_task
+                    await _close_litellm_stream(response)
+                    raise asyncio.CancelledError("Client disconnected")
+                disconnect_task.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await disconnect_task
+                chunk = chunk_task.result()
+            else:
+                chunk = await iterator.__anext__()
+        except StopAsyncIteration:
+            break
+        yield chunk
 
 
 def _merge_tool_call_delta(accumulated: list[ToolCallDelta], delta: Any) -> None:
@@ -342,6 +392,7 @@ class ChatOrchestrator:
         *,
         model_override: str | None = None,
         enabled_tools: list[str] | None = None,
+        disconnect_event: asyncio.Event | None = None,
     ) -> AsyncIterator[str]:
         """Return a streaming async iterator of SSE event JSON strings."""
         _t_start = time.perf_counter()
@@ -509,7 +560,12 @@ class ChatOrchestrator:
 
         try:
             async for event in self._execute_with_tools(
-                model_alias, messages, tools, sse_trace=sse_trace, phase_data=phase_data
+                model_alias,
+                messages,
+                tools,
+                sse_trace=sse_trace,
+                phase_data=phase_data,
+                disconnect_event=disconnect_event,
             ):
                 parsed = json.loads(event)
                 if parsed.get("type") == "chunk":
@@ -677,6 +733,7 @@ class ChatOrchestrator:
         *,
         sse_trace: bool = False,
         iteration: int = 0,
+        disconnect_event: asyncio.Event | None = None,
     ) -> AsyncIterator[str]:
         """Force a text-only completion after tool results (local models that re-call tools)."""
         synthesis_messages = [
@@ -704,7 +761,9 @@ class ChatOrchestrator:
                 **litellm_kwargs,
             )
             text_buffer = ""
-            async for chunk in response:
+            async for chunk in _iter_litellm_chunks(
+                response, disconnect_event=disconnect_event
+            ):
                 if not chunk.choices:
                     continue
                 delta = chunk.choices[0].delta
@@ -712,6 +771,8 @@ class ChatOrchestrator:
                     text_buffer += delta.content
                     yield json.dumps({"type": "chunk", "content": delta.content})
             text_buffer = _strip_tool_json_from_text(text_buffer)
+        except asyncio.CancelledError:
+            raise
         except Exception as exc:
             logger_llm.exception(
                 "Synthesis completion failed model=%s",
@@ -758,6 +819,7 @@ class ChatOrchestrator:
         *,
         sse_trace: bool = False,
         phase_data: dict[str, Any] | None = None,
+        disconnect_event: asyncio.Event | None = None,
     ) -> AsyncIterator[str]:
         tool_schemas = [self._get_tool_schema(t) for t in tools] if tools else None
         try:
@@ -858,7 +920,9 @@ class ChatOrchestrator:
                 last_chunk: Any = None
                 defer_content = bool(active_tool_schemas) or is_deepseek
 
-                async for chunk in response:
+                async for chunk in _iter_litellm_chunks(
+                    response, disconnect_event=disconnect_event
+                ):
                     last_chunk = chunk
                     if not chunk.choices:
                         continue
@@ -880,6 +944,8 @@ class ChatOrchestrator:
                     if delta.tool_calls:
                         for tc_delta in delta.tool_calls:
                             _merge_tool_call_delta(tool_calls, tc_delta)
+            except asyncio.CancelledError:
+                raise
             except Exception as exc:
                 logger_llm.exception(
                     "LiteLLM completion failed alias=%s model=%s",
@@ -1015,6 +1081,7 @@ class ChatOrchestrator:
                         litellm_kwargs,
                         sse_trace=sse_trace,
                         iteration=iteration,
+                        disconnect_event=disconnect_event,
                     ):
                         yield event
                 break
@@ -1097,6 +1164,7 @@ class ChatOrchestrator:
                 litellm_kwargs,
                 sse_trace=sse_trace,
                 iteration=iteration,
+                disconnect_event=disconnect_event,
             ):
                 yield event
         elif iteration >= max_iterations:

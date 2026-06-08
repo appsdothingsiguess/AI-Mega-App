@@ -38,6 +38,7 @@ class _FakeOrchestrator:
         *,
         model_override: str | None = None,
         enabled_tools: list[str] | None = None,
+        disconnect_event: asyncio.Event | None = None,
     ) -> AsyncIterator[str]:
         self.handle_calls.append((project_id, thread_id, str(user_content)))
         for event in self.events:

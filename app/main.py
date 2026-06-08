@@ -13,12 +13,12 @@ import threading
 import time
 import warnings
 from collections.abc import AsyncIterator
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, suppress
 from pathlib import Path
 from typing import Any
 
 import httpx
-from fastapi import FastAPI, File, HTTPException, UploadFile
+from fastapi import FastAPI, File, HTTPException, Request, UploadFile
 from fastapi import status as http_status
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 
@@ -37,10 +37,10 @@ from app.terminal_input import ChatInputSession
 from app.message_parts import UserTurn
 from app.project_manager import ProjectManager, ProjectNotFoundError, ThreadNotFoundError
 from app.schemas import (
+    ChatStreamRequest,
     DocFileInfo,
     InstructionsResponse,
     InstructionsUpdate,
-    MessageCreate,
     ProjectCreate,
     ProjectDetail,
     ProjectSummary,
@@ -715,10 +715,6 @@ def api_rename_thread(
 # ---------------------------------------------------------------------------
 
 
-class ChatStreamRequest(MessageCreate):
-    model_override: str | None = None
-
-
 @app.get("/projects/{project_id}/threads/{thread_id}/messages")
 def api_get_messages(project_id: str, thread_id: str) -> list[dict[str, Any]]:
     _, projects, _ = _services()
@@ -732,6 +728,7 @@ def api_get_messages(project_id: str, thread_id: str) -> list[dict[str, Any]]:
 
 @app.post("/api/chat/{project_id}/{thread_id}")
 async def api_chat_sse(
+    request: Request,
     project_id: str,
     thread_id: str,
     body: ChatStreamRequest,
@@ -744,6 +741,20 @@ async def api_chat_sse(
     except ThreadNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
+    disconnect_event = asyncio.Event()
+
+    async def _watch_disconnect() -> None:
+        try:
+            while True:
+                if await request.is_disconnected():
+                    disconnect_event.set()
+                    return
+                await asyncio.sleep(0.05)
+        except asyncio.CancelledError:
+            raise
+
+    watch_task = asyncio.create_task(_watch_disconnect())
+
     async def event_generator() -> AsyncIterator[str]:
         try:
             async for event in orchestrator.handle_message(
@@ -751,6 +762,8 @@ async def api_chat_sse(
                 thread_id,
                 body.content,
                 model_override=body.model_override,
+                enabled_tools=body.enabled_tools,
+                disconnect_event=disconnect_event,
             ):
                 yield f"data: {event}\n\n"
         except asyncio.CancelledError:
@@ -768,6 +781,11 @@ async def api_chat_sse(
             )
             yield f'data: {json.dumps({"type": "error", "message": "Internal server error"})}\n\n'
             yield f'data: {json.dumps({"type": "done", "usage": {}})}\n\n'
+        finally:
+            disconnect_event.set()
+            watch_task.cancel()
+            with suppress(asyncio.CancelledError):
+                await watch_task
 
     return StreamingResponse(event_generator(), media_type="text/event-stream")
 

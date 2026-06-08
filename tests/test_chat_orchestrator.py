@@ -10,7 +10,11 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import litellm.exceptions
 import pytest
 
-from app.chat_orchestrator import ChatOrchestrator, _format_tool_appendix
+from app.chat_orchestrator import (
+    ChatOrchestrator,
+    _format_tool_appendix,
+    _iter_litellm_chunks,
+)
 from app.config import (
     AssistantSettings,
     DebugSettings,
@@ -1158,3 +1162,89 @@ async def test_llm_response_debug_includes_text(
     assert llm_response["data"]["text"] == "Hello world"
     assert llm_response["data"]["text_preview"] == "Hello world"
     assert llm_response["data"]["fallback_used"] is False
+
+
+@pytest.mark.asyncio
+async def test_iter_litellm_chunks_closes_stream_on_disconnect() -> None:
+    closed = False
+
+    class _SlowStream:
+        def __aiter__(self) -> "_SlowStream":
+            return self
+
+        async def __anext__(self) -> str:
+            await asyncio.sleep(10)
+            return "chunk"
+
+        async def aclose(self) -> None:
+            nonlocal closed
+            closed = True
+
+    disconnect_event = asyncio.Event()
+    stream = _SlowStream()
+
+    async def _consume() -> list[str]:
+        chunks: list[str] = []
+        async for chunk in _iter_litellm_chunks(
+            stream, disconnect_event=disconnect_event
+        ):
+            chunks.append(chunk)
+        return chunks
+
+    task = asyncio.create_task(_consume())
+    await asyncio.sleep(0.05)
+    disconnect_event.set()
+
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    assert closed
+
+
+@pytest.mark.asyncio
+async def test_handle_message_disconnect_does_not_persist_partial_reply(
+    orchestrator: ChatOrchestrator,
+    thread_ids: tuple[str, str],
+) -> None:
+    project_id, thread_id = thread_ids
+    messages_before = orchestrator.projects.get_thread_messages(project_id, thread_id)
+
+    async def _slow_stream(*_args, **_kwargs):
+        class _Stream:
+            def __init__(self) -> None:
+                self._count = 0
+                self.closed = False
+
+            def __aiter__(self) -> "_Stream":
+                return self
+
+            async def __anext__(self) -> _FakeChunk:
+                self._count += 1
+                if self._count > 1:
+                    await asyncio.sleep(10)
+                return _FakeChunk(_FakeDelta(content="partial"))
+
+            async def aclose(self) -> None:
+                self.closed = True
+
+        return _Stream()
+
+    disconnect_event = asyncio.Event()
+
+    with patch(
+        "app.chat_orchestrator.litellm.acompletion",
+        side_effect=_slow_stream,
+    ):
+        gen = orchestrator.handle_message(
+            project_id,
+            thread_id,
+            "Stop me",
+            disconnect_event=disconnect_event,
+        )
+        with pytest.raises(asyncio.CancelledError):
+            async for _event in gen:
+                disconnect_event.set()
+
+    messages_after = orchestrator.projects.get_thread_messages(project_id, thread_id)
+    assert len(messages_after) == len(messages_before) + 1
+    assert messages_after[-1]["role"] == "user"
