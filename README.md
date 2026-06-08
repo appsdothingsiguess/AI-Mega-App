@@ -130,9 +130,52 @@ In chat, compose a message (see [Chat tips](#chat-tips)), then send with **Alt+E
 
 ### 8. Run tests (optional)
 
+Tests live under `tests/`. Configuration is in `pyproject.toml` (`testpaths = ["tests"]`).
+
+**Run from the repository root** — not `web/`. From `web/`, pytest collects zero tests.
+
 ```bash
-pytest
+# Repo root (directory that contains app/, tests/, pyproject.toml)
+python -m pytest -q --basetemp=.pytest-tmp/run
 ```
+
+Use `python -m pytest` (not bare `pytest`) so the active venv’s Python and `app` package are used.
+
+**Windows:** `--basetemp=.pytest-tmp/run` avoids `PermissionError` under `%TEMP%\pytest-of-<user>\`. The folder is local scratch only — do not commit it.
+
+**Optional — set once per shell session:**
+
+```bash
+# Git Bash / macOS / Linux
+export PYTEST_ADDOPTS="--basetemp=.pytest-tmp/run"
+
+# Windows PowerShell
+$env:PYTEST_ADDOPTS = "--basetemp=.pytest-tmp/run"
+
+python -m pytest -q
+```
+
+**Sanity check** (should report ~242 tests):
+
+```bash
+python -m pytest --collect-only -q --basetemp=.pytest-tmp/run
+```
+
+**Run a subset:**
+
+```bash
+python -m pytest tests/test_sse_endpoint.py -q --basetemp=.pytest-tmp/run
+python -m pytest tests/test_chat_orchestrator.py -k "tool_loop" -q --basetemp=.pytest-tmp/run
+```
+
+**Baseline:** on current `main`, expect **240 passed, 2 failed** — both are known settings/litellm config mismatches in the test harness (`test_unreachable_qdrant_is_warning_only`, `test_resolve_model_covers_all_intents`), not regressions in feature branches unless you introduce new failures.
+
+| Symptom | Fix |
+|---------|-----|
+| `collected 0 items` | `cd` to repo root (parent of `web/`) |
+| `PermissionError` on `pytest-of-…` | Add `--basetemp=.pytest-tmp/run` |
+| `No module named 'app'` | `pip install -e ".[dev]"` from repo root |
+| `pytest: command not found` | Use `python -m pytest` |
 
 ---
 
