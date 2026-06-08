@@ -217,6 +217,10 @@ export default function ChatView({
     });
   };
 
+  const handleStop = () => {
+    abortRef.current?.abort();
+  };
+
   const handleSend = async () => {
     if (!projectId || !threadId || !draft.trim() || streaming) return;
     const content = draft.trim();
@@ -501,16 +505,22 @@ export default function ChatView({
             onKeyDown={handleKeyDown}
             disabled={streaming}
           />
-          <button
-            style={{
-              ...styles.sendBtn,
-              ...(streaming || !draft.trim() ? styles.sendBtnDisabled : {}),
-            }}
-            onClick={handleSend}
-            disabled={streaming || !draft.trim()}
-          >
-            {streaming ? "…" : "Send"}
-          </button>
+          {streaming ? (
+            <button style={styles.stopBtn} onClick={handleStop}>
+              Stop
+            </button>
+          ) : (
+            <button
+              style={{
+                ...styles.sendBtn,
+                ...(!draft.trim() ? styles.sendBtnDisabled : {}),
+              }}
+              onClick={handleSend}
+              disabled={!draft.trim()}
+            >
+              Send
+            </button>
+          )}
         </div>
       </div>
 
@@ -668,5 +678,16 @@ const styles: Record<string, React.CSSProperties> = {
   sendBtnDisabled: {
     background: "var(--bg-hover)",
     color: "var(--text-dim)",
+  },
+  stopBtn: {
+    padding: "0 20px",
+    height: 72,
+    borderRadius: "var(--radius-md)",
+    background: "var(--danger)",
+    color: "#fff",
+    fontWeight: 700,
+    fontSize: 14,
+    flexShrink: 0,
+    transition: "background var(--transition)",
   },
 };

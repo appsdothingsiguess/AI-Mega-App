@@ -147,6 +147,7 @@ export default function App() {
         {view === "projects" ? (
           <ProjectGrid
             onSelectProject={handleSelectProject}
+            onBack={() => handleNavChange("home-chat")}
             threadsVersion={threadsVersion}
           />
         ) : (

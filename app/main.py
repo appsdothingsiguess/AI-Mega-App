@@ -1045,7 +1045,7 @@ def run_cli(argv: list[str] | None = None) -> int:
 
                 def _open_browser() -> None:
                     time.sleep(1.5)
-                    webbrowser.open(f"http://{host}:{port}")
+                    webbrowser.open("http://localhost:5173/")
 
                 threading.Thread(target=_open_browser, daemon=True).start()
 

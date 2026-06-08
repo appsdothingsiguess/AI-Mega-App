@@ -164,7 +164,7 @@ def main(argv: list[str] | None = None) -> int:
     _log(f"Server is up: {SERVER_URL}")
 
     if not args.no_browser:
-        webbrowser.open(f"http://{args.host}:{args.port}")
+        webbrowser.open("http://localhost:5173/")
 
     _log("Press Ctrl+C to stop.")
     try:

@@ -165,7 +165,10 @@ export default function ProjectSidebar({
             ...styles.navItem,
             ...(view === "home-chat" ? styles.navItemActive : {}),
           }}
-          onClick={() => onNavChange("home-chat")}
+          onClick={async () => {
+            if (view !== "home-chat") onNavChange("home-chat");
+            await handleNewChat();
+          }}
           title="New chat"
         >
           <span style={styles.navIcon}>💬</span>
