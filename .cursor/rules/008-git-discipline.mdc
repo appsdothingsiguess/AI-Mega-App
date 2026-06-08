@@ -5,110 +5,118 @@ alwaysApply: true
 
 # Git Discipline (Parallel Agent Tasks)
 
-**When the user's task prompt includes a FILE SCOPE, commits are mandatory at completion.** This rule overrides general "only commit when requested" preferences during phased agent work. If there is no FILE SCOPE, still follow pre-flight and pytest rules; commit only if the user or task asks.
+**When the user's task prompt includes a FILE SCOPE, commits are mandatory at completion.** This overrides general "only commit when requested" preferences during phased agent work. Without FILE SCOPE: follow pre-flight and pytest; commit only if the user or task asks.
 
-Each parallel agent owns **one branch**, **one concern**, and **one file scope** (from the user prompt). Never assume a clean repo unless you verified it.
+Each agent owns **one branch**, **one concern**, and **one file scope** (from the user prompt). Never assume a clean repo until pre-flight passes.
+
+## Plan order (mandatory for multi-step plans)
+
+1. **First step:** pre-flight below — **no file edits**
+2. Middle: implementation in FILE SCOPE only
+3. **Last step:** pytest, commit, completion report — **no new code after**
+
+If step 1 is not pre-flight, stop and reorder the plan before editing.
+
+## Worktrees and checkout
+
+- **One workspace folder = one branch.** Every Agent chat in that folder shares the same checkout.
+- Parallel builders: user opens **separate folders** (git worktrees). Your prompt should name the expected branch; verify with `git branch --show-current`.
+- **Builders in a worktree:** do **not** run `git checkout` / `git switch` to other branches. Wrong branch → stop and report.
+- **Solo builder** (only agent in the clone): may `git checkout main` then `git checkout -b <task-branch>` if pre-flight allows.
+- **Integrator** on the main clone: may `git checkout` each branch to audit — only when builders use other worktrees.
 
 ## Pre-flight (before any code changes)
 
-Run in order:
+Run in order; report results before implementation:
 
 1. `git status` and `git branch --show-current`
-2. Read the task prompt's **branch name** (e.g. `phase1/frontend-nav-fixes`) and **FILE SCOPE**
-3. Branch setup:
-   - If already on the task branch → verify `git log main..HEAD --oneline` contains **only** this task's commits; if foreign commits appear, **stop and report**
-   - Else if the task branch exists → `git checkout <task-branch>` then verify independence (above)
-   - Else → `git checkout main` then `git checkout -b <task-branch>`
-4. **On a new branch**, `git log main..HEAD --oneline` must be **empty** before the first commit.
-5. **Never** create a task branch from another task branch — always fork from `main`.
-6. **Stop and report** (do not edit) if:
-   - You are on `main` with any uncommitted **tracked** changes you did not create for this task
-   - Uncommitted **tracked** changes include files **outside your FILE SCOPE** (another agent, user, or wrong task)
-   - The task branch already contains another task's commits (stacked / kitchen-sink branch)
-   - You cannot create/switch branches without losing or overwriting foreign changes
+2. Read **branch name** and **FILE SCOPE** from the user prompt
+3. Branch verification:
+   - **Worktree / Workspace named in prompt:** current branch must match. `git log main..HEAD --oneline` must contain only this task's commits (or be empty for a new task). Foreign commits → stop and report.
+   - **Already on task branch (solo):** same independence check.
+   - **Need new branch (solo only):** `git checkout main` then `git checkout -b <task-branch>`. `git log main..HEAD` must be empty before first commit.
+   - **Parallel agents may be active in this clone:** do not checkout — stop and report.
+4. **Never** branch from another task branch — fork from `main` only.
+5. **Stop and report** (no edits) if:
+   - On `main` with uncommitted **tracked** changes outside your work
+   - Tracked changes outside FILE SCOPE (another task or agent)
+   - Task branch has stacked foreign commits
+   - Cannot switch safely without overwriting others' work
 
-Untracked local files (e.g. `docs/*.md`, `logs/`, `.pytest-tmp/`) do not block work — do not `git add` them unless in FILE SCOPE.
+Untracked local files (`docs/*.md`, `logs/`, `.pytest-tmp/`) do not block work — do not `git add` unless in FILE SCOPE.
 
-Do not stash, reset, or commit files outside your scope to "clean up" the tree.
+Do not stash, reset, or commit out-of-scope files to "clean up."
 
 ## During implementation
-
-Commit after each logical unit of work:
 
 ```bash
 git add <files-in-scope-only>
 git commit -m "feat(<task>): <what was done>"
 ```
 
-- Never use `git add .`
-- Only stage files listed in your FILE SCOPE (in `feat` commits)
-- Never commit files outside FILE SCOPE in a `feat(<task>)` commit
-- **One commit = one concern.** Do not bundle unrelated fixes on one branch.
-- If FILE SCOPE shares a file with another active task (e.g. `App.tsx`, `app/main.py`), touch **only** the lines required for your task and note the overlap in the completion report.
+- Never `git add .`
+- `feat` commits: FILE SCOPE only
+- **One commit = one concern** — no unrelated bundles
+- Shared files with another task: minimal diff; note overlap in completion report
 
 ## Out-of-scope fallout (tests only)
 
-If your in-scope change breaks an out-of-scope test (e.g. deleted module still imported elsewhere), apply the **minimal** fix and commit it separately:
+Minimal fix in a **separate** commit:
 
 ```bash
 git add <out-of-scope-file>
 git commit -m "fix(<area>): <why required by task N>"
 ```
 
-Note this in your completion report. Do not expand scope beyond what tests require.
+Tests constructing `Settings` must set `SETTINGS_JSON_PATH` to an isolated `{}` file (`monkeypatch`).
 
-Tests that construct `Settings` must isolate `settings.json` via `SETTINGS_JSON_PATH` and an empty `{}` file (`monkeypatch`) so the developer's local `settings.json` does not affect results.
+## Task completion (builders)
 
-## Task completion (builders — before reporting done)
-
-1. Run tests from **repo root** (never from `web/`):
+1. From **repo root** (not `web/`):
 
    ```bash
    python -m pytest -q --basetemp=.pytest-tmp/run
    ```
 
-   Baseline on current `main`: **240 passed, 2 failed** (known settings/litellm harness mismatches). **New** failures are regressions — fix or report. See `README.md` §8.
+   Baseline: **240 passed, 2 failed** (known harness). **New** failures = regressions. See `README.md` §8.
 
-2. Commit any remaining in-scope changes
-3. Tracked files you touched must be committed; untracked local scratch elsewhere is OK
-4. **Branch independence check:**
+2. Commit remaining in-scope work
+3. Branch independence:
 
    ```bash
    git log main..HEAD --oneline
    git diff main..HEAD --name-only
    ```
 
-5. **Completion report** must include:
-   - **branch name**
-   - **every commit** on the branch (`hash` + subject) from `git log main..HEAD`
-   - **files touched** (from `git diff main..HEAD --name-only`)
-   - **pytest**: passed / failed (note new vs baseline)
-   - **manual UI tests**: `deferred to human` unless the task prompt required live E2E (yes/no + result)
-   - **merge notes**: `none` | `merge after <branch>` | `conflicts likely with <branch>`
-   - **overlap warning** if you edited a file another task also owns
+4. **Completion report:**
+   - branch name
+   - all commits (`hash` + subject) on branch vs `main`
+   - files touched (`git diff main..HEAD --name-only`)
+   - pytest: passed/failed (new vs baseline)
+   - manual UI: `deferred to human` unless task required E2E
+   - merge notes / overlap warnings
 
-**Never leave task work uncommitted** when FILE SCOPE was assigned.
+**Never leave FILE SCOPE work uncommitted.**
 
 ## Parallel safety
 
-- One task → one branch → one FILE SCOPE → one logical concern.
-- One Agent chat → one task. Do not continue Task B in the same chat without pre-flight.
-- Do not merge, rebase, cherry-pick, or push unless the user explicitly asks (integrator role).
-- If two tasks share a file, the **user's merge order** wins — builders do not merge each other's work.
-- Cursor multi-step subagents are helpers only; they do not replace branch discipline or integrator audit.
+- One task → one branch → one FILE SCOPE → one concern → one worktree folder.
+- One Agent chat → one task. New task in same chat → full pre-flight again.
+- No merge, rebase, cherry-pick, or push unless user explicitly asks (integrator).
+- Subagents do not replace branch discipline or completion report.
 
-## Integrator role (only when the user assigns it in the task prompt)
+## Integrator role (user assigns explicitly)
 
-Default agent mode is **builder**. When the user says **integrator** / **pre-merge audit**:
+Default = **builder**. When user says **integrator** / **pre-merge audit**:
 
-1. **Read-only audit first** — do not edit until audit table is delivered (unless user approves conflict fixes).
-2. For each branch the user lists:
-   - `git log main..HEAD --oneline` — reject **stacked** branches (unrelated commit subjects on one branch)
-   - `git diff main..HEAD --name-only` — compare to that task's declared FILE SCOPE
+1. Audit first — no edits until table delivered (unless user approves conflict fixes)
+2. Per branch listed by user:
+   - `git log main..HEAD --oneline` — reject stacked branches
+   - `git diff main..HEAD --name-only` vs that task's FILE SCOPE
    - `git checkout <branch>` && `python -m pytest -q --basetemp=.pytest-tmp/run`
-   - Mark: merge-ready **yes** | **no** | **cherry-pick-only** (list SHAs)
-3. Propose **merge order** and shared-file risks (`App.tsx`, `app/main.py`, `app/chat_orchestrator.py`).
-4. **Never** merge a kitchen-sink branch whole — cherry-pick unique commits after simpler branches land.
-5. **Merge / push only when the user explicitly asks** after reviewing the audit table.
+   - merge-ready: **yes** | **no** | **cherry-pick-only** (SHAs)
+3. Propose merge order and shared-file risks
+4. Never merge kitchen-sink branches whole
+5. Merge/push **only when user asks**
 
-Integrator deliverable: table **branch | commits | files | pytest | merge-ready | notes**.
+Deliverable: **branch | commits | files | pytest | merge-ready | notes**

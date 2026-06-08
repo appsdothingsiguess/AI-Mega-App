@@ -14,7 +14,7 @@ Python 3.12, FastAPI (async), React 18 / Vite / TypeScript, LiteLLM, Ollama (Doc
 
 | Rule | Topic |
 |------|--------|
-| `.cursor/rules/008-git-discipline.mdc` | Branches, commits, pytest gate, builder/integrator roles |
+| `.cursor/rules/008-git-discipline.mdc` | Plan order, branches, worktrees, commits, pytest, roles |
 | `.cursor/rules/006-no-scope-creep.mdc` | FILE SCOPE, frozen `project_manager.py`, no ChatService |
 | `.cursor/rules/007-no-hardcoding.mdc` | Models/aliases from `settings.json`, intent labels |
 | `.cursor/rules/009-no-ref-do-not-copy.mdc` | `ref_do_not_copy/` blacklisted |
@@ -38,11 +38,11 @@ Python 3.12, FastAPI (async), React 18 / Vite / TypeScript, LiteLLM, Ollama (Doc
 
 `ref_do_not_copy/` is excluded (`.cursorignore`, `.gitignore`) — see rule 009. Use in-repo docs under `docs/` for design handoffs.
 
-## Task prompts
+## Task contract
 
-**The user pastes branch, FILE SCOPE, and acceptance into each Agent chat.** That prompt is the task contract — not this file. Wait for it before editing.
+The **user's message** supplies branch, FILE SCOPE, and acceptance. Wait for it before editing. If branch or scope is missing, ask once — do not guess.
 
-Parallel layout (**Option A**): one builder chat per task, then a separate integrator chat when the user requests audit. Roles below; git/pytest procedure in `008`.
+When the prompt includes **Workspace** / **worktree**, treat that folder as isolated: verify `git branch --show-current` matches the named branch; **do not `git checkout` other branches**.
 
 ## Key conventions
 
@@ -52,35 +52,32 @@ Parallel layout (**Option A**): one builder chat per task, then a separate integ
 
 ## Verification (builders)
 
-Default gate is **pytest from repo root** — not uvicorn / `npm run dev` unless the task explicitly requires live E2E.
+Default gate: **pytest from repo root** (not `web/`). Do not start uvicorn / `npm run dev` unless the task requires live E2E.
 
 ```bash
 python -m pytest -q --basetemp=.pytest-tmp/run
 ```
 
-- Not from `web/` (collects 0 tests there).
-- Baseline: **240 passed, 2 failed** on `main` — new failures are regressions.
+- Baseline on `main`: **240 passed, 2 failed** (known harness issues). **New** failures are regressions.
 - Add/update tests when behavior contracts change.
-- Completion report: **manual UI: deferred to human** unless task required E2E.
+- Git procedure, plan order, completion report: `008-git-discipline.mdc`.
 
-Full git + completion format: `008-git-discipline.mdc`.
+## Roles
 
-## Parallel roles
+| Role | Assigned when | You must |
+|------|----------------|----------|
+| **Builder** | Default | Plan: pre-flight **first**, pytest+commit **last** (`008`). Stay in FILE SCOPE. One branch per worktree. |
+| **Integrator** | User says integrator / audit | Audit branches (`008` integrator section). Merge/push only if user asks. |
 
-| Role | Assigned when | Agent must |
-|------|----------------|------------|
-| **Builder** | Default; user gives FILE SCOPE | Pre-flight, implement in scope, commit, pytest, `008` completion report |
-| **Integrator** | User says integrator / audit | Audit branches per `008` integrator section; merge only if user asks |
-
-Do not branch from another task branch. Do not merge unless integrator role **and** user approval.
+**Parallel builders:** one workspace folder = one branch. Other tasks run in other folders (user-created worktrees). Never `git checkout` another task branch in a shared folder.
 
 ## Current phase
 
 **Phase 1: Core Platform** — message → route → streamed response; web search toggleable.
 
-## File ownership (original Phase 1 task wave)
+## File ownership (Phase 1 task wave)
 
-When the user's prompt does not list FILE SCOPE, defer to this table. When the prompt **does** list FILE SCOPE, the prompt wins.
+If the user prompt lists FILE SCOPE, **the prompt wins**. Otherwise defer to this table:
 
 | Owner | Files |
 |-------|-------|
@@ -95,15 +92,15 @@ When the user's prompt does not list FILE SCOPE, defer to this table. When the p
 | Task 7 (Settings) | `app/settings_store.py`, `settings.json`, `web/src/components/SettingsModal.tsx` |
 | Task 8 (Frontend) | `web/src/api/client.ts`, `web/src/components/ChatView.tsx`, `web/src/components/MessageBubble.tsx`, new TSX |
 
-### Bug-fix overlap (split by concern — one branch each)
+### Bug-fix overlap
+
+Split by concern — one branch each; minimal diffs on shared files (`App.tsx`, `app/main.py`, `app/chat_orchestrator.py`).
 
 | Concern | Typical files |
 |---------|----------------|
-| Nav UI | `App.tsx`, `ProjectSidebar.tsx`, `ProjectGrid.tsx`, `ChatView.tsx` (UI only) |
+| Nav UI | `App.tsx`, `ProjectSidebar.tsx`, `ProjectGrid.tsx`, `ChatView.tsx` |
 | Stop button UI | `ChatView.tsx` |
 | Stop / SSE disconnect backend | `app/main.py`, `app/chat_orchestrator.py` |
-| UI prefs `localStorage` | `App.tsx` (storage helpers + effects only) |
+| UI prefs `localStorage` | `App.tsx` |
 | `enabled_tools` backend | `app/schemas.py`, `app/chat_orchestrator.py`, tests |
-| Model dropdown | `web/src/components/ModelSelector.tsx`, adapters |
-
-Shared files (`App.tsx`, `app/main.py`, `chat_orchestrator.py`): serial merge order; minimal diffs per branch.
+| Model dropdown | `ModelSelector.tsx`, adapters |
