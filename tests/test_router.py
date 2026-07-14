@@ -203,14 +203,14 @@ def test_resolve_model_covers_all_intents(
 
     expected = {
         "general_chat": "local/qwen3-8b",
-        "web_search": "local/qwen3-8b",
-        "deep_research": "local/deepseek-r1-32b",
-        "coding_basic": "local/qwen2.5-coder-7b",
-        "coding_advanced": "local/qwen3-coder-30b",
-        "bash": "local/qwen3-8b",
-        "pdf_gen": "local/qwen3-8b",
-        "file_ops": "local/qwen3-8b",
-        "vision": "local/gemma4-12b",
+        "web_search": "local/tool-calling-medium",
+        "deep_research": "local/reasoning-heavy",
+        "coding_basic": "local/coding-light",
+        "coding_advanced": "local/coding-heavy",
+        "bash": "local/tool-calling-medium",
+        "pdf_gen": "local/tool-calling-medium",
+        "file_ops": "local/tool-calling-medium",
+        "vision": "local/vision-medium",
         "reasoning_medium": "local/reasoning-medium",
         "reasoning_heavy": "local/reasoning-heavy",
     }

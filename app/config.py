@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from functools import lru_cache
 from pathlib import Path
 from typing import Any, Literal, Self
@@ -43,36 +44,37 @@ Rules:
 TOOLS — exact values only. Valid tools: web_search, bash, pdf_gen, file_ops, vision. Never use intent/model names as tools.
 Tools map: coding_basic [] | coding_advanced [] | general_chat [] | web_search ["web_search"] | deep_research ["web_search"] | bash ["bash"] | pdf_gen ["pdf_gen"] | file_ops ["file_ops"] | vision ["vision"] | reasoning_medium ["web_search","bash","pdf_gen","file_ops"] | reasoning_heavy ["web_search","bash","pdf_gen","file_ops"]
 
-Models (copy exactly): coding_basic local/qwen2.5-coder-7b | coding_advanced remote/deepseek-v4-pro | general_chat remote/deepseek-v4-pro | vision local/qwen2.5-vl-3b | web_search/deep_research remote/kimi-k2-6 | bash/pdf_gen/file_ops local/qwen3-8b | reasoning_medium local/reasoning-medium | reasoning_heavy local/reasoning-heavy
+Models — always copy the current value shown for the matched intent, verbatim, do not invent or reuse another intent's value:
+coding_basic {{MODEL:coding_basic}} | coding_advanced {{MODEL:coding_advanced}} | general_chat {{MODEL:general_chat}} | vision {{MODEL:vision}} | web_search {{MODEL:web_search}} | deep_research {{MODEL:deep_research}} | bash {{MODEL:bash}} | pdf_gen {{MODEL:pdf_gen}} | file_ops {{MODEL:file_ops}} | reasoning_medium {{MODEL:reasoning_medium}} | reasoning_heavy {{MODEL:reasoning_heavy}}
 
-Examples:
-User: Look up the CEO of OpenAI -> {"intent":"web_search","model":"remote/kimi-k2-6","tools":["web_search"]}
-User: Look up how to fix this Python error online -> {"intent":"web_search","model":"remote/kimi-k2-6","tools":["web_search"]}
-User: What's the weather like today? -> {"intent":"web_search","model":"remote/kimi-k2-6","tools":["web_search"]}
-User: Find the score of last night's Lakers game -> {"intent":"web_search","model":"remote/kimi-k2-6","tools":["web_search"]}
-User: Summarize recent papers on protein folding -> {"intent":"deep_research","model":"remote/kimi-k2-6","tools":["web_search"]}
-User: Literature review on federated learning privacy -> {"intent":"deep_research","model":"remote/kimi-k2-6","tools":["web_search"]}
-User: Think through this logic puzzle step by step -> {"intent":"reasoning_medium","model":"local/reasoning-medium","tools":["web_search","bash","pdf_gen","file_ops"]}
-User: Solve this puzzle about three switches and three bulbs -> {"intent":"reasoning_medium","model":"local/reasoning-medium","tools":["web_search","bash","pdf_gen","file_ops"]}
-User: Plan how to schedule these conflicting constraints -> {"intent":"reasoning_medium","model":"local/reasoning-medium","tools":["web_search","bash","pdf_gen","file_ops"]}
-User: Do a root cause analysis of this multi-system failure -> {"intent":"reasoning_heavy","model":"local/reasoning-heavy","tools":["web_search","bash","pdf_gen","file_ops"]}
-User: Deep reasoning on a complex multi-step plan with tradeoffs -> {"intent":"reasoning_heavy","model":"local/reasoning-heavy","tools":["web_search","bash","pdf_gen","file_ops"]}
-User: Make me a PDF research report on AI safety -> {"intent":"pdf_gen","model":"local/qwen3-8b","tools":["pdf_gen"]}
-User: Convert markdown README to PDF -> {"intent":"pdf_gen","model":"local/qwen3-8b","tools":["pdf_gen"]}
-User: Convert these images into a single PDF -> {"intent":"pdf_gen","model":"local/qwen3-8b","tools":["pdf_gen"]}
-User: Find the invoice PDF in my downloads -> {"intent":"file_ops","model":"local/qwen3-8b","tools":["file_ops"]}
-User: Open package.json and show dependencies -> {"intent":"file_ops","model":"local/qwen3-8b","tools":["file_ops"]}
-User: Search my codebase for TODO comments -> {"intent":"file_ops","model":"local/qwen3-8b","tools":["file_ops"]}
-User: Open README.md and summarize it -> {"intent":"general_chat","model":"remote/deepseek-v4-pro","tools":[]}
-User: Classify the document type from this image -> {"intent":"vision","model":"local/qwen2.5-vl-3b","tools":["vision"]}
-User: Read the labels in this chart image -> {"intent":"vision","model":"local/qwen2.5-vl-3b","tools":["vision"]}
-User: Run git pull origin main -> {"intent":"bash","model":"local/qwen3-8b","tools":["bash"]}
-User: Add caching layer with Redis -> {"intent":"coding_basic","model":"local/qwen2.5-coder-7b","tools":[]}
-User: Implement OAuth login in my app -> {"intent":"coding_basic","model":"local/qwen2.5-coder-7b","tools":[]}
-User: Add unit tests for this class -> {"intent":"coding_advanced","model":"remote/deepseek-v4-pro","tools":[]}
-User: Debug this Go error: IndexError -> {"intent":"coding_advanced","model":"remote/deepseek-v4-pro","tools":[]}
-User: Write a regex to match email addresses -> {"intent":"coding_basic","model":"local/qwen2.5-coder-7b","tools":[]}
-User: Fix this bug in my Python code -> {"intent":"coding_advanced","model":"remote/deepseek-v4-pro","tools":[]}
+Examples (model values below are illustrative placeholders — always use the current values from the Models line above, not these):
+User: Look up the CEO of OpenAI -> {"intent":"web_search","model":"{{MODEL:web_search}}","tools":["web_search"]}
+User: Look up how to fix this Python error online -> {"intent":"web_search","model":"{{MODEL:web_search}}","tools":["web_search"]}
+User: What's the weather like today? -> {"intent":"web_search","model":"{{MODEL:web_search}}","tools":["web_search"]}
+User: Find the score of last night's Lakers game -> {"intent":"web_search","model":"{{MODEL:web_search}}","tools":["web_search"]}
+User: Summarize recent papers on protein folding -> {"intent":"deep_research","model":"{{MODEL:deep_research}}","tools":["web_search"]}
+User: Literature review on federated learning privacy -> {"intent":"deep_research","model":"{{MODEL:deep_research}}","tools":["web_search"]}
+User: Think through this logic puzzle step by step -> {"intent":"reasoning_medium","model":"{{MODEL:reasoning_medium}}","tools":["web_search","bash","pdf_gen","file_ops"]}
+User: Solve this puzzle about three switches and three bulbs -> {"intent":"reasoning_medium","model":"{{MODEL:reasoning_medium}}","tools":["web_search","bash","pdf_gen","file_ops"]}
+User: Plan how to schedule these conflicting constraints -> {"intent":"reasoning_medium","model":"{{MODEL:reasoning_medium}}","tools":["web_search","bash","pdf_gen","file_ops"]}
+User: Do a root cause analysis of this multi-system failure -> {"intent":"reasoning_heavy","model":"{{MODEL:reasoning_heavy}}","tools":["web_search","bash","pdf_gen","file_ops"]}
+User: Deep reasoning on a complex multi-step plan with tradeoffs -> {"intent":"reasoning_heavy","model":"{{MODEL:reasoning_heavy}}","tools":["web_search","bash","pdf_gen","file_ops"]}
+User: Make me a PDF research report on AI safety -> {"intent":"pdf_gen","model":"{{MODEL:pdf_gen}}","tools":["pdf_gen"]}
+User: Convert markdown README to PDF -> {"intent":"pdf_gen","model":"{{MODEL:pdf_gen}}","tools":["pdf_gen"]}
+User: Convert these images into a single PDF -> {"intent":"pdf_gen","model":"{{MODEL:pdf_gen}}","tools":["pdf_gen"]}
+User: Find the invoice PDF in my downloads -> {"intent":"file_ops","model":"{{MODEL:file_ops}}","tools":["file_ops"]}
+User: Open package.json and show dependencies -> {"intent":"file_ops","model":"{{MODEL:file_ops}}","tools":["file_ops"]}
+User: Search my codebase for TODO comments -> {"intent":"file_ops","model":"{{MODEL:file_ops}}","tools":["file_ops"]}
+User: Open README.md and summarize it -> {"intent":"general_chat","model":"{{MODEL:general_chat}}","tools":[]}
+User: Classify the document type from this image -> {"intent":"vision","model":"{{MODEL:vision}}","tools":["vision"]}
+User: Read the labels in this chart image -> {"intent":"vision","model":"{{MODEL:vision}}","tools":["vision"]}
+User: Run git pull origin main -> {"intent":"bash","model":"{{MODEL:bash}}","tools":["bash"]}
+User: Add caching layer with Redis -> {"intent":"coding_basic","model":"{{MODEL:coding_basic}}","tools":[]}
+User: Implement OAuth login in my app -> {"intent":"coding_basic","model":"{{MODEL:coding_basic}}","tools":[]}
+User: Add unit tests for this class -> {"intent":"coding_advanced","model":"{{MODEL:coding_advanced}}","tools":[]}
+User: Debug this Go error: IndexError -> {"intent":"coding_advanced","model":"{{MODEL:coding_advanced}}","tools":[]}
+User: Write a regex to match email addresses -> {"intent":"coding_basic","model":"{{MODEL:coding_basic}}","tools":[]}
+User: Fix this bug in my Python code -> {"intent":"coding_advanced","model":"{{MODEL:coding_advanced}}","tools":[]}
 
 Classify:
 """
@@ -144,14 +146,14 @@ def _deep_merge(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any
 
 class ModelsConfig(BaseModel):
     general_chat: str = "local/qwen3-8b"
-    web_search: str = "local/qwen3-8b"
-    deep_research: str = "local/deepseek-r1-32b"
-    coding_basic: str = "local/qwen2.5-coder-7b"
-    coding_advanced: str = "local/qwen3-coder-30b"
-    bash: str = "local/qwen3-8b"
-    pdf_gen: str = "local/qwen3-8b"
-    file_ops: str = "local/qwen3-8b"
-    vision: str = "local/gemma4-12b"
+    web_search: str = "local/tool-calling-medium"
+    deep_research: str = "local/reasoning-heavy"
+    coding_basic: str = "local/coding-light"
+    coding_advanced: str = "local/coding-heavy"
+    bash: str = "local/tool-calling-medium"
+    pdf_gen: str = "local/tool-calling-medium"
+    file_ops: str = "local/tool-calling-medium"
+    vision: str = "local/vision-medium"
     reasoning_medium: str = "local/reasoning-medium"
     reasoning_heavy: str = "local/reasoning-heavy"
 
@@ -163,6 +165,19 @@ class ModelsConfig(BaseModel):
 
     def get(self, intent: str, default: str | None = None) -> str | None:
         return getattr(self, intent, default)
+
+
+_MODEL_PLACEHOLDER_RE = re.compile(r"\{\{MODEL:([a-z_]+)\}\}")
+
+
+def render_classifier_prompt(template: str, models: "ModelsConfig") -> str:
+    """Substitute {{MODEL:<intent>}} placeholders with current settings.json values."""
+
+    def _replace(match: re.Match[str]) -> str:
+        intent = match.group(1)
+        return models.get(intent) or ""
+
+    return _MODEL_PLACEHOLDER_RE.sub(_replace, template)
 
 
 class OllamaSettings(BaseModel):

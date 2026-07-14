@@ -23,6 +23,7 @@ class ClassifierOutput:
     intent: str
     tools: list[str]
     confidence: float
+    model: str | None = None
 
 
 class RouteSource(StrEnum):
@@ -37,6 +38,7 @@ class RouteResult:
     tools: list[str]
     confidence: float
     source: RouteSource
+    recommended_model: str | None = None
 
 
 @dataclass

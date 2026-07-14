@@ -8,7 +8,7 @@ import time
 
 import httpx
 
-from app.config import Settings
+from app.config import Settings, render_classifier_prompt
 from app.protocols import Classifier
 from app.types import ClassifierOutput
 
@@ -25,7 +25,9 @@ class QwenClassifierAdapter(Classifier):
         started = time.perf_counter()
         payload = {
             "model": self._ollama_model_name(),
-            "system": self.settings.router.classifier_prompt,
+            "system": render_classifier_prompt(
+                self.settings.router.classifier_prompt, self.settings.models
+            ),
             "prompt": message,
             "stream": False,
             "keep_alive": self.settings.ollama.keep_alive,
@@ -83,6 +85,7 @@ class QwenClassifierAdapter(Classifier):
         intent = data.get("intent")
         tools = data.get("tools", [])
         confidence = data.get("confidence", 0.0)
+        model = data.get("model")
         if not isinstance(intent, str) or not isinstance(tools, list):
             return self._fallback()
         if not all(isinstance(tool, str) for tool in tools):
@@ -97,7 +100,17 @@ class QwenClassifierAdapter(Classifier):
             intent=intent,
             tools=tools,
             confidence=parsed_confidence,
+            model=self._validate_model_alias(model),
         )
+
+    def _validate_model_alias(self, model: object) -> str | None:
+        if not isinstance(model, str) or not model.strip():
+            return None
+        model = model.strip()
+        if model in self.settings.models.values():
+            return model
+        logger.warning("Classifier suggested unknown model alias %r; ignoring", model)
+        return None
 
     @staticmethod
     def _extract_json(response_text: str) -> str:

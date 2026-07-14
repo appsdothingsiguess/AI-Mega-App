@@ -72,7 +72,7 @@ def test_partial_update_models_intent(_isolated_settings: Path) -> None:
     init_settings_store()
     public = update_settings({"models": {"bash": "local/deepseek-r1-8b"}})
     assert public["models"]["bash"] == "local/deepseek-r1-8b"
-    assert public["models"]["pdf_gen"] == "local/qwen3-8b"
+    assert public["models"]["pdf_gen"] == "local/tool-calling-medium"
 
 
 def test_validation_rejects_invalid_chunk_size(_isolated_settings: Path) -> None:

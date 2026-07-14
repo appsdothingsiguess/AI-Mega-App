@@ -77,6 +77,12 @@ async def test_missing_ollama_model_names_is_error(
             "remote/kimi-k2-6",
             "local/qwen2.5-coder-7b",
             "local/qwen2.5-vl-3b",
+            "local/tool-calling-medium",
+            "local/coding-light",
+            "local/coding-heavy",
+            "local/vision-medium",
+            "local/reasoning-medium",
+            "local/reasoning-heavy",
         ],
     )
     settings = _settings(
@@ -143,6 +149,12 @@ async def test_unreachable_qdrant_is_warning_only(
             "local/qwen2.5-vl-3b",
             "remote/deepseek-v4-pro",
             "remote/kimi-k2-6",
+            "local/tool-calling-medium",
+            "local/coding-light",
+            "local/coding-heavy",
+            "local/vision-medium",
+            "local/reasoning-medium",
+            "local/reasoning-heavy",
         ],
     )
     settings = _settings(tmp_path, monkeypatch)

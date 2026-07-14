@@ -66,6 +66,7 @@ class HybridRouter:
                     tools=list(rule.tools),
                     confidence=1.0,
                     source=RouteSource.KEYWORD,
+                    recommended_model=self.resolve_model(rule.intent),
                 )
                 self._log_decision(message, "keyword", result)
                 return result
@@ -88,6 +89,7 @@ class HybridRouter:
             tools=list(output.tools),
             confidence=output.confidence,
             source=RouteSource.CLASSIFIER,
+            recommended_model=output.model or self.resolve_model(output.intent),
         )
         self._log_decision(message, "classifier", result)
         return result
@@ -107,7 +109,7 @@ class HybridRouter:
             "matched_layer": layer,
             "intent": result.intent,
             "tools": result.tools,
-            "model": self.resolve_model(result.intent),
+            "model": result.recommended_model or self.resolve_model(result.intent),
             "source": result.source.value,
             "confidence": result.confidence,
         }

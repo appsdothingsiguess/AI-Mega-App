@@ -440,6 +440,8 @@ class ChatOrchestrator:
             logger_router.info(
                 "model_override applied: %s (intent=%s)", model_alias, intent
             )
+        elif route is not None and route.recommended_model:
+            model_alias = route.recommended_model
         else:
             model_alias = self.router.resolve_model(intent)
         turn_record.model_alias = model_alias
