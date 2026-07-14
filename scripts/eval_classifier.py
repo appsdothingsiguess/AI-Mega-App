@@ -3,9 +3,18 @@
 
 Usage (from repo root):
   python scripts/eval_classifier.py --list-tags
-  python scripts/eval_classifier.py --smoke
-  python scripts/eval_classifier.py --full --models qwen2.5:1.5b-32k
+  python scripts/eval_classifier.py --smoke --variant local
+  python scripts/eval_classifier.py --smoke --variant remote
+  python scripts/eval_classifier.py --full --variant local --models qwen2.5:1.5b-32k
+  python scripts/eval_classifier.py --full --variant remote --models qwen2.5:1.5b-32k
   python scripts/eval_classifier.py --smoke --prompt-file path/to/prompt.txt --min-accuracy 0.85
+
+--variant local  → prompts/local.txt  + gold_map.json
+                   (all local/* tier aliases; general_chat → local/qwen3-8b)
+--variant remote → prompts/remote.txt + gold_map.remote.json
+                   (general_chat/coding_advanced → remote/deepseek-v4-pro;
+                    web_search/deep_research → remote/kimi-k2-6;
+                    all other intents keep local/* tier aliases)
 """
 
 from __future__ import annotations
@@ -31,9 +40,17 @@ from app.config import DEFAULT_CLASSIFIER_PROMPT, Settings, get_settings  # noqa
 
 EVAL_DIR = REPO_ROOT / "eval" / "classifier"
 GOLD_MAP_PATH = EVAL_DIR / "gold_map.json"
+GOLD_MAP_REMOTE_PATH = EVAL_DIR / "gold_map.remote.json"
+PROMPT_LOCAL_PATH = EVAL_DIR / "prompts" / "local.txt"
+PROMPT_REMOTE_PATH = EVAL_DIR / "prompts" / "remote.txt"
 DATASET_PATH = EVAL_DIR / "dataset.jsonl"
 RUNS_DIR = EVAL_DIR / "runs"
 TIER_SUFFIX_RE = re.compile(r"-(light|medium|heavy)$")
+
+# Only these intents have a real remote/* alias in litellm_config.yaml today
+# (remote/deepseek-v4-pro, remote/kimi-k2-6). Every other intent has no remote
+# equivalent, so both variants must keep the local tier alias for them.
+REMOTE_ONLY_INTENTS = {"general_chat", "web_search", "deep_research", "coding_advanced"}
 
 # Embedded smoke fallback (3 prompts × 11 intents) if dataset.jsonl is missing.
 _EMBEDDED_SMOKE: list[dict[str, Any]] = [
@@ -160,26 +177,31 @@ def tier_from_model(model: str) -> str:
 
 
 def enrich_row(raw: dict[str, Any], gold_map: dict[str, dict[str, Any]]) -> GoldRow:
+    """Attach expected tools/model/tier from `gold_map` for this row's intent.
+
+    `tools` are variant-independent (same tool set regardless of local vs remote
+    model choice) so the dataset's stored `tools` are validated against the map.
+    `model`/`tier` are variant-dependent, so they are always taken from the
+    active gold_map rather than the dataset file — the dataset stores only one
+    (local) baseline for readability, not a hard constraint.
+    """
     intent = str(raw["intent"])
     if intent not in gold_map:
         raise SystemExit(f"Unknown intent in dataset row {raw.get('id')}: {intent}")
     expected = gold_map[intent]
     tools = raw.get("tools", expected["tools"])
-    model = raw.get("model", expected["model"])
-    tier = raw.get("tier", expected["tier"])
-    if set(tools) != set(expected["tools"]) or model != expected["model"] or tier != expected["tier"]:
+    if set(tools) != set(expected["tools"]):
         raise SystemExit(
-            f"Gold mismatch for {raw.get('id')} intent={intent}: "
-            f"got tools={tools} model={model} tier={tier}; "
-            f"expected {expected}"
+            f"Gold tools mismatch for {raw.get('id')} intent={intent}: "
+            f"got tools={tools}; expected {expected['tools']}"
         )
     return GoldRow(
         id=str(raw["id"]),
         message=str(raw["message"]),
         intent=intent,
-        tools=list(tools),
-        model=str(model),
-        tier=str(tier),
+        tools=list(expected["tools"]),
+        model=str(expected["model"]),
+        tier=str(expected["tier"]),
         notes=str(raw.get("notes", "")),
         source=str(raw.get("source", "hand")),
     )
@@ -423,6 +445,8 @@ def write_run_artifacts(
     *,
     prompt: str,
     mode: str,
+    variant: str,
+    gold_map_name: str,
     settings: Settings,
     summaries: list[ModelSummary],
     details: list[DetailRow],
@@ -437,6 +461,8 @@ def write_run_artifacts(
     summary = {
         "timestamp": run_dir.name,
         "mode": mode,
+        "variant": variant,
+        "gold_map": gold_map_name,
         "ollama_base_url": settings.ollama.base_url,
         "configured_classifier": settings.router.classifier,
         "models": [asdict(s) for s in summaries],
@@ -474,10 +500,32 @@ def build_parser() -> argparse.ArgumentParser:
         help="Comma-separated Ollama tags (max 3). Default: auto-pick including router.classifier",
     )
     p.add_argument(
+        "--variant",
+        choices=("local", "remote"),
+        default="local",
+        help=(
+            "Which model-naming variant to test: 'local' expects tier aliases "
+            "(local/coding-light, local/tool-calling-medium, ...) for every intent; "
+            "'remote' expects remote/deepseek-v4-pro or remote/kimi-k2-6 for "
+            "general_chat/web_search/deep_research/coding_advanced (the only "
+            "intents with a real remote/* alias in litellm_config.yaml) and local "
+            "tier aliases for everything else. Selects the matching default "
+            "prompt (eval/classifier/prompts/local.txt or remote.txt) and gold "
+            "map (gold_map.json or gold_map.remote.json) unless overridden."
+        ),
+    )
+    p.add_argument(
         "--prompt-file",
         type=Path,
         default=None,
-        help="Classifier system prompt file (default: settings/router.classifier_prompt)",
+        help="Classifier system prompt file (default: eval/classifier/prompts/<variant>.txt, "
+        "falling back to settings/router.classifier_prompt)",
+    )
+    p.add_argument(
+        "--gold-map",
+        type=Path,
+        default=None,
+        help="Gold map JSON override (default: gold_map.json or gold_map.remote.json per --variant)",
     )
     p.add_argument(
         "--min-accuracy",
@@ -490,6 +538,12 @@ def build_parser() -> argparse.ArgumentParser:
         type=Path,
         default=None,
         help="Override SETTINGS_JSON_PATH for this process",
+    )
+    p.add_argument(
+        "--ids",
+        type=str,
+        default="",
+        help="Comma-separated row ids to run (e.g. ws-001). Skips smoke/full size rules.",
     )
     return p
 
@@ -521,11 +575,25 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     mode = "full" if args.full else "smoke"
-    gold_map = load_gold_map()
-    dataset = load_dataset(mode, gold_map)
+    gold_map_path = args.gold_map or (
+        GOLD_MAP_REMOTE_PATH if args.variant == "remote" else GOLD_MAP_PATH
+    )
+    gold_map = load_gold_map(gold_map_path)
+    id_filter = {x.strip() for x in args.ids.split(",") if x.strip()}
+    # --ids always loads the full file (or embedded set) so any id is reachable.
+    dataset = load_dataset("full" if id_filter else mode, gold_map)
+    if id_filter:
+        dataset = [r for r in dataset if r.id in id_filter]
+        if not dataset:
+            print(f"No rows matched --ids {sorted(id_filter)}", file=sys.stderr)
+            return 2
+        mode = "ids"
 
+    default_prompt_path = PROMPT_REMOTE_PATH if args.variant == "remote" else PROMPT_LOCAL_PATH
     if args.prompt_file is not None:
         prompt = args.prompt_file.read_text(encoding="utf-8")
+    elif default_prompt_path.exists():
+        prompt = default_prompt_path.read_text(encoding="utf-8")
     else:
         prompt = settings.router.classifier_prompt or DEFAULT_CLASSIFIER_PROMPT
 
@@ -538,8 +606,12 @@ def main(argv: list[str] | None = None) -> int:
     models = pick_classifier_models(tags, settings.router.classifier, explicit)
     if not models:
         models = [ollama_model_name(settings.router.classifier)]
+    # Single-id runs: one classifier model only (configured / first explicit).
+    if id_filter:
+        models = models[:1]
 
     print(f"Ollama: {base_url}")
+    print(f"Variant: {args.variant} (gold map: {gold_map_path.name})")
     print(f"Mode: {mode} ({len(dataset)} rows)")
     print(f"Models: {', '.join(models)}")
 
@@ -559,7 +631,16 @@ def main(argv: list[str] | None = None) -> int:
                 keep_alive=settings.ollama.keep_alive,
                 timeout_s=timeout_s,
             )
-            details.append(score_row(row, pred, model, latency_ms))
+            detail = score_row(row, pred, model, latency_ms)
+            details.append(detail)
+            print(
+                f"  [{row.id}] intent {detail.expected['intent']!r}->{detail.predicted['intent']!r} "
+                f"model {detail.expected['model']!r}->{detail.predicted['model']!r} "
+                f"tools_ok={detail.tools_ok} composite={detail.composite_ok} "
+                f"{detail.latency_ms:.0f}ms"
+            )
+            if detail.raw_response:
+                print(f"    raw: {detail.raw_response[:300]!r}")
         summaries.append(summarize(details, model))
         all_details.extend(details)
 
@@ -567,6 +648,8 @@ def main(argv: list[str] | None = None) -> int:
         run_dir,
         prompt=prompt,
         mode=mode,
+        variant=args.variant,
+        gold_map_name=gold_map_path.name,
         settings=settings,
         summaries=summaries,
         details=all_details,
