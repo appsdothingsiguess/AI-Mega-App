@@ -53,6 +53,8 @@ const INTENT_LABELS: { key: IntentLabel; label: string }[] = [
   { key: "pdf_gen", label: "PDF generation" },
   { key: "file_ops", label: "File operations" },
   { key: "vision", label: "Vision" },
+  { key: "reasoning_medium", label: "Reasoning (medium)" },
+  { key: "reasoning_heavy", label: "Reasoning (heavy)" },
 ];
 
 const TOOL_INTENTS: IntentLabel[] = ["bash", "pdf_gen", "file_ops", "web_search"];

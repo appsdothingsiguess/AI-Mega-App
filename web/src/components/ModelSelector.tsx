@@ -15,6 +15,8 @@ const INTENT_LABELS: { key: IntentLabel; label: string }[] = [
   { key: "pdf_gen", label: "PDF gen" },
   { key: "file_ops", label: "File ops" },
   { key: "vision", label: "Vision" },
+  { key: "reasoning_medium", label: "Reasoning (medium)" },
+  { key: "reasoning_heavy", label: "Reasoning (heavy)" },
 ];
 
 interface Props {

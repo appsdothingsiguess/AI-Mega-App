@@ -84,7 +84,9 @@ export type IntentLabel =
   | "bash"
   | "pdf_gen"
   | "file_ops"
-  | "vision";
+  | "vision"
+  | "reasoning_medium"
+  | "reasoning_heavy";
 
 export interface ModelsConfig {
   general_chat: string;
@@ -96,6 +98,8 @@ export interface ModelsConfig {
   pdf_gen: string;
   file_ops: string;
   vision: string;
+  reasoning_medium: string;
+  reasoning_heavy: string;
 }
 
 export interface RoutingRule {
