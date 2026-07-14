@@ -4,22 +4,23 @@
 Steps:
 1. cd to repo root (directory containing this script's parent)
 2. Create/activate .venv; pip install if needed
-3. Build web/dist if missing (requires Node on PATH)
-4. Warn if LM Studio is not running (non-blocking)
+3. Always rebuild web/dist (requires Node on PATH; use --skip-frontend-build to skip)
+4. Warn if Ollama is not reachable (non-blocking)
 5. Start uvicorn on port 8000
-6. Wait for /health to respond
+6. Wait until the server accepts HTTP (any /health status code)
 7. Open browser at http://127.0.0.1:8000
 """
 
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import subprocess
 import sys
 import time
-import urllib.request
 import urllib.error
+import urllib.request
 import webbrowser
 from pathlib import Path
 
@@ -27,9 +28,7 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parent.parent
 HOST = "127.0.0.1"
 PORT = 8000
-SERVER_URL = f"http://{HOST}:{PORT}"
-HEALTH_URL = f"{SERVER_URL}/health"
-LM_HEALTH_URL = "http://127.0.0.1:1234/api/v1/models"
+DEFAULT_OLLAMA_BASE = "http://192.168.0.240:11434"
 
 
 def _log(msg: str) -> None:
@@ -69,22 +68,55 @@ def _install_deps(python: Path) -> None:
         )
 
 
-def _build_frontend() -> None:
-    """Build web/dist if index.html is missing."""
-    dist_index = REPO_ROOT / "web" / "dist" / "index.html"
-    if dist_index.exists():
-        _log("Web UI already built (web/dist/index.html found).")
-        return
+def _frontend_sources_newer_than_dist(web_dir: Path, dist_index: Path) -> bool:
+    """True when src (or vite config) is newer than the last dist build."""
+    if not dist_index.exists():
+        return True
+    dist_mtime = dist_index.stat().st_mtime
+    watch_roots = [web_dir / "src", web_dir / "index.html", web_dir / "vite.config.ts", web_dir / "package.json"]
+    for root in watch_roots:
+        if not root.exists():
+            continue
+        if root.is_file():
+            if root.stat().st_mtime > dist_mtime:
+                return True
+            continue
+        for path in root.rglob("*"):
+            if path.is_file() and path.stat().st_mtime > dist_mtime:
+                return True
+    return False
 
+
+def _build_frontend(*, force: bool = True) -> None:
+    """Build web/dist. Default force=True so start always ships current UI sources."""
     web_dir = REPO_ROOT / "web"
+    dist_index = web_dir / "dist" / "index.html"
+
     if not web_dir.exists():
         _log("WARNING: web/ directory not found — skipping frontend build.")
         return
 
-    _log("Building web UI (npm install && npm run build)...")
+    if not force and dist_index.exists() and not _frontend_sources_newer_than_dist(web_dir, dist_index):
+        _log("Web UI already built (web/dist up to date).")
+        return
+
+    if force:
+        _log("Building web UI (npm run build)...")
+    elif dist_index.exists():
+        _log("Frontend sources newer than web/dist — rebuilding...")
+    else:
+        _log("Building web UI (npm install && npm run build)...")
+
     try:
-        subprocess.check_call(["npm", "install"], cwd=str(web_dir), shell=(sys.platform == "win32"))
-        subprocess.check_call(["npm", "run", "build"], cwd=str(web_dir), shell=(sys.platform == "win32"))
+        # Install only when node_modules is missing (faster restarts).
+        if not (web_dir / "node_modules").is_dir():
+            _log("Installing frontend dependencies (npm install)...")
+            subprocess.check_call(
+                ["npm", "install"], cwd=str(web_dir), shell=(sys.platform == "win32")
+            )
+        subprocess.check_call(
+            ["npm", "run", "build"], cwd=str(web_dir), shell=(sys.platform == "win32")
+        )
         _log("Web UI built successfully.")
     except FileNotFoundError:
         _log(
@@ -97,29 +129,54 @@ def _build_frontend() -> None:
         sys.exit(1)
 
 
-def _check_lmstudio() -> None:
-    """Warn (but don't block) if LM Studio is not running."""
+def _ollama_base_url() -> str:
+    """Prefer settings.json ollama.base_url; fall back to config default."""
+    settings_path = REPO_ROOT / "settings.json"
     try:
-        with urllib.request.urlopen(LM_HEALTH_URL, timeout=3) as resp:
+        data = json.loads(settings_path.read_text(encoding="utf-8"))
+        base = data.get("ollama", {}).get("base_url")
+        if isinstance(base, str) and base.strip():
+            return base.rstrip("/")
+    except (OSError, json.JSONDecodeError, AttributeError, TypeError):
+        pass
+    return DEFAULT_OLLAMA_BASE.rstrip("/")
+
+
+def _check_ollama() -> None:
+    """Warn (but don't block) if Ollama is not reachable."""
+    base = _ollama_base_url()
+    url = f"{base}/api/tags"
+    try:
+        with urllib.request.urlopen(url, timeout=3) as resp:
             if resp.status < 400:
-                _log("LM Studio is running.")
+                _log(f"Ollama is reachable at {base}.")
                 return
-    except (urllib.error.URLError, OSError):
+    except (urllib.error.URLError, OSError, TimeoutError):
         pass
     _log(
-        "WARNING: LM Studio does not appear to be running at localhost:1234.  "
-        "Chat will fail until it is started."
+        f"WARNING: Ollama does not appear to be reachable at {base}.  "
+        "Local-model chat will fail until it is started."
     )
 
 
-def _wait_for_server(timeout: float = 30.0) -> bool:
-    """Poll /health until it responds or timeout expires."""
+def _wait_for_server(health_url: str, timeout: float = 60.0) -> bool:
+    """Poll until the HTTP server answers, or timeout expires.
+
+    ``/health`` returns 503 when dependencies are degraded/down.  That still
+    means uvicorn is up — do not treat non-2xx as "not ready".
+
+    The health handler probes backends with ~3 s timeouts each, so the client
+    timeout must be longer than a full report (~10 s+).
+    """
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         try:
-            with urllib.request.urlopen(HEALTH_URL, timeout=2) as _:
+            with urllib.request.urlopen(health_url, timeout=15) as _:
                 return True
-        except (urllib.error.URLError, OSError):
+        except urllib.error.HTTPError:
+            # Connected and got a response (e.g. 503 degraded) — server is up.
+            return True
+        except (urllib.error.URLError, OSError, TimeoutError):
             time.sleep(0.5)
     return False
 
@@ -129,17 +186,28 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--no-browser", action="store_true", help="Don't open the browser")
     parser.add_argument("--port", type=int, default=PORT)
     parser.add_argument("--host", default=HOST)
+    parser.add_argument(
+        "--skip-frontend-build",
+        action="store_true",
+        help="Skip npm run build (use existing web/dist as-is)",
+    )
     args = parser.parse_args(argv)
+
+    server_url = f"http://{args.host}:{args.port}"
+    health_url = f"{server_url}/health"
 
     os.chdir(REPO_ROOT)
     _log(f"Working directory: {REPO_ROOT}")
 
     python = _ensure_venv()
     _install_deps(python)
-    _build_frontend()
-    _check_lmstudio()
+    if args.skip_frontend_build:
+        _log("Skipping frontend build (--skip-frontend-build).")
+    else:
+        _build_frontend(force=True)
+    _check_ollama()
 
-    _log(f"Starting Prompter server at http://{args.host}:{args.port} ...")
+    _log(f"Starting Prompter server at {server_url} ...")
     server_proc = subprocess.Popen(
         [
             str(python),
@@ -155,16 +223,16 @@ def main(argv: list[str] | None = None) -> int:
     )
 
     _log("Waiting for server to be ready...")
-    ready = _wait_for_server(timeout=30.0)
+    ready = _wait_for_server(health_url, timeout=60.0)
     if not ready:
-        _log("ERROR: Server did not respond within 30 s.  Check the output above.")
+        _log("ERROR: Server did not respond within 60 s.  Check the output above.")
         server_proc.terminate()
         return 1
 
-    _log(f"Server is up: {SERVER_URL}")
+    _log(f"Server is up: {server_url}")
 
     if not args.no_browser:
-        webbrowser.open("http://localhost:5173/")
+        webbrowser.open(server_url)
 
     _log("Press Ctrl+C to stop.")
     try:

@@ -395,6 +395,24 @@ export const updateSettings = (updates: SettingsUpdate) =>
     body: JSON.stringify(updates),
   });
 
+export const getOllamaModels = () =>
+  apiFetch<{ reachable: boolean; models: string[] }>("/ollama/models");
+
+export const getTools = () =>
+  apiFetch<{ tools: string[] }>("/tools");
+
+export const TIER_ALIASES = [
+  "local/coding-light",
+  "local/coding-medium",
+  "local/coding-heavy",
+  "local/reasoning-medium",
+  "local/reasoning-heavy",
+  "local/vision-light",
+  "local/vision-medium",
+  "local/vision-heavy",
+  "local/tool-calling-medium",
+] as const;
+
 // ---- Projects ----
 
 export const listProjects = () => apiFetch<ProjectSummary[]>("/projects");

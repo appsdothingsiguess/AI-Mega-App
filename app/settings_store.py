@@ -7,6 +7,7 @@ API responses strip secret fields and expose ``*_set`` boolean flags instead.
 from __future__ import annotations
 
 import json
+import logging
 import os
 from pathlib import Path
 from typing import Any
@@ -14,12 +15,16 @@ from typing import Any
 from pydantic import ValidationError
 
 from app.config import (
+    DEFAULT_OLLAMA_MODEL_NAMES,
     DEFAULT_ROUTING_RULES,
     RoutingRule,
     Settings,
     get_settings,
 )
 from app.env_secrets import secret_is_set, write_env_vars
+from app.litellm_sync import sync_litellm_config
+
+logger = logging.getLogger(__name__)
 
 _SETTINGS_ENV = "SETTINGS_JSON_PATH"
 _DEFAULT_FILE = Path("settings.json")
@@ -78,13 +83,30 @@ _PERSISTED_TOP_LEVEL_KEYS = (
 )
 
 
+def _ensure_ollama_catalog_aliases(data: dict[str, Any]) -> dict[str, Any]:
+    """Guarantee DEFAULT_OLLAMA_MODEL_NAMES keys exist (e.g. new tier aliases).
+
+    ``_deep_merge`` already merges nested dict keys, but ``Settings()`` /
+    ``_default_settings_dict`` can be contaminated by an on-disk settings.json
+    that predates catalog additions. Always fill missing aliases in-place.
+    """
+    names = data.get("ollama_model_names")
+    if not isinstance(names, dict):
+        names = {}
+        data["ollama_model_names"] = names
+    for alias, tag in DEFAULT_OLLAMA_MODEL_NAMES.items():
+        names.setdefault(alias, tag)
+    return data
+
+
 def _default_settings_dict() -> dict[str, Any]:
     """Build the full Phase 1 default settings document."""
     settings = Settings()
-    return {
+    dumped = {
         key: settings.model_dump(mode="json")[key]
         for key in _PERSISTED_TOP_LEVEL_KEYS
     }
+    return _ensure_ollama_catalog_aliases(dumped)
 
 
 def _only_persisted_fields(data: dict[str, Any]) -> dict[str, Any]:
@@ -184,7 +206,7 @@ def load_settings() -> dict[str, Any]:
     if not isinstance(raw, dict):
         raise SettingsValidationError("settings.json must contain a JSON object")
     merged = _deep_merge(_default_settings_dict(), raw)
-    return validate_settings(merged)
+    return validate_settings(_ensure_ollama_catalog_aliases(merged))
 
 
 def read_settings() -> dict[str, Any]:
@@ -202,6 +224,14 @@ def write_settings(data: dict[str, Any]) -> None:
         encoding="utf-8",
     )
     _refresh_settings_cache()
+    try:
+        sync_litellm_config(
+            normalized.get("ollama_model_names", {}),
+            normalized.get("ollama", {}).get("base_url", ""),
+            Settings.model_fields["litellm_config_path"].default,
+        )
+    except Exception:
+        logger.exception("Failed to sync litellm_config.yaml after settings write")
 
 
 def update_settings(updates: dict[str, Any]) -> dict[str, Any]:

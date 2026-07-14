@@ -28,6 +28,7 @@ def _isolated_settings(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setenv("SETTINGS_JSON_PATH", str(settings_file))
     monkeypatch.delenv("TAVILY_API_KEY", raising=False)
     monkeypatch.delenv("OPENCODE_API_KEY", raising=False)
+    monkeypatch.delenv("QDRANT_URL", raising=False)
     get_settings.cache_clear()
     yield settings_file
     get_settings.cache_clear()
@@ -36,7 +37,7 @@ def _isolated_settings(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
 def test_read_creates_defaults_when_missing(_isolated_settings: Path) -> None:
     assert not _isolated_settings.exists()
     data = read_settings()  # persists defaults on first read
-    assert data["models"]["general_chat"] == "remote/deepseek-v4-pro"
+    assert data["models"]["general_chat"] == "local/qwen3-8b"
     assert data["router"]["rules_enabled"] is True
     assert len(data["router"]["rules"]) == 7
     assert _isolated_settings.exists()
@@ -179,3 +180,48 @@ def test_validate_settings_normalizes_router_rules(_isolated_settings: Path) -> 
     normalized = validate_settings(base)
     assert len(normalized["router"]["rules"]) == 1
     assert normalized["router"]["rules"][0]["intent"] == "web_search"
+
+
+def test_qdrant_url_env_overrides_settings_json(
+    _isolated_settings: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from app.config import Settings
+
+    _isolated_settings.write_text(
+        json.dumps({"qdrant": {"url": "http://localhost:6333"}}),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("QDRANT_URL", "http://192.168.0.240:6333")
+    get_settings.cache_clear()
+    settings = Settings()
+    assert settings.qdrant.url == "http://192.168.0.240:6333"
+
+
+def test_load_settings_merges_new_tier_aliases_into_old_catalog(
+    _isolated_settings: Path,
+) -> None:
+    """settings.json written before tiers existed must still expose placeholders."""
+    from app.config import DEFAULT_OLLAMA_MODEL_NAMES
+
+    old_catalog = {
+        "local/qwen3-8b": "qwen3:8b-32k",
+        "local/qwen2.5-coder-7b": "qwen2.5-coder:7b-32k",
+        "local/qwen3-coder-30b": "qwen3-coder:30b-16k",
+        "local/deepseek-r1-32b": "deepseek-r1:32b-16k",
+        "local/gemma4-12b": "gemma4:12b-32k",
+        "local/deepseek-r1-8b": "deepseek-r1:8b-32k",
+    }
+    _isolated_settings.write_text(
+        json.dumps({"ollama_model_names": old_catalog}),
+        encoding="utf-8",
+    )
+    get_settings.cache_clear()
+    loaded = load_settings()
+    names = loaded["ollama_model_names"]
+    for alias, tag in DEFAULT_OLLAMA_MODEL_NAMES.items():
+        assert alias in names
+        if alias in old_catalog:
+            assert names[alias] == old_catalog[alias]
+        else:
+            assert names[alias] == tag
+    assert names["local/coding-light"] == ""

@@ -1,12 +1,23 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   getSettings,
   updateSettings,
+  getOllamaModels,
+  getTools,
+  TIER_ALIASES,
   SettingsSnapshot,
   SettingsUpdate,
   IntentLabel,
   RoutingRule,
 } from "../api/client";
+
+const FALLBACK_ROUTER_TOOLS = [
+  "web_search",
+  "bash",
+  "pdf_gen",
+  "file_ops",
+  "vision",
+] as const;
 
 interface Props {
   onClose: () => void;
@@ -14,6 +25,7 @@ interface Props {
 }
 
 type TabId =
+  | "general"
   | "models"
   | "router"
   | "embedding"
@@ -22,6 +34,7 @@ type TabId =
   | "logging";
 
 const TABS: { id: TabId; label: string }[] = [
+  { id: "general", label: "General" },
   { id: "models", label: "Models" },
   { id: "router", label: "Router" },
   { id: "embedding", label: "Embedding" },
@@ -42,12 +55,45 @@ const INTENT_LABELS: { key: IntentLabel; label: string }[] = [
   { key: "vision", label: "Vision" },
 ];
 
+const TOOL_INTENTS: IntentLabel[] = ["bash", "pdf_gen", "file_ops", "web_search"];
+
+const NON_TOOL_INTENT_LABELS = INTENT_LABELS.filter(
+  ({ key }) => !TOOL_INTENTS.includes(key),
+);
+
+const TIER_LABELS: { key: (typeof TIER_ALIASES)[number]; label: string }[] = [
+  { key: "local/coding-light", label: "Programming - Light" },
+  { key: "local/coding-medium", label: "Programming - Medium" },
+  { key: "local/coding-heavy", label: "Programming - Heavy" },
+  { key: "local/reasoning-medium", label: "Reasoning - Medium" },
+  { key: "local/reasoning-heavy", label: "Reasoning - Heavy" },
+  { key: "local/vision-light", label: "Vision - Light" },
+  { key: "local/vision-medium", label: "Vision - Medium" },
+  { key: "local/vision-heavy", label: "Vision - Heavy" },
+  { key: "local/tool-calling-medium", label: "Tool calling - Medium" },
+];
+
 const LOG_LEVELS = ["DEBUG", "INFO", "WARNING", "ERROR"] as const;
 
 const SEARCH_PROVIDERS = ["duckduckgo", "tavily"] as const;
 
 function deepClone<T>(value: T): T {
   return JSON.parse(JSON.stringify(value)) as T;
+}
+
+/** Classifier is stored as ollama/<tag>; UI lists bare Ollama tags. */
+function stripOllamaPrefix(model: string): string {
+  return model.startsWith("ollama/") ? model.slice("ollama/".length) : model;
+}
+
+function toOllamaClassifier(tag: string): string {
+  const trimmed = tag.trim();
+  if (!trimmed) return "";
+  return trimmed.startsWith("ollama/") ? trimmed : `ollama/${trimmed}`;
+}
+
+function normalizePatterns(patterns: string[]): string[] {
+  return patterns.map((p) => p.trim()).filter(Boolean);
 }
 
 function validateForm(form: SettingsSnapshot): string | null {
@@ -61,7 +107,9 @@ function validateForm(form: SettingsSnapshot): string | null {
     return "Classifier timeout must be greater than 0";
   }
   for (const rule of form.router.rules) {
-    if (!rule.patterns.length) return "Each routing rule needs at least one pattern";
+    if (!normalizePatterns(rule.patterns).length) {
+      return "Each routing rule needs at least one pattern";
+    }
     if (!rule.intent.trim()) return "Each routing rule needs an intent";
   }
   return null;
@@ -70,13 +118,47 @@ function validateForm(form: SettingsSnapshot): string | null {
 export default function SettingsModal({ onClose, onSaved }: Props) {
   const [snap, setSnap] = useState<SettingsSnapshot | null>(null);
   const [form, setForm] = useState<SettingsSnapshot | null>(null);
-  const [tab, setTab] = useState<TabId>("models");
+  const [tab, setTab] = useState<TabId>("general");
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [fieldError, setFieldError] = useState<string | null>(null);
   const [draftTavilyKey, setDraftTavilyKey] = useState("");
   const [draftOpencodeKey, setDraftOpencodeKey] = useState("");
+  const [tiersExpanded, setTiersExpanded] = useState(true);
+  const [assistantPromptExpanded, setAssistantPromptExpanded] = useState(false);
+  const [classifierPromptExpanded, setClassifierPromptExpanded] = useState(false);
+  const [ollamaModels, setOllamaModels] = useState<{ reachable: boolean; models: string[] }>({
+    reachable: false,
+    models: [],
+  });
+  const [ollamaLoading, setOllamaLoading] = useState(false);
+  const [availableTools, setAvailableTools] = useState<string[]>([...FALLBACK_ROUTER_TOOLS]);
+  const [toolsLoading, setToolsLoading] = useState(false);
+
+  const ollamaTagOptions = useMemo(() => {
+    const tags = new Set(ollamaModels.models);
+    return Array.from(tags).sort();
+  }, [ollamaModels.models]);
+
+  const refreshOllamaModels = useCallback(() => {
+    setOllamaLoading(true);
+    getOllamaModels()
+      .then((res) => setOllamaModels(res))
+      .catch(() => setOllamaModels({ reachable: false, models: [] }))
+      .finally(() => setOllamaLoading(false));
+  }, []);
+
+  const refreshTools = useCallback(() => {
+    setToolsLoading(true);
+    getTools()
+      .then((res) => {
+        const tools = res.tools?.length ? res.tools : [...FALLBACK_ROUTER_TOOLS];
+        setAvailableTools(tools);
+      })
+      .catch(() => setAvailableTools([...FALLBACK_ROUTER_TOOLS]))
+      .finally(() => setToolsLoading(false));
+  }, []);
 
   useEffect(() => {
     getSettings()
@@ -87,7 +169,9 @@ export default function SettingsModal({ onClose, onSaved }: Props) {
       .catch((e: unknown) => {
         setError(e instanceof Error ? e.message : "Failed to load settings");
       });
-  }, []);
+    refreshOllamaModels();
+    refreshTools();
+  }, [refreshOllamaModels, refreshTools]);
 
   const modelAliases = useMemo(() => {
     if (!form) return [];
@@ -104,11 +188,13 @@ export default function SettingsModal({ onClose, onSaved }: Props) {
     [],
   );
 
-  const buildUpdate = (): SettingsUpdate => {
-    if (!snap || !form) return {};
+  const buildUpdate = (source: SettingsSnapshot): SettingsUpdate => {
+    if (!snap) return {};
     const updates: SettingsUpdate = {};
     const sections = [
       "models",
+      "ollama_model_names",
+      "assistant",
       "vision",
       "router",
       "embedding",
@@ -122,8 +208,11 @@ export default function SettingsModal({ onClose, onSaved }: Props) {
       "debug",
     ] as const;
     for (const key of sections) {
-      if (JSON.stringify(snap[key]) !== JSON.stringify(form[key])) {
-        updates[key] = form[key] as SettingsUpdate[typeof key];
+      const next = source[key];
+      const prev = snap[key];
+      if (next === undefined) continue;
+      if (JSON.stringify(prev) !== JSON.stringify(next)) {
+        (updates as Record<string, unknown>)[key] = next;
       }
     }
     if (draftTavilyKey.trim()) {
@@ -143,7 +232,19 @@ export default function SettingsModal({ onClose, onSaved }: Props) {
 
   const handleSave = async () => {
     if (!form) return;
-    const validationError = validateForm(form);
+    // Drop blank pattern lines before validate/save (kept during edit so Enter works).
+    const cleanedForm: SettingsSnapshot = {
+      ...form,
+      router: {
+        ...form.router,
+        rules: form.router.rules.map((rule) => ({
+          ...rule,
+          patterns: normalizePatterns(rule.patterns),
+        })),
+      },
+    };
+    setForm(cleanedForm);
+    const validationError = validateForm(cleanedForm);
     if (validationError) {
       setFieldError(validationError);
       return;
@@ -152,7 +253,7 @@ export default function SettingsModal({ onClose, onSaved }: Props) {
     setError(null);
     setFieldError(null);
     try {
-      const updated = await updateSettings(buildUpdate());
+      const updated = await updateSettings(buildUpdate(cleanedForm));
       setSnap(updated);
       setForm(deepClone(updated));
       setDraftTavilyKey("");
@@ -240,27 +341,135 @@ export default function SettingsModal({ onClose, onSaved }: Props) {
           ))}
         </div>
         <div style={styles.body}>
-          {tab === "models" && (
+          {tab === "general" && (
             <section>
-              <div style={styles.sectionTitle}>Intent → model alias</div>
-              {INTENT_LABELS.map(({ key, label }) => (
-                <Field key={key} label={label}>
-                  <select
-                    style={styles.select}
-                    value={form.models[key]}
+              <button
+                type="button"
+                style={styles.disclosureTitle}
+                onClick={() => setAssistantPromptExpanded((v) => !v)}
+                aria-expanded={assistantPromptExpanded}
+              >
+                <span aria-hidden="true">{assistantPromptExpanded ? "▾" : "▸"}</span>
+                Default assistant prompt
+              </button>
+              {assistantPromptExpanded && (
+                <>
+                  <p style={styles.hint}>
+                    Applied to every chat. Project instructions are appended below this.
+                    Use {"{project_name}"} for the project name.
+                  </p>
+                  <textarea
+                    style={styles.textarea}
+                    value={form.assistant?.system_prompt ?? ""}
                     onChange={(e) =>
                       patch((f) => ({
                         ...f,
-                        models: { ...f.models, [key]: e.target.value },
+                        assistant: {
+                          system_prompt: e.target.value,
+                        },
                       }))
                     }
-                  >
-                    {modelAliases.map((alias) => (
-                      <option key={alias} value={alias}>{alias}</option>
-                    ))}
-                  </select>
+                    rows={10}
+                  />
+                </>
+              )}
+            </section>
+          )}
+
+          {tab === "models" && (
+            <section>
+              <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: 8 }}>
+                <button
+                  type="button"
+                  style={styles.secondaryBtn}
+                  onClick={refreshOllamaModels}
+                  disabled={ollamaLoading}
+                >
+                  {ollamaLoading ? "Refreshing…" : "Refresh from Ollama"}
+                </button>
+              </div>
+              <button
+                type="button"
+                style={styles.disclosureTitle}
+                onClick={() => setTiersExpanded((v) => !v)}
+                aria-expanded={tiersExpanded}
+              >
+                <span aria-hidden="true">{tiersExpanded ? "▾" : "▸"}</span>
+                Model tiers
+              </button>
+              {tiersExpanded && (
+                <>
+                  <p style={styles.hint}>
+                    Assign installed Ollama tags to each tier alias. Then pick that alias
+                    (e.g. local/coding-medium) under Intent → model below.
+                  </p>
+                  {!ollamaModels.reachable && (
+                    <p style={styles.hint}>
+                      Ollama unreachable — showing previously configured tags only.
+                    </p>
+                  )}
+                  {TIER_LABELS.map(({ key, label }) => {
+                    const current = form.ollama_model_names[key] ?? "";
+                    const options = new Set(ollamaModels.models);
+                    if (current) options.add(current);
+                    return (
+                      <Field key={key} label={label}>
+                        <SearchableSelect
+                          value={current}
+                          options={Array.from(options).sort()}
+                          allowEmpty
+                          emptyLabel="Unassigned"
+                          placeholder="Search Ollama tags…"
+                          onChange={(next) =>
+                            patch((f) => ({
+                              ...f,
+                              ollama_model_names: {
+                                ...f.ollama_model_names,
+                                [key]: next,
+                              },
+                            }))
+                          }
+                        />
+                      </Field>
+                    );
+                  })}
+                </>
+              )}
+              <div style={styles.sectionTitle}>Intent → model alias</div>
+              {NON_TOOL_INTENT_LABELS.map(({ key, label }) => (
+                <Field key={key} label={label}>
+                  <SearchableSelect
+                    value={form.models[key]}
+                    options={modelAliases}
+                    placeholder="Search model aliases…"
+                    onChange={(next) =>
+                      patch((f) => ({
+                        ...f,
+                        models: { ...f.models, [key]: next },
+                      }))
+                    }
+                  />
                 </Field>
               ))}
+              <Field label="Tools model (bash / PDF generation / file operations / web search)">
+                <SearchableSelect
+                  value={form.models.bash}
+                  options={modelAliases}
+                  placeholder="Search model aliases…"
+                  onChange={(next) =>
+                    patch((f) => ({
+                      ...f,
+                      models: {
+                        ...f.models,
+                        bash: next,
+                        pdf_gen: next,
+                        file_ops: next,
+                        web_search: next,
+                      },
+                    }))
+                  }
+                />
+              </Field>
               <div style={styles.sectionTitle}>Vision models</div>
               <Field label="Local vision model">
                 <input
@@ -292,18 +501,64 @@ export default function SettingsModal({ onClose, onSaved }: Props) {
 
           {tab === "router" && (
             <section>
+              <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: 8 }}>
+                <button
+                  type="button"
+                  style={styles.secondaryBtn}
+                  onClick={refreshOllamaModels}
+                  disabled={ollamaLoading}
+                >
+                  {ollamaLoading ? "Refreshing…" : "Refresh from Ollama"}
+                </button>
+              </div>
               <Field label="Classifier model">
-                <input
-                  style={styles.input}
-                  value={form.router.classifier}
-                  onChange={(e) =>
+                <SearchableSelect
+                  value={stripOllamaPrefix(form.router.classifier)}
+                  options={(() => {
+                    const current = stripOllamaPrefix(form.router.classifier);
+                    const opts = new Set(ollamaTagOptions);
+                    if (current) opts.add(current);
+                    return Array.from(opts).sort();
+                  })()}
+                  placeholder="Search Ollama tags…"
+                  onChange={(tag) =>
                     patch((f) => ({
                       ...f,
-                      router: { ...f.router, classifier: e.target.value },
+                      router: {
+                        ...f.router,
+                        classifier: tag ? toOllamaClassifier(tag) : tag,
+                      },
                     }))
                   }
                 />
+                {!ollamaModels.reachable && (
+                  <div style={styles.hint}>
+                    Ollama unreachable — showing previously configured tag only.
+                  </div>
+                )}
               </Field>
+              <button
+                type="button"
+                style={{ ...styles.disclosureTitle, marginTop: 8 }}
+                onClick={() => setClassifierPromptExpanded((v) => !v)}
+                aria-expanded={classifierPromptExpanded}
+              >
+                <span aria-hidden="true">{classifierPromptExpanded ? "▾" : "▸"}</span>
+                Classifier prompt
+              </button>
+              {classifierPromptExpanded && (
+                <textarea
+                  style={styles.textarea}
+                  value={form.router.classifier_prompt}
+                  onChange={(e) =>
+                    patch((f) => ({
+                      ...f,
+                      router: { ...f.router, classifier_prompt: e.target.value },
+                    }))
+                  }
+                  rows={8}
+                />
+              )}
               <Field label="Keyword rules">
                 <label style={styles.checkLabel}>
                   <input
@@ -321,6 +576,19 @@ export default function SettingsModal({ onClose, onSaved }: Props) {
                   </span>
                 </label>
               </Field>
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 8 }}>
+                <span style={{ fontSize: 11, color: "var(--text-muted)" }}>
+                  Available tools: {availableTools.join(", ") || "(none)"}
+                </span>
+                <button
+                  type="button"
+                  style={styles.secondaryBtn}
+                  onClick={refreshTools}
+                  disabled={toolsLoading}
+                >
+                  {toolsLoading ? "Refreshing…" : "Refresh tools"}
+                </button>
+              </div>
               {form.router.rules.map((rule, index) => (
                 <div key={index} style={styles.ruleCard}>
                   <div style={styles.ruleHeader}>
@@ -331,19 +599,24 @@ export default function SettingsModal({ onClose, onSaved }: Props) {
                       Remove
                     </button>
                   </div>
-                  <Field label="Patterns (comma-separated)">
-                    <input
-                      style={styles.input}
-                      value={rule.patterns.join(", ")}
+                  <Field label="Patterns (one per line)">
+                    <textarea
+                      style={{ ...styles.textarea, minHeight: 72 }}
+                      value={rule.patterns.join("\n")}
                       onChange={(e) =>
                         updateRule(index, {
                           ...rule,
-                          patterns: e.target.value
-                            .split(",")
-                            .map((p) => p.trim())
-                            .filter(Boolean),
+                          // Keep empty lines while typing so Enter works; blanks stripped on Save.
+                          patterns: e.target.value.split("\n"),
                         })
                       }
+                      onBlur={(e) =>
+                        updateRule(index, {
+                          ...rule,
+                          patterns: normalizePatterns(e.target.value.split("\n")),
+                        })
+                      }
+                      rows={3}
                     />
                   </Field>
                   <Field label="Intent">
@@ -362,59 +635,54 @@ export default function SettingsModal({ onClose, onSaved }: Props) {
                       ))}
                     </select>
                   </Field>
-                  <Field label="Tools (comma-separated)">
-                    <input
-                      style={styles.input}
-                      value={rule.tools.join(", ")}
-                      onChange={(e) =>
-                        updateRule(index, {
-                          ...rule,
-                          tools: e.target.value
-                            .split(",")
-                            .map((t) => t.trim())
-                            .filter(Boolean),
-                        })
-                      }
-                      placeholder="web_search, bash, …"
-                    />
+                  <Field label="Tools">
+                    <div style={styles.toolCheckList}>
+                      {availableTools.map((tool) => {
+                        const checked = rule.tools.includes(tool);
+                        return (
+                          <label key={tool} style={styles.checkLabel}>
+                            <input
+                              type="checkbox"
+                              checked={checked}
+                              onChange={() => {
+                                const tools = checked
+                                  ? rule.tools.filter((t) => t !== tool)
+                                  : [...rule.tools, tool];
+                                updateRule(index, { ...rule, tools });
+                              }}
+                            />
+                            <span style={{ color: "var(--text-muted)", fontSize: 12 }}>
+                              {tool}
+                            </span>
+                          </label>
+                        );
+                      })}
+                      {rule.tools
+                        .filter((t) => !availableTools.includes(t))
+                        .map((orphan) => (
+                          <label key={orphan} style={styles.checkLabel}>
+                            <input
+                              type="checkbox"
+                              checked
+                              onChange={() =>
+                                updateRule(index, {
+                                  ...rule,
+                                  tools: rule.tools.filter((t) => t !== orphan),
+                                })
+                              }
+                            />
+                            <span style={{ color: "var(--text-muted)", fontSize: 12 }}>
+                              {orphan} (unknown)
+                            </span>
+                          </label>
+                        ))}
+                    </div>
                   </Field>
                 </div>
               ))}
               <button type="button" style={styles.secondaryBtn} onClick={addRule}>
                 Add rule
               </button>
-              <div style={{ ...styles.sectionTitle, marginTop: 16 }}>Classifier prompt</div>
-              <textarea
-                style={styles.textarea}
-                value={form.router.classifier_prompt}
-                onChange={(e) =>
-                  patch((f) => ({
-                    ...f,
-                    router: { ...f.router, classifier_prompt: e.target.value },
-                  }))
-                }
-                rows={8}
-              />
-              <div style={{ ...styles.sectionTitle, marginTop: 16 }}>
-                Default assistant prompt
-              </div>
-              <p style={styles.hint}>
-                Applied to every chat. Project instructions are appended below this.
-                Use {"{project_name}"} for the project name.
-              </p>
-              <textarea
-                style={styles.textarea}
-                value={form.assistant?.system_prompt ?? ""}
-                onChange={(e) =>
-                  patch((f) => ({
-                    ...f,
-                    assistant: {
-                      system_prompt: e.target.value,
-                    },
-                  }))
-                }
-                rows={10}
-              />
             </section>
           )}
 
@@ -860,6 +1128,113 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
   );
 }
 
+function SearchableSelect({
+  value,
+  options,
+  onChange,
+  allowEmpty = false,
+  emptyLabel = "Unassigned",
+  placeholder = "Search…",
+}: {
+  value: string;
+  options: string[];
+  onChange: (value: string) => void;
+  allowEmpty?: boolean;
+  emptyLabel?: string;
+  placeholder?: string;
+}) {
+  const rootRef = useRef<HTMLDivElement>(null);
+  const [open, setOpen] = useState(false);
+  const [query, setQuery] = useState("");
+
+  useEffect(() => {
+    if (!open) return;
+    const onDoc = (e: MouseEvent) => {
+      if (!rootRef.current?.contains(e.target as Node)) {
+        setOpen(false);
+        setQuery("");
+      }
+    };
+    document.addEventListener("mousedown", onDoc);
+    return () => document.removeEventListener("mousedown", onDoc);
+  }, [open]);
+
+  const filtered = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    const list = q ? options.filter((o) => o.toLowerCase().includes(q)) : options;
+    return list;
+  }, [options, query]);
+
+  const display = open ? query : value || (allowEmpty ? emptyLabel : "");
+
+  return (
+    <div ref={rootRef} style={styles.searchSelectRoot}>
+      <input
+        style={styles.input}
+        value={display}
+        placeholder={placeholder}
+        onFocus={() => {
+          setOpen(true);
+          setQuery(value);
+        }}
+        onChange={(e) => {
+          setOpen(true);
+          setQuery(e.target.value);
+        }}
+        onKeyDown={(e) => {
+          if (e.key === "Escape") {
+            setOpen(false);
+            setQuery("");
+          }
+        }}
+        autoComplete="off"
+        spellCheck={false}
+      />
+      {open && (
+        <div style={styles.searchSelectMenu}>
+          {allowEmpty && (
+            <button
+              type="button"
+              style={{
+                ...styles.searchSelectOption,
+                ...(value === "" ? styles.searchSelectOptionActive : {}),
+              }}
+              onClick={() => {
+                onChange("");
+                setOpen(false);
+                setQuery("");
+              }}
+            >
+              {emptyLabel}
+            </button>
+          )}
+          {filtered.length === 0 ? (
+            <div style={styles.searchSelectEmpty}>No matches</div>
+          ) : (
+            filtered.map((opt) => (
+              <button
+                key={opt}
+                type="button"
+                style={{
+                  ...styles.searchSelectOption,
+                  ...(opt === value ? styles.searchSelectOptionActive : {}),
+                }}
+                onClick={() => {
+                  onChange(opt);
+                  setOpen(false);
+                  setQuery("");
+                }}
+              >
+                {opt}
+              </button>
+            ))
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 const styles: Record<string, React.CSSProperties> = {
   overlay: {
     position: "fixed",
@@ -933,8 +1308,61 @@ const styles: Record<string, React.CSSProperties> = {
     borderBottom: "1px solid var(--border)",
     paddingBottom: 4,
   },
+  disclosureTitle: {
+    fontSize: 11,
+    fontWeight: 700,
+    textTransform: "uppercase",
+    color: "var(--accent)",
+    marginBottom: 12,
+    display: "flex",
+    alignItems: "center",
+    gap: 6,
+    width: "100%",
+    background: "transparent",
+    border: "none",
+    borderBottom: "1px solid var(--border)",
+    padding: "0 0 4px",
+    cursor: "pointer",
+    textAlign: "left",
+  },
   input: { width: "100%", padding: "7px 10px", fontSize: 13 },
   select: { width: "100%", padding: "7px 10px", fontSize: 13 },
+  searchSelectRoot: { position: "relative", width: "100%" },
+  searchSelectMenu: {
+    position: "absolute",
+    zIndex: 20,
+    left: 0,
+    right: 0,
+    top: "100%",
+    marginTop: 2,
+    maxHeight: 220,
+    overflowY: "auto",
+    background: "var(--bg-panel)",
+    border: "1px solid var(--border)",
+    borderRadius: "var(--radius-sm)",
+    boxShadow: "0 8px 24px rgba(0,0,0,0.35)",
+  },
+  searchSelectOption: {
+    display: "block",
+    width: "100%",
+    textAlign: "left",
+    padding: "7px 10px",
+    fontSize: 12,
+    fontFamily: "var(--font-mono)",
+    background: "transparent",
+    color: "var(--text)",
+    border: "none",
+    cursor: "pointer",
+  },
+  searchSelectOptionActive: {
+    background: "var(--bg-hover)",
+    color: "var(--accent)",
+  },
+  searchSelectEmpty: {
+    padding: "8px 10px",
+    fontSize: 12,
+    color: "var(--text-muted)",
+  },
   textarea: {
     width: "100%",
     padding: "7px 10px",
@@ -944,6 +1372,12 @@ const styles: Record<string, React.CSSProperties> = {
     resize: "vertical",
   },
   checkLabel: { display: "flex", alignItems: "center", gap: 8 },
+  toolCheckList: {
+    display: "flex",
+    flexDirection: "column",
+    gap: 6,
+    padding: "6px 0",
+  },
   hint: { marginTop: 4, fontSize: 11, color: "var(--text-dim)" },
   ruleCard: {
     marginBottom: 12,

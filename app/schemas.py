@@ -89,6 +89,15 @@ class ChatResponse(BaseModel):
     retrieved_chunks: list[dict[str, Any]] = Field(default_factory=list)
 
 
+class OllamaModelsResponse(BaseModel):
+    reachable: bool
+    models: list[str] = Field(default_factory=list)
+
+
+class ToolsListResponse(BaseModel):
+    tools: list[str] = Field(default_factory=list)
+
+
 class HealthResponse(BaseModel):
     ok: bool
     mode: str

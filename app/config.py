@@ -93,6 +93,15 @@ DEFAULT_OLLAMA_MODEL_NAMES: dict[str, str] = {
     "local/deepseek-r1-32b": "deepseek-r1:32b-16k",
     "local/gemma4-12b": "gemma4:12b-32k",
     "local/deepseek-r1-8b": "deepseek-r1:8b-32k",
+    "local/coding-light": "",
+    "local/coding-medium": "",
+    "local/coding-heavy": "",
+    "local/reasoning-medium": "",
+    "local/reasoning-heavy": "",
+    "local/vision-light": "",
+    "local/vision-medium": "",
+    "local/vision-heavy": "",
+    "local/tool-calling-medium": "",
 }
 
 INTENT_FIELDS = (
@@ -323,6 +332,7 @@ class Settings(BaseSettings):
 
     opencode_api_key: str = Field(default="", validation_alias="OPENCODE_API_KEY")
     tavily_api_key: str = Field(default="", validation_alias="TAVILY_API_KEY")
+    qdrant_url: str = Field(default="", validation_alias="QDRANT_URL")
 
     projects_dir: Path = Field(
         default=Path("./projects"),
@@ -358,6 +368,14 @@ class Settings(BaseSettings):
                     data = _deep_merge(file_data, data)
             except (json.JSONDecodeError, OSError):
                 pass
+        # Existing settings.json may predate new catalog keys; nested file
+        # dicts would otherwise omit placeholders like local/coding-light.
+        names = data.get("ollama_model_names")
+        if not isinstance(names, dict):
+            names = {}
+            data["ollama_model_names"] = names
+        for alias, tag in DEFAULT_OLLAMA_MODEL_NAMES.items():
+            names.setdefault(alias, tag)
         return data
 
     @model_validator(mode="after")
@@ -366,6 +384,8 @@ class Settings(BaseSettings):
             self.opencode_go.api_key = self.opencode_api_key
         if self.tavily_api_key:
             self.search.tavily_api_key = self.tavily_api_key
+        if self.qdrant_url.strip():
+            self.qdrant.url = self.qdrant_url.strip()
         return self
 
     @property

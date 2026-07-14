@@ -1,52 +1,95 @@
-# Backend setup: routing to the RTX 3090 Ollama box
+# Backend setup: Ollama LAN box
 
-**Audience:** anyone running Prompter and wondering why chat requests work without OpenCode Go
-keys, or where the actual model inference happens.
+Prompter routes local model aliases through **LiteLLM** to an Ollama host on the LAN (default `http://192.168.0.240:11434`, RTX 3090). Remote aliases use **OpenCode Go** and need `OPENCODE_API_KEY` in `.env`.
 
-## What changed
+No app-code change is required if that host is reachable — `litellm_config.yaml` already sets `api_base` for `local/*` aliases.
 
-Prompter's router (`app/router.py`, `app/config.py`, `app/litellm_resolver.py`) is unchanged
-code-wise — this was a **configuration-only** change. All 9 routed intents
-(`general_chat, web_search, deep_research, coding_basic, coding_advanced, bash, pdf_gen,
-file_ops, vision`) now resolve to local models served by Ollama on a dedicated LAN box
-(`192.168.0.240:11434`, RTX 3090, see `~/llm-stack/ollama/CLAUDE.md` on that machine), instead of
-the OpenCode Go placeholders (`remote/deepseek-v4-pro`, `remote/kimi-k2-6`).
+## Quick check
 
-No `OPENCODE_API_KEY` is required for the default routing to work anymore — remote OpenCode
-aliases are still defined in `litellm_config.yaml` and can be pointed at from `settings.json` for
-any intent that should use a remote model instead.
+```bash
+curl -s http://192.168.0.240:11434/api/tags
+python -m app.main health
+# or with the API up:
+curl http://127.0.0.1:8000/health
+```
 
-## How to use it
+If `curl` to the box fails, fix LAN/Ollama first (often `ollama.service` down, or a stray `ollama serve` fighting the systemd unit for the port). Host-side ops: `llm-stack/ollama/CLAUDE.md` on that machine.
 
-1. **No setup needed on the app side** if the Ollama box is reachable — `litellm_config.yaml`'s
-   `api_base: http://192.168.0.240:11434` and `app/config.py`'s `OllamaSettings.base_url` already
-   point there.
-2. **Check the backend is up** before debugging "empty response" issues:
-   ```bash
-   curl -s http://192.168.0.240:11434/api/tags | jq -r '.models[].name'
-   ```
-   If this fails, the Ollama box's `ollama.service` (systemd) may be down — see
-   `~/llm-stack/ollama/CLAUDE.md` on that host for recovery steps (a manually-started
-   `ollama serve` process fighting the systemd unit for the port is the most common cause).
-3. **Override the model per-intent** via `settings.json` (not code) — any alias defined in
-   `litellm_config.yaml`'s `model_list` works, local or remote:
-   ```json
-   { "models": { "coding_advanced": "remote/deepseek-v4-pro" } }
-   ```
-4. **The classifier** (`local/qwen2.5:1.5b-32k` equivalent, hit directly via `/api/generate`, not
-   through `litellm_config.yaml`) always runs with `num_gpu: 0` — it's pinned CPU-only so it never
-   competes with task models for the 3090's VRAM. ~1.3s average latency.
-5. **Adding a new local model**: pull/create the Ollama tag on the 3090 box, add a `model_list`
-   entry in `litellm_config.yaml` (`ollama_chat/<tag>` — not bare `ollama/`, which breaks
-   tool-calling — plus the same `api_base`), then point the relevant intent at the new alias in
-   `settings.json`.
+## Config map
 
-## Where things live
+| Concern | Where |
+|---------|--------|
+| Intent → model alias | `settings.json` / `app/config.py` (`ModelsConfig`) |
+| Alias → provider + host | `litellm_config.yaml` (`model_list`, `api_base`) |
+| Runtime override (URL, keep-alive, scheduler) | Web UI ⚙ → **Infrastructure** → writes `settings.json` |
+| Classifier (CPU-only, `num_gpu: 0`) | `app/adapters/classifier_qwen.py` |
+| Keyword fast-path (skip classifier) | `RouterSettings.rules` in settings / `app/config.py` |
 
-| Concern | File |
-|---|---|
-| Intent → alias defaults | `app/config.py` (`ModelsConfig`) |
-| Alias → actual model/host | `litellm_config.yaml` (`model_list`) |
-| Classifier model + CPU pin | `app/adapters/classifier_qwen.py` |
-| Keyword fast-path rules (skip classifier entirely) | `app/config.py` (`RouterSettings.rules`) |
-| Ollama box itself (systemd, GPU pinning, tags) | `~/llm-stack/ollama/CLAUDE.md` (separate machine) |
+## Change the Ollama host
+
+1. Edit `api_base` under each `local/*` entry in `litellm_config.yaml`, **or**
+2. Set the Ollama base URL in Settings → Infrastructure (persists to `settings.json`).
+
+```bash
+# See current bases
+grep -A2 "api_base" litellm_config.yaml
+```
+
+Use LiteLLM’s `ollama_chat/<tag>` (not bare `ollama/`) so tool-calling works.
+
+## Per-intent model override
+
+Any alias in `litellm_config.yaml` works. Example — send advanced coding to OpenCode Go:
+
+```json
+{ "models": { "coding_advanced": "remote/deepseek-v4-pro" } }
+```
+
+Remote intents need `OPENCODE_API_KEY` in `.env`. Defaults can be local-only; see the handoff note below if your `settings.json` already points everything at the LAN box.
+
+## Add a local model
+
+1. Pull/create the tag on the Ollama box.
+2. Add a `model_list` entry in `litellm_config.yaml` (`model: ollama_chat/<tag>`, same `api_base`).
+3. Point the intent at the new alias in `settings.json` (or Settings → Models).
+
+## Classifier
+
+The intent classifier hits Ollama directly (`/api/generate`), pinned **CPU-only** so it never competes with task models for VRAM. On timeout/failure the router falls back to `general_chat`.
+
+## Optional: opencode CLI (not Prompter)
+
+[opencode](https://opencode.ai) (terminal coding agent — **not** “OpenCode Go”) can talk to the same box via Ollama’s OpenAI-compatible `/v1` API. This is **independent** of Prompter’s router / LiteLLM.
+
+```bash
+curl -fsSL https://opencode.ai/install | bash
+# or: npm install -g opencode-ai
+```
+
+Example `~/.config/opencode/config.json` (or project `opencode.json`):
+
+```json
+{
+  "provider": {
+    "ollama": {
+      "npm": "@ai-sdk/openai-compatible",
+      "options": {
+        "baseURL": "http://192.168.0.240:11434/v1"
+      },
+      "models": {
+        "qwen3-coder:30b-16k": {},
+        "qwen3:8b-32k": {}
+      }
+    }
+  },
+  "model": "ollama/qwen3-coder:30b-16k"
+}
+```
+
+`baseURL` must include `/v1`. No API key required; if the CLI insists, use a placeholder. Verify with `curl -s http://192.168.0.240:11434/v1/models`.
+
+## Notes
+
+- Single GPU: first request after a model swap is slower while weights load.
+- Thinking models may emit reasoning tokens; truncation issues are usually `max_tokens` vs thinking headroom (see host `CLAUDE.md`).
+- Default routing may already be LAN-local (no OpenCode key). Remotes remain available when you select a `remote/*` alias.

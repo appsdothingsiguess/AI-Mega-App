@@ -1,648 +1,285 @@
 # Prompter
 
-Local **project assistant** inspired by Claude Projects: persistent instructions, ingested project files, per-thread chat history, and retrieval-augmented prompts. Model calls are routed through a **hybrid intent router** (keyword rules → classifier fallback) that dispatches each message to one of 9 intents (`general_chat`, `web_search`, `deep_research`, `coding_basic`, `coding_advanced`, `bash`, `pdf_gen`, `file_ops`, `vision`), each mapped to a model alias resolved via **LiteLLM**.
+Filesystem-first project assistant: instructions + docs → intent routing → streamed chat. Python/FastAPI backend, React UI, LiteLLM to **Ollama** (local) and **OpenCode Go** (remote).
 
-- **Local models** run on **Ollama**, served from a dedicated RTX 3090 box on the LAN (`llm-stack/ollama`, `http://192.168.0.240:11434`) — see `litellm_config.yaml` for the alias → tag mapping (e.g. `local/qwen3-8b` → `ollama_chat/qwen3:8b-32k`).
-- **Remote models** (`remote/deepseek-v4-pro`, `remote/kimi-k2-6`) go through **OpenCode Go** (`OPENCODE_API_KEY` required).
-- The classifier itself (`ollama/qwen2.5:1.5b-32k`) runs CPU-only on the Ollama box (`num_gpu:0`) so it never competes with task models for VRAM.
-
-> **LM Studio support has been removed.** Earlier versions of this app talked to a local LM Studio server; that code path was deleted (see git history). The `LMSTUDIO_*` variables still in `.env.example` are legacy/no-ops kept only for backward-compat env loading — don't expect them to do anything.
+Spec / agents: [`prompter_x_complete_spec.md`](prompter_x_complete_spec.md) · [`AGENTS.md`](AGENTS.md) · [`docs/`](docs/)
 
 ---
 
-## Quick start (setup)
+## Prerequisites
 
-Follow these steps once. After that, use the [Creating a project](#creating-a-project) workflow and [CLI](#cli-usage) for day-to-day use.
+| Tool | Version | Required when |
+|------|---------|----------------|
+| **Python** | 3.11+ (3.12 recommended) | Always (CLI, API, tests) |
+| **Node.js** (+ `npm`) | 18+ | Web UI — build (`web/dist`) or Vite dev server |
+| **Qdrant** | optional | RAG over project `docs/` (vector search) |
+| **Docker** | optional | Easiest way to run Qdrant (and optional local Ollama) |
+| **Ollama box** | LAN reachable | Local model intents (see [Models](#models-ollama--remote)) |
 
-### 1. Point at your model backends
-
-1. **Local models**: confirm the Ollama box (`llm-stack/ollama`) is running and reachable on the LAN — `curl http://192.168.0.240:11434/api/tags`. `litellm_config.yaml` already points `local/*` aliases at it; edit the `api_base` there if your box's IP differs.
-2. **Remote models**: set `OPENCODE_API_KEY` in `.env` to use `remote/deepseek-v4-pro` and `remote/kimi-k2-6`.
-3. **Deep research**: set `TAVILY_API_KEY` in `.env` if you want the `deep_research` intent's web-search provider (Tavily) enabled.
-
-### 2. Install Python
-
-You need **Python 3.11 or newer**.
+Check:
 
 ```bash
-python --version
+python --version    # 3.11+
+node --version      # 18+ if you want the UI
+npm --version
 ```
 
-### 3. Clone or open this repo
+Install Node from [nodejs.org](https://nodejs.org) if needed. **Vite and React are not installed globally** — `npm install` inside `web/` pulls them as project deps (`vite`, `react`, etc.).
+
+---
+
+## Setup
+
+Work from the **repo root** (must contain `app/`, `web/`, `pyproject.toml`).
+
+### 1. Python virtualenv + backend deps
 
 ```bash
-cd c:\Users\john\Documents\Programming\Tools\Prompter
+# Create venv (once)
+python -m venv .venv
+
+# Activate every new shell
+#   Git Bash (Windows):   source .venv/Scripts/activate
+#   PowerShell:           .\.venv\Scripts\Activate.ps1
+#   Cmd:                  .venv\Scripts\activate.bat
+#   macOS / Linux:        source .venv/bin/activate
+
+# Prompt should show (.venv)
+pip install -U pip
+pip install -e ".[dev]"          # editable app + pytest — FROM REPO ROOT, not app/
+
+python -c "import app, pytest; print('ok')"
+cp .env.example .env             # Cmd: copy .env.example .env
 ```
 
-(Use your actual path if different.)
+Optional (Windows CLI image/file paste): `pip install -e ".[windows]"`.
 
-### 4. Create a virtual environment and install Prompter
-
-**Option A — uv (recommended if you use uv)**
+With **uv** instead of pip:
 
 ```bash
-uv venv
-# Windows (Cmd)
-.venv\Scripts\activate
-# Windows (Git Bash) / macOS / Linux
-source .venv/Scripts/activate
-
+uv venv && source .venv/Scripts/activate   # adjust activate path for your shell
 uv pip install -e ".[dev]"
 ```
 
-**Option B — pip**
+### 2. Web UI deps (Node / npm / Vite) — skip if CLI/API/tests only
 
 ```bash
-python -m venv .venv
-
-# Windows (Cmd)
-.venv\Scripts\activate
-
-# Windows (Git Bash)
-source .venv/Scripts/activate
-
-pip install -e ".[dev]"
+cd web
+npm install          # installs Vite, React, TypeScript, etc. into web/node_modules/
+cd ..
 ```
 
-This installs the `app` package in editable mode plus dev tools (`pytest`).
+| Command | What it does |
+|---------|----------------|
+| `cd web && npm install` | One-time (or after `package.json` changes) |
+| `cd web && npm run dev` | Vite HMR at http://localhost:5173 (proxies API → :8000) |
+| `cd web && npm run build` | Production bundle → `web/dist/` (served by FastAPI) |
 
-### 5. Configure environment variables
+Do **not** run `npm` in `app/` — there is no `package.json` there.
 
-Copy the example env file and edit if needed:
+### 3. Secrets / config
+
+Edit `.env`: `OPENCODE_API_KEY` (remote models), `TAVILY_API_KEY` (optional deep research). Model aliases and router config live in `settings.json` / `litellm_config.yaml` — never put API keys there.
+
+| Install | Where | Command | For |
+|---------|--------|---------|-----|
+| Python + pytest | **repo root** | `pip install -e ".[dev]"` | CLI, API, tests |
+| Node packages | **`web/`** | `npm install` | UI (Vite ships in that install) |
+| Qdrant | always-on host (recommended) | see [Qdrant (RAG)](#qdrant-rag--optional) | Doc retrieval |
+
+---
+
+## Qdrant (RAG — optional)
+
+Qdrant stores embeddings of project docs so chat can retrieve relevant chunks. Chat still works when it is down; RAG is skipped and `/health` shows `qdrant:down` / overall **degraded**.
+
+**Where to run it:** prefer an always-on **Ubuntu server** (guaranteed uptime) over a laptop that sleeps. Qdrant is **CPU + RAM only** — it does **not** use GPU/VRAM. A few hundred MB RAM idle is typical; disk grows with how many docs you ingest.
+
+Default URL in Prompter: `http://localhost:6333`. If Qdrant runs on another LAN box, set **either**:
+
+- `QDRANT_URL=http://<server-lan-ip>:6333` in `.env` (wins over JSON), or
+- `qdrant.url` in `settings.json`, or
+- ⚙ → **Infrastructure** → Qdrant URL
+
+Example for this lab’s Qdrant host: `http://192.168.0.240:6333`.
+
+### Ubuntu 26.04 LTS (server) — Docker + Qdrant
+
+On the server (not required on the laptop that only runs the Prompter UI):
+
+**1. Install Docker Engine** ([official Ubuntu guide](https://docs.docker.com/engine/install/ubuntu/); 26.04 / Resolute is supported):
 
 ```bash
-# Git Bash / macOS / Linux
-cp .env.example .env
+sudo apt update
+sudo apt install -y ca-certificates curl
+sudo install -m 0755 -d /etc/apt/keyrings
+sudo curl -fsSL https://download.docker.com/linux/ubuntu/gpg -o /etc/apt/keyrings/docker.asc
+sudo chmod a+r /etc/apt/keyrings/docker.asc
 
-# Windows Cmd
-copy .env.example .env
+# One-liner avoids a hung `tee <<EOF` when pasting over SSH
+. /etc/os-release
+sudo bash -c "cat > /etc/apt/sources.list.d/docker.sources <<EOF
+Types: deb
+URIs: https://download.docker.com/linux/ubuntu
+Suites: ${UBUNTU_CODENAME:-$VERSION_CODENAME}
+Components: stable
+Architectures: $(dpkg --print-architecture)
+Signed-By: /etc/apt/keyrings/docker.asc
+EOF"
+
+sudo apt update
+sudo apt install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
+sudo systemctl enable --now docker
+sudo usermod -aG docker "$USER"   # log out/in afterward
 ```
 
-| Variable | Default | What it does |
-|----------|---------|----------------|
-| `OPENCODE_API_KEY` | *(empty)* | Required for `remote/deepseek-v4-pro` and `remote/kimi-k2-6` (OpenCode Go) |
-| `TAVILY_API_KEY` | *(empty)* | Required if `deep_research`'s search provider (Tavily) is used |
-| `SETTINGS_JSON_PATH` | `./settings.json` | Structured settings overlay (router rules, model aliases, etc.) |
-| `LITELLM_CONFIG_PATH` | `./litellm_config.yaml` | Alias → provider/model mapping consumed by `app/litellm_resolver.py` |
-| `PROJECTS_DIR` | `./projects` | Root folder for all projects (filesystem-first) |
-| `DATA_DIR` | `./data` | Temp uploads; legacy projects may still live under `data/projects/` |
-| `DEBUG_PROMPTS` | `false` | Set `true` to print assembled prompts to stderr |
+If a previous `sudo tee …` is still sitting there with no prompt, press **Ctrl+C**, then continue from the sources step above. Confirm with `cat /etc/apt/sources.list.d/docker.sources`.
 
-`LMSTUDIO_*` vars are still read for backward compatibility but no longer do anything — LM Studio support was removed.
-
-### 6. Verify the backend connection
+**2. Run Qdrant** ([quickstart](https://qdrant.tech/documentation/quickstart/)) with persistent storage and auto-restart:
 
 ```bash
-python -m app.main health
-# or, with the API server running:
-curl http://127.0.0.1:8000/health
+sudo mkdir -p /var/lib/qdrant/storage
+docker pull qdrant/qdrant
+docker run -d \
+  --name qdrant \
+  --restart unless-stopped \
+  -p 6333:6333 -p 6334:6334 \
+  -v /var/lib/qdrant/storage:/qdrant/storage:z \
+  qdrant/qdrant
 ```
 
-`/health` checks reachability of the configured model backends (Ollama LAN box + OpenCode Go, per `litellm_config.yaml`). If it fails:
-
-| Symptom | What to try |
-|---------|-------------|
-| Local models unreachable | Confirm the Ollama box is up: `curl http://192.168.0.240:11434/api/tags` (see `llm-stack/ollama/CLAUDE.md`) |
-| Remote models unreachable | Check `OPENCODE_API_KEY` is set and valid |
-| Wrong model alias resolved | Check `litellm_config.yaml` and `ModelsConfig` intent mappings agree |
-
-### 7. Try the sample project (optional)
-
-A sample project ships at `projects\sample-project\` (Windows) or `projects/sample-project/` (Git Bash):
+**3. Verify from the server, then from your Prompter machine:**
 
 ```bash
-python -m app.main show-project sample-project
-python -m app.main chat sample-project
+curl -s http://127.0.0.1:6333/collections   # on the Qdrant host
+curl -s http://<server-lan-ip>:6333/collections
 ```
 
-In chat, compose a message (see [Chat tips](#chat-tips)), then send with **Alt+Enter** (Escape, then Enter) or **Ctrl+J**. Leave with `/exit` or `/quit`.
+Then set Prompter’s `qdrant.url` to `http://<server-lan-ip>:6333` and check `python -m app.main health` (expect `qdrant` **up**).
 
-### 8. Run tests (optional)
+**LAN note:** by default Qdrant has no auth. Bind to a trusted LAN (or firewall port 6333 to your client only). Do **not** expose it to the public internet without [Qdrant security](https://qdrant.tech/documentation/guides/security/) (API key / TLS).
 
-Tests live under `tests/`. Configuration is in `pyproject.toml` (`testpaths = ["tests"]`).
+**Laptop alternative:** from this repo, `docker compose up -d qdrant` starts only the Qdrant service (skip the compose `ollama` service if models already run on your LAN GPU box).
 
-**Run from the repository root** — not `web/`. From `web/`, pytest collects zero tests.
+---
+
+## Models (Ollama + remote)
+
+Local intents go to **Ollama** on the LAN (`http://192.168.0.240:11434` by default). Remote aliases go through **OpenCode Go** (`OPENCODE_API_KEY`).
 
 ```bash
-# Repo root (directory that contains app/, tests/, pyproject.toml)
+curl -s http://192.168.0.240:11434/api/tags   # box up?
+python -m app.main health                     # Prompter’s view
+```
+
+| Task | How |
+|------|-----|
+| Wrong IP / port | Edit `api_base` in `litellm_config.yaml`, or ⚙ → Infrastructure |
+| Change model per intent | `settings.json` or ⚙ → Models |
+| Full setup (add models, classifier, opencode CLI) | [`docs/ollama-lan-backend-setup.md`](docs/ollama-lan-backend-setup.md) |
+
+---
+
+## Run
+
+Activate the venv first (every terminal): `source .venv/Scripts/activate` (Git Bash) or `.\.venv\Scripts\Activate.ps1` (PowerShell).
+
+**Windows one-click:** double-click `Start Prompter.bat` — creates `.venv` if missing, runs `npm install` + `npm run build` in `web/` when `web/dist/` is missing (needs Node on PATH), then opens http://127.0.0.1:8000.
+
+**API + built UI:**
+
+```bash
+# If web/dist is missing:
+cd web && npm install && npm run build && cd ..
+
+python -m app.main serve                # opens browser
+# or: uvicorn app.main:app --reload --host 127.0.0.1 --port 8000
+```
+
+**UI hot-reload (Vite):**
+
+```bash
+# Terminal 1 — repo root, venv on
+python -m app.main serve --no-browser
+
+# Terminal 2 — Node, not the venv
+cd web && npm run dev                   # http://localhost:5173 → proxies :8000
+```
+
+Swagger: http://127.0.0.1:8000/docs
+
+---
+
+## Projects
+
+```bash
+python -m app.main init "My Research"   # → projects/my-research/
+# edit projects/my-research/instructions.md
+# drop .txt / .md / .pdf into projects/my-research/docs/
+python -m app.main chat my-research     # syncs docs, then chats
+```
+
+```
+projects/<id>/
+  project.yaml        instructions.md        docs/
+  .prompter/          # chunks, threads — app-managed
+```
+
+Useful commands: `list-projects`, `show-project`, `sync`, `add-file`, `new-thread`.
+
+**CLI chat:** Enter = newline · **Alt+Enter** / **Ctrl+J** = send · `/exit` to quit · Ctrl+V = smart paste. Optional Windows clipboard extras: `pip install -e ".[windows]"`.
+
+---
+
+## Tests
+
+Python only — **no npm**. Always from **repo root** with the venv active:
+
+```bash
+mkdir -p .pytest-tmp
 python -m pytest -q --basetemp=.pytest-tmp/run
 ```
 
-Use `python -m pytest` (not bare `pytest`) so the active venv’s Python and `app` package are used.
+Use `python -m pytest`, not bare `pytest`. On Windows, create `.pytest-tmp` first or you get mass `FileNotFoundError` / `PermissionError`. Baseline on `main`: **~240 passed, 2 known failed**.
 
-**Windows:** `--basetemp=.pytest-tmp/run` avoids `PermissionError` under `%TEMP%\pytest-of-<user>\`. The folder is local scratch only — do not commit it.
-
-**Optional — set once per shell session:**
-
-```bash
-# Git Bash / macOS / Linux
-export PYTEST_ADDOPTS="--basetemp=.pytest-tmp/run"
-
-# Windows PowerShell
-$env:PYTEST_ADDOPTS = "--basetemp=.pytest-tmp/run"
-
-python -m pytest -q
-```
-
-**Sanity check** (should report ~242 tests):
-
-```bash
-python -m pytest --collect-only -q --basetemp=.pytest-tmp/run
-```
-
-**Run a subset:**
-
-```bash
-python -m pytest tests/test_sse_endpoint.py -q --basetemp=.pytest-tmp/run
-python -m pytest tests/test_chat_orchestrator.py -k "tool_loop" -q --basetemp=.pytest-tmp/run
-```
-
-**Baseline:** on current `main`, expect **240 passed, 2 failed** — both are known settings/litellm config mismatches in the test harness (`test_unreachable_qdrant_is_warning_only`, `test_resolve_model_covers_all_intents`), not regressions in feature branches unless you introduce new failures.
-
-| Symptom | Fix |
+| Problem | Fix |
 |---------|-----|
-| `collected 0 items` | `cd` to repo root (parent of `web/`) |
-| `PermissionError` on `pytest-of-…` | Add `--basetemp=.pytest-tmp/run` |
-| `No module named 'app'` | `pip install -e ".[dev]"` from repo root |
-| `pytest: command not found` | Use `python -m pytest` |
+| `collected 0` | `cd` to repo root |
+| Mass ERROR / path errors | `mkdir -p .pytest-tmp` + `--basetemp=.pytest-tmp/run` |
+| `No module named 'app'` | `pip install -e ".[dev]"` at repo root |
+| npm ENOENT under `app/` | Wrong folder — use `web/` |
 
 ---
 
-## Creating a project
-
-Prompter is **filesystem-first**: each project is a normal folder you can create, edit, and drop files into.
-
-### Simple workflow
-
-1. **Scaffold a project**
-
-   ```bash
-   python -m app.main init "My Research"
-   ```
-
-   Creates `projects\my-research\` on Windows (or `projects/my-research/` elsewhere).
-
-2. **Set instructions** — open `projects\my-research\instructions.md` in any editor and write how the assistant should behave. This file is the system prompt (reloaded on every chat and sync).
-
-3. **Add documents** — copy or drag `.txt`, `.md`, or `.pdf` files into:
-
-   ```
-   projects\my-research\docs\
-   ```
-
-4. **Chat** — syncs `docs/` automatically, then routes your message through the intent router to the right model:
-
-   ```bash
-   python -m app.main chat my-research
-   ```
-
-Optional: run `python -m app.main sync my-research` to ingest without chatting.
-
-### Project folder layout
+## Layout
 
 ```
-projects/
-  my-research/
-    project.yaml          # name, id, created (minimal metadata)
-    instructions.md       # system prompt — edit this file
-    docs/                 # your files (drag-and-drop here)
-    .prompter/            # app-managed (ignore)
-      chunks.json         # search index for RAG
-      threads/            # chat history per thread
+app/                  # FastAPI + CLI + orchestrator / router / adapters
+web/                  # React + Vite (npm here only)
+tests/                # pytest
+projects/             # your projects (filesystem-first)
+litellm_config.yaml   # alias → provider / api_base
+settings.json         # runtime overlay (gitignored; created on first run)
+.env                  # secrets (from .env.example)
+docs/                 # handoffs & backend notes
 ```
 
-The `.prompter/` folder is internal — you do not need to edit it. Chunks and threads are created automatically.
-
-You can also create a project manually: make `projects\my-folder\`, add `instructions.md` and a `docs/` folder, then run `sync` or `chat`.
-
-### Migrating from `data/projects/`
-
-Older installs stored projects under `data\projects\`. Prompter still **auto-detects** that location if `./projects` is empty but `data/projects` has content.
-
-To migrate explicitly:
-
-1. Copy each project folder from `data\projects\{id}\` to `projects\{id}\`.
-2. Rename `metadata.yaml` → `project.yaml`, move `system_prompt` text into `instructions.md`.
-3. Rename `files\` → `docs\`, move `chunks.json` and `threads\` under `.prompter\`.
-
-Opening a legacy project via `show-project` or `chat` can perform parts of this upgrade automatically.
+Intent labels: `general_chat` · `web_search` · `deep_research` · `coding_basic` · `coding_advanced` · `bash` · `pdf_gen` · `file_ops` · `vision`
 
 ---
 
-## CLI usage
-
-All commands run from the repo root with the venv activated.
-
-```bash
-# Scaffold a new project (preferred)
-python -m app.main init "My Research"
-
-# Ingest docs/ (optional; chat also syncs)
-python -m app.main sync my-research
-
-# List and inspect projects
-python -m app.main list-projects
-python -m app.main show-project my-research
-
-# Copy a single file into docs/ and ingest (convenience)
-python -m app.main add-file my-research .\path\to\notes.pdf
-
-# New conversation thread
-python -m app.main new-thread my-research --title planning
-
-# Interactive chat (syncs docs/ first)
-python -m app.main chat my-research
-python -m app.main chat claude-prompter
-python -m app.main chat "Claude Prompter"
-python -m app.main chat Claude Prompter
-python -m app.main chat my-research --thread-id <thread_id>
-```
-
-`create-project` still works but is **deprecated** — use `init` instead.
-
-Project ids are slugs from the name (e.g. `My Research` → `my-research`). You can pass the slug, a quoted display name, or multiple words without quotes (`chat Claude Prompter`). Use `list-projects` / `show-project` for the exact id.
-
-### Chat input (Ctrl+V workflow)
-
-Interactive chat uses **prompt_toolkit** when stdin is a TTY (PowerShell, Git Bash, Cmd). **Ctrl+V reads the OS clipboard first** (not only what the terminal injects), so large pastes work in classic PowerShell as well as Windows Terminal.
-
-| Action | How |
-|--------|-----|
-| New line while composing | **Enter** |
-| Send message | **Alt+Enter** (Escape, then Enter) or **Ctrl+J** |
-| Paste (smart) | **Ctrl+V** — image → `[Image #N]`; copied files → `[File: name.pdf]`; long text → `[Pasted text #N +X lines]` |
-| Expand collapsed paste | **Ctrl+V** again while the cursor is on the placeholder |
-| Quit | `/exit` or `/quit` |
-| Paste fallback | `/paste`, paste, then `.send` on its own line |
-| Long edit in your editor | `/edit` (uses `$EDITOR`; default **notepad** on Windows) |
-| Send a file as the message | `/file path\to\notes.md` |
-
-**Collapse thresholds:** 2+ lines or 150+ characters. Example: a 4-line paste in PowerShell shows `helo [Pasted text #1 +3 lines]` with a gray **paste again to expand** toolbar hint. **Alt+Enter** or **Ctrl+J** sends the full text (and any attached images), not the placeholder.
-
-**Windows:** Install optional clipboard support for images and file lists:
-
-```bash
-pip install -e ".[windows]"
-```
-
-Uses **Pillow** + **pywin32** (`CF_HDROP`, `ImageGrab`). Text-only fallback uses **pyperclip** if win32 is unavailable.
-
-**Vision models:** the `vision` intent routes to `local/gemma4-12b` (`gemma4:12b-32k` on the Ollama box) by default — see `VisionSettings` in `app/config.py`. Images pasted with Ctrl+V are sent as multimodal input when the resolved model supports vision; otherwise they're copied into `docs/` and synced for RAG.
-
-**Debugging paste:** `PROMPTER_PASTE_DEBUG=1` logs branches such as `ctrl_v: branch=text`, `ctrl_v_clipboard`, `burst_feed`, `bracketed`.
-
-**Git Bash / WSL:** Same keys; if multiline keys misbehave, set `PROMPTER_SIMPLE_INPUT=1` for single-line `you>` input (slash commands still work).
-
-**Huge content:** Drop files in `docs/` and `sync`, or use `/file projects\my-research\docs\notes.md`.
-
----
-
-## API server
-
-Start the HTTP API:
-
-```bash
-uvicorn app.main:app --reload --host 127.0.0.1 --port 8000
-```
-
-Open `http://127.0.0.1:8000/docs` for interactive Swagger UI.
-
-| Method | Path | Purpose |
-|--------|------|---------|
-| GET | `/health` | Model backend (Ollama/OpenCode Go) reachability status |
-| POST | `/projects` | Create project (writes `instructions.md`) |
-| GET | `/projects` | List projects |
-| GET | `/projects/{project_id}` | Project detail (`instructions_path`, `docs_path`) |
-| POST | `/projects/{project_id}/files` | Upload into `docs/` and ingest |
-| POST | `/projects/{project_id}/threads` | New thread |
-| POST | `/projects/{project_id}/threads/{thread_id}/messages` | Send message (syncs `docs/` first) |
-
-For day-to-day use, dropping files into `docs/` and using the CLI or API chat is enough — uploads are optional.
-
-Examples:
-
-```bash
-curl http://127.0.0.1:8000/health
-
-curl -X POST http://127.0.0.1:8000/projects \
-  -H "Content-Type: application/json" \
-  -d "{\"name\":\"API Demo\",\"system_prompt\":\"Be concise and helpful.\"}"
-```
-
----
-
-## How it works (short)
-
-1. **Projects** live as folders under `PROJECTS_DIR` (default `./projects/{id}/`).
-2. **Instructions** come from `instructions.md` in each project folder.
-3. **Documents** in `docs/` are scanned on `sync` and before each chat message; only new or changed files are re-ingested (mtime + size).
-4. On each **chat message**, relevant chunks are retrieved (lexical search in v1) and combined with instructions and thread history.
-5. The message is routed through `HybridRouter` (`app/router.py`): keyword rules first (`RouterSettings.rules`, confidence 1.0, no LLM call), then the classifier (`ollama/qwen2.5:1.5b-32k`, CPU-only, 30s timeout, falls back to `general_chat` on timeout/failure) for one of 9 intents.
-6. The resolved intent's model alias (`ModelsConfig`) is resolved to real provider params via `app/litellm_resolver.py` + `litellm_config.yaml`, then dispatched through LiteLLM to either the Ollama LAN box (local models) or OpenCode Go (remote models).
-
-Set `DEBUG_PROMPTS=true` to see the full assembled prompt sent to the model.
-
-### RAG (v1 vs future)
-
-| Approach | Status | Notes |
-|----------|--------|--------|
-| Lexical scoring | **Used now** | Fast, offline, no embedding model |
-| Persisted chunks | **Yes** | `.prompter/chunks.json` updated on ingest |
-| Embeddings | **Not yet** | `rag.py` can be extended later |
-
----
-
-## Architecture
-
-```mermaid
-flowchart LR
-  CLI[CLI / FastAPI] --> PM[project_manager]
-  CLI --> CO[chat_orchestrator]
-  CO --> RAG[rag.py]
-  CO --> RT[router.py]
-  RT --> LR[litellm_resolver]
-  PM --> FS[(projects/id)]
-  RAG --> FS
-  LR --> OL[Ollama :: RTX 3090 LAN box]
-  LR --> OC[OpenCode Go]
-```
-
-## Web UI
-
-Prompter includes a dark, source-management-focused web interface with NotebookLM-style source management.
-
-### One-click start (Windows)
-
-Double-click **`Start Prompter.bat`** in the repo root.
-
-What it does:
-1. Creates a `.venv` if missing and installs dependencies
-2. Builds the web UI if `web/dist/` is missing (requires Node.js)
-3. Warns if the configured model backends aren't reachable (non-blocking)
-4. Starts the server on `http://127.0.0.1:8000`
-5. Opens your browser automatically
-
-To pin to the desktop: right-click `Start Prompter.bat` → Send to → Desktop (create shortcut).
-
-### Dev mode (hot-reload frontend)
-
-```bash
-# Terminal 1 — backend
-python -m app.main serve --no-browser
-
-# Terminal 2 — frontend with Vite HMR
-cd web
-npm install
-npm run dev
-# Opens at http://localhost:5173 with proxy to :8000
-```
-
-### Serve command
-
-```bash
-python -m app.main serve               # start server + open browser
-python -m app.main serve --no-browser  # server only
-python -m app.main serve --port 9000   # custom port
-```
-
-### Web UI layout
-
-```
-┌──────────────┬────────────────────────┬─────────────────┐
-│ Projects     │ Chat                   │ Instructions    │
-│              │                        │                 │
-│ Sources ☑    │ messages…              │ [textarea]      │
-│  □ file1     │                        │ [Save]          │
-│  ☑ file2     │ [composer]             │                 │
-│ [+ Add]      │ Using 2 sources        │ [⚙ Settings]   │
-└──────────────┴────────────────────────┴─────────────────┘
-│ Model: <resolved intent model> ● loaded                 │
-└──────────────────────────────────────────────────────────┘
-```
-
-### Sources panel (NotebookLM-style)
-
-- Each file in `docs/` gets a checkbox — only checked files feed the RAG retrieval
-- **Add source**: click `+` or drag-and-drop `.txt`, `.md`, `.pdf` files
-- **Sync** (↺): re-index changed files without re-uploading
-- **Select All / None**: bulk enable/disable
-- **Delete** (×): removes file and its index chunks
-- A green `●` dot shows a file has been indexed; `○` means pending sync
-
-Enabled sources are saved to `projects/{id}/.prompter/sources.json`. Empty list = all docs (backward compatible with the CLI).
-
-### Settings modal (⚙)
-
-Accessible from the bottom of the right panel. Tabs:
-
-| Tab | Fields |
-|-----|--------|
-| **Models** | Model alias per intent (`general_chat`, `web_search`, `deep_research`, `coding_basic`, `coding_advanced`, `bash`, `pdf_gen`, `file_ops`, `vision`), local/remote vision model |
-| **Router** | Classifier model, keyword-rules toggle and editor (pattern → intent → tools) |
-| **Embedding** | Embedding model, max tokens, chunk size/overlap, RAG top-K |
-| **Search** | Web-search / deep-research provider, Tavily API key |
-| **Infrastructure** | Ollama base URL, keep-alive, model scheduler toggle, Qdrant URL, OpenCode Go base URL/enabled/API key |
-| **Logging / Debug** | Debug prompts toggle, projects directory (read-only) |
-
-Settings are saved to `settings.json` (structured overlay) and override defaults from `app/config.py`; secrets like `OPENCODE_API_KEY`/`TAVILY_API_KEY` stay in `.env`.
-
-### Building the frontend manually
-
-```bash
-cd web
-npm install
-npm run build
-# Output goes to web/dist/ — FastAPI serves it at /
-```
-
----
-
-## Repository layout
-
-```
-Prompter/
-├── app/
-│   ├── main.py              # CLI + FastAPI (all API endpoints)
-│   ├── config.py            # Settings from .env + settings.json (ModelsConfig, RouterSettings, ...)
-│   ├── settings_store.py    # Layered settings (settings.json overlay)
-│   ├── config_validation.py # Startup validation of settings/litellm config
-│   ├── router.py            # HybridRouter: keyword rules -> classifier fallback
-│   ├── litellm_resolver.py  # Resolves model aliases to LiteLLM completion kwargs
-│   ├── chat_orchestrator.py # Prompt assembly + chat + tool loop
-│   ├── model_scheduler.py   # Ollama keep-alive/scheduling
-│   ├── adapters/            # classifier_qwen, embedding_nomic, qdrant_store, search_ddg
-│   ├── tools/                # bash, pdf_gen, file_ops, vision, web_search tool implementations
-│   ├── project_manager.py   # Projects on disk + sources management
-│   ├── rag.py               # Ingest + retrieve chunks (source filter)
-│   ├── schemas.py           # Pydantic models (incl. Sources, Settings)
-│   ├── terminal_input.py    # CLI chat input (multiline, Ctrl+V, UserTurn)
-│   ├── clipboard_paste.py   # OS clipboard (text, image, file paths)
-│   ├── message_parts.py     # UserTurn, attachments, resolve-on-send
-│   ├── paste_input.py       # Paste placeholder registry
-│   └── utils.py
-├── web/                     # React + Vite frontend
-│   ├── src/
-│   │   ├── App.tsx          # 3-column layout
-│   │   ├── api/client.ts    # Typed API client
-│   │   ├── components/      # UI components (incl. SettingsModal, ModelSelector)
-│   │   └── styles/theme.css # Dark theme CSS variables
-│   ├── dist/                # Built output (served at /)
-│   └── package.json
-├── scripts/
-│   └── start_prompter.py    # Cross-platform launcher
-├── Start Prompter.bat        # Windows one-click launcher
-├── projects/                # Your projects (filesystem-first)
-│   └── sample-project/
-├── litellm_config.yaml      # Model alias -> provider/model + api_base mapping
-├── settings.json            # Structured settings overlay (optional, gitignored)
-├── tests/
-├── .env.example
-├── pyproject.toml
-└── README.md
-```
-
-## Model backend integration notes
-
-- **Local models**: served by **Ollama** on a dedicated RTX 3090 box on the LAN (`llm-stack/ollama` — see that repo's `CLAUDE.md`), reached via LiteLLM's `ollama_chat/<tag>` provider (not bare `ollama/`) to preserve tool-calling behavior. `api_base` for each entry is set in `litellm_config.yaml`.
-- **Remote models**: routed through **OpenCode Go** (`https://opencode.ai/zen/go/v1`, OpenAI-compatible), requires `OPENCODE_API_KEY`.
-- Alias resolution logic lives in `app/litellm_resolver.py`; edit `litellm_config.yaml` to add/change model aliases without touching app code.
-- Routing/classifier logic lives in `app/router.py` and `RouterSettings` in `app/config.py`.
-
-## Connecting to the Ollama box
-
-There are two separate connectivity paths to the Ollama box, depending on which client you're
-configuring:
-
-- **Prompter itself** — already wired up today via LiteLLM. This is what handles chat, RAG, and
-  the intent-routed model calls described earlier in this README.
-- **opencode CLI** — a planned/future addition for the programming portion of the workflow, not
-  yet wired into Prompter's router. Configured independently of Prompter, talking to Ollama
-  directly.
-
-### In Prompter (current)
-
-Prompter connects to the Ollama box through `litellm_config.yaml`, not through any per-client
-config file — this is already set up, but here's how to verify or change it:
-
-1. **Check the configured endpoint**:
-
-   ```bash
-   grep -A2 "api_base" litellm_config.yaml
-   ```
-
-   Local aliases (`local/*`) should point `api_base` at `http://192.168.0.240:11434`. Edit this
-   file directly if the box's IP or port ever changes.
-
-2. **Verify the box is reachable** from wherever Prompter runs:
-
-   ```bash
-   curl http://192.168.0.240:11434/api/tags
-   ```
-
-   If this fails, Prompter's `/health` endpoint will also report local models as unreachable —
-   fix connectivity here first.
-
-3. **Verify from inside Prompter**:
-
-   ```bash
-   python -m app.main health
-   # or, with the server running:
-   curl http://127.0.0.1:8000/health
-   ```
-
-4. **Adjust without editing files**: the Settings modal's **Infrastructure** tab (⚙ → Infrastructure)
-   exposes the Ollama base URL, keep-alive, and model scheduler toggle at runtime — writes to
-   `settings.json`, overriding `litellm_config.yaml` defaults. Useful for pointing at a different
-   box (e.g. testing) without touching tracked config.
-
-No API key is required — the Ollama box doesn't enforce auth on the LAN.
-
-### In opencode CLI (planned/future)
-
-For the programming/coding portion of the workflow, [opencode](https://opencode.ai) (the terminal
-coding agent CLI — separate from "OpenCode Go", the hosted remote-model API used elsewhere in this
-README) can talk directly to the Ollama box instead of a hosted provider. Ollama exposes an
-OpenAI-compatible endpoint at `/v1`, which opencode supports as a custom provider. **This is not
-yet integrated with Prompter's router** — it's a standalone CLI workflow for when opencode
-development starts.
-
-#### 1. Install opencode
-
-```bash
-curl -fsSL https://opencode.ai/install | bash
-```
-
-Or via npm: `npm install -g opencode-ai`. Verify with `opencode --version`.
-
-#### 2. Point opencode at the Ollama box
-
-Add a custom provider in opencode's config (`~/.config/opencode/config.json`, or `opencode.json`
-in the project root):
-
-```json
-{
-  "provider": {
-    "ollama": {
-      "npm": "@ai-sdk/openai-compatible",
-      "options": {
-        "baseURL": "http://192.168.0.240:11434/v1"
-      },
-      "models": {
-        "qwen3-coder:30b-16k": {},
-        "qwen3:8b-32k": {},
-        "deepseek-r1:32b-16k": {}
-      }
-    }
-  }
-}
-```
-
-- `baseURL` must include the `/v1` suffix — that's Ollama's OpenAI-compatible surface, not the
-  native `/api` one.
-- List only the tags you actually want opencode to offer; any tag from `ollama list` on the box
-  works (see `llm-stack/ollama/CLAUDE.md` for the full table). `qwen3-coder:30b-16k` is the
-  coding-specific pick.
-- No API key is needed — Ollama on this LAN box doesn't require auth. If opencode insists on a
-  non-empty key field, put any placeholder string in it (e.g. `"apiKey": "ollama"`); it's ignored.
-
-#### 3. Select the model
-
-```bash
-opencode
-# then inside opencode:
-/models
-# pick ollama/qwen3-coder:30b-16k (or whichever tag you configured)
-```
-
-Or set a default in config:
-
-```json
-{
-  "model": "ollama/qwen3-coder:30b-16k"
-}
-```
-
-#### 4. Verify it's reachable
-
-Before running opencode, confirm the box responds:
-
-```bash
-curl -s http://192.168.0.240:11434/v1/models | jq
-```
-
-If that fails, opencode will fail the same way — check the Ollama box is up (see
-`llm-stack/ollama/CLAUDE.md`, "Starting Ollama") before debugging opencode itself.
-
-### Notes
-
-- The Ollama box is single-GPU (RTX 3090, 24GB) and swaps models in/out on demand — the first
-  request after a switch will be slower while the model loads (see the auto-load/unload behavior
-  described earlier in this README).
-- `qwen3-coder:30b-16k` and other thinking-capable tags may emit `reasoning_content`/thinking
-  tokens before code — if opencode's output looks truncated, it's likely the same
-  `max_tokens`-vs-thinking-headroom issue documented in `llm-stack/ollama/CLAUDE.md`.
-- This is independent of the `local/*` LiteLLM aliases used by Prompter's own router — opencode
-  talks to Ollama directly and doesn't go through LiteLLM or the intent router.
+## More
+
+| Topic | Where |
+|-------|--------|
+| Architecture / phase contracts | `prompter_x_complete_spec.md`, `AGENTS.md` |
+| Ollama / model backends | [`docs/ollama-lan-backend-setup.md`](docs/ollama-lan-backend-setup.md) |
+| Qdrant / RAG | [Qdrant (RAG)](#qdrant-rag--optional) |
+| Settings UI | Web → ⚙ (models, router, infra); secrets stay in `.env` |
+| API surface | `/docs` while the server is running |
+| Phase handoffs / known bugs | `docs/phase1-*.md` |
+
+LM Studio is removed; leftover `LMSTUDIO_*` env vars are no-ops.
 
 ## License
 

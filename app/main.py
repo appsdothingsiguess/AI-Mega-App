@@ -40,6 +40,7 @@ from app.schemas import (
     ChatStreamRequest,
     DocFileInfo,
     InstructionsResponse,
+    OllamaModelsResponse,
     InstructionsUpdate,
     ProjectCreate,
     ProjectDetail,
@@ -52,6 +53,16 @@ from app.schemas import (
     ThreadCreate,
     ThreadRename,
     ThreadSummary,
+    ToolsListResponse,
+)
+
+# Stable tool ids used by router rules / classifier (see settings classifier prompt).
+KNOWN_ROUTER_TOOLS: tuple[str, ...] = (
+    "web_search",
+    "bash",
+    "pdf_gen",
+    "file_ops",
+    "vision",
 )
 
 # Apply local settings overrides before the first get_settings() call.
@@ -414,6 +425,29 @@ async def api_debug_turns() -> JSONResponse:
 # ---------------------------------------------------------------------------
 # Settings
 # ---------------------------------------------------------------------------
+
+@app.get("/ollama/models", response_model=OllamaModelsResponse)
+async def api_ollama_models() -> OllamaModelsResponse:
+    settings, _, _ = _services()
+    try:
+        async with httpx.AsyncClient(timeout=3) as client:
+            resp = await client.get(f"{settings.ollama.base_url.rstrip('/')}/api/tags")
+            resp.raise_for_status()
+            data = resp.json()
+            models = [
+                str(entry.get("name", ""))
+                for entry in data.get("models", [])
+                if entry.get("name")
+            ]
+            return OllamaModelsResponse(reachable=True, models=models)
+    except Exception:
+        return OllamaModelsResponse(reachable=False, models=[])
+
+
+@app.get("/tools", response_model=ToolsListResponse)
+def api_list_tools() -> ToolsListResponse:
+    return ToolsListResponse(tools=list(KNOWN_ROUTER_TOOLS))
+
 
 @app.get("/settings", response_model=SettingsSnapshot)
 def api_get_settings() -> SettingsSnapshot:
@@ -817,20 +851,35 @@ def _register_spa() -> None:
     if assets_dir.is_dir():
         app.mount("/assets", StaticFiles(directory=assets_dir), name="spa-assets")
 
+    _SPA_NO_CACHE = {
+        "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
+        "Pragma": "no-cache",
+    }
+
     @app.get("/", include_in_schema=False)
     def spa_index() -> FileResponse:
-        return FileResponse(_WEB_DIST / "index.html")
+        # index.html must not be cached — it points at content-hashed asset URLs.
+        return FileResponse(_WEB_DIST / "index.html", headers=_SPA_NO_CACHE)
 
     @app.get("/{spa_path:path}", include_in_schema=False)
     def spa_path(spa_path: str) -> FileResponse:
         # Never serve the SPA for API paths (avoids swallowing /settings etc.)
         root = spa_path.split("/", 1)[0]
-        if root in {"health", "settings", "projects", "docs", "openapi.json", "api"}:
+        if root in {
+            "health",
+            "settings",
+            "projects",
+            "docs",
+            "openapi.json",
+            "api",
+            "ollama",
+            "tools",
+        }:
             raise HTTPException(status_code=404, detail="Not Found")
         candidate = _WEB_DIST / spa_path
         if candidate.is_file():
             return FileResponse(candidate)
-        return FileResponse(_WEB_DIST / "index.html")
+        return FileResponse(_WEB_DIST / "index.html", headers=_SPA_NO_CACHE)
 
 
 _register_spa()
@@ -1067,7 +1116,7 @@ def run_cli(argv: list[str] | None = None) -> int:
 
                 def _open_browser() -> None:
                     time.sleep(1.5)
-                    webbrowser.open("http://localhost:5173/")
+                    webbrowser.open(f"http://{host}:{port}/")
 
                 threading.Thread(target=_open_browser, daemon=True).start()
 
