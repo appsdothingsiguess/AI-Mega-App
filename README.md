@@ -1,6 +1,12 @@
 # Prompter
 
-Local **project assistant** inspired by Claude Projects: persistent instructions, ingested project files, per-thread chat history, and retrieval-augmented prompts — all backed by **LM Studio** on your machine (no cloud APIs).
+Local **project assistant** inspired by Claude Projects: persistent instructions, ingested project files, per-thread chat history, and retrieval-augmented prompts. Model calls are routed through a **hybrid intent router** (keyword rules → classifier fallback) that dispatches each message to one of 9 intents (`general_chat`, `web_search`, `deep_research`, `coding_basic`, `coding_advanced`, `bash`, `pdf_gen`, `file_ops`, `vision`), each mapped to a model alias resolved via **LiteLLM**.
+
+- **Local models** run on **Ollama**, served from a dedicated RTX 3090 box on the LAN (`llm-stack/ollama`, `http://192.168.0.240:11434`) — see `litellm_config.yaml` for the alias → tag mapping (e.g. `local/qwen3-8b` → `ollama_chat/qwen3:8b-32k`).
+- **Remote models** (`remote/deepseek-v4-pro`, `remote/kimi-k2-6`) go through **OpenCode Go** (`OPENCODE_API_KEY` required).
+- The classifier itself (`ollama/qwen2.5:1.5b-32k`) runs CPU-only on the Ollama box (`num_gpu:0`) so it never competes with task models for VRAM.
+
+> **LM Studio support has been removed.** Earlier versions of this app talked to a local LM Studio server; that code path was deleted (see git history). The `LMSTUDIO_*` variables still in `.env.example` are legacy/no-ops kept only for backward-compat env loading — don't expect them to do anything.
 
 ---
 
@@ -8,14 +14,11 @@ Local **project assistant** inspired by Claude Projects: persistent instructions
 
 Follow these steps once. After that, use the [Creating a project](#creating-a-project) workflow and [CLI](#cli-usage) for day-to-day use.
 
-### 1. Install LM Studio and load a model
+### 1. Point at your model backends
 
-1. Install [LM Studio](https://lmstudio.ai/).
-2. Download and **load** a chat model (default in this app: **`gemma-4-e4b-it`**).
-3. Start the **local server** (Developer / Local Server) on port **1234** (default).
-4. Note the **exact model id** shown in LM Studio (e.g. `google/gemma-4-e4b-it`). You may need to put that in `.env` if health checks fail.
-
-The app talks to LM Studio at `http://localhost:1234`. Nothing is sent to the cloud.
+1. **Local models**: confirm the Ollama box (`llm-stack/ollama`) is running and reachable on the LAN — `curl http://192.168.0.240:11434/api/tags`. `litellm_config.yaml` already points `local/*` aliases at it; edit the `api_base` there if your box's IP differs.
+2. **Remote models**: set `OPENCODE_API_KEY` in `.env` to use `remote/deepseek-v4-pro` and `remote/kimi-k2-6`.
+3. **Deep research**: set `TAVILY_API_KEY` in `.env` if you want the `deep_research` intent's web-search provider (Tavily) enabled.
 
 ### 2. Install Python
 
@@ -77,45 +80,31 @@ copy .env.example .env
 
 | Variable | Default | What it does |
 |----------|---------|----------------|
-| `LMSTUDIO_MODE` | `llm` | `llm` = native LM Studio API (`/api/v1/*`). `rest` = OpenAI-compatible (`/v1/chat/completions`). |
-| `LMSTUDIO_BASE_URL` | `http://localhost:1234` | LM Studio server URL |
-| `LMSTUDIO_MODEL` | `gemma-4-e4b-it` | Model name or suffix to match loaded model |
-| `LMSTUDIO_API_TOKEN` | *(empty)* | Bearer token if LM Studio auth is enabled |
-| `LMSTUDIO_VISION_MODEL` | *(empty)* | Optional vision model for image paste; defaults to `LMSTUDIO_MODEL` |
-| `LMSTUDIO_SUPPORTS_VISION` | `auto` | `auto`, `true`, or `false` — whether Ctrl+V images go to multimodal API |
-| `PROMPTER_PASTE_DEBUG` | *(empty)* | Set `1` to log clipboard/paste branches on stderr |
+| `OPENCODE_API_KEY` | *(empty)* | Required for `remote/deepseek-v4-pro` and `remote/kimi-k2-6` (OpenCode Go) |
+| `TAVILY_API_KEY` | *(empty)* | Required if `deep_research`'s search provider (Tavily) is used |
+| `SETTINGS_JSON_PATH` | `./settings.json` | Structured settings overlay (router rules, model aliases, etc.) |
+| `LITELLM_CONFIG_PATH` | `./litellm_config.yaml` | Alias → provider/model mapping consumed by `app/litellm_resolver.py` |
 | `PROJECTS_DIR` | `./projects` | Root folder for all projects (filesystem-first) |
 | `DATA_DIR` | `./data` | Temp uploads; legacy projects may still live under `data/projects/` |
 | `DEBUG_PROMPTS` | `false` | Set `true` to print assembled prompts to stderr |
 
-**Common fix:** if health check says the model is not loaded, set `LMSTUDIO_MODEL` to the exact id from LM Studio, for example:
+`LMSTUDIO_*` vars are still read for backward compatibility but no longer do anything — LM Studio support was removed.
 
-```env
-LMSTUDIO_MODEL=google/gemma-4-e4b-it
-```
-
-**Switch to REST fallback** (OpenAI-compatible endpoint):
-
-```env
-LMSTUDIO_MODE=rest
-```
-
-### 6. Verify LM Studio connection
-
-With LM Studio running and the model loaded:
+### 6. Verify the backend connection
 
 ```bash
 python -m app.main health
+# or, with the API server running:
+curl http://127.0.0.1:8000/health
 ```
 
-You want `ok=True` and `model_loaded=True`. If not:
+`/health` checks reachability of the configured model backends (Ollama LAN box + OpenCode Go, per `litellm_config.yaml`). If it fails:
 
 | Symptom | What to try |
 |---------|-------------|
-| Connection refused | Start LM Studio local server on port 1234 |
-| Model not loaded | Load the model in LM Studio before chatting |
-| Wrong model name | Set `LMSTUDIO_MODEL` to the exact loaded id |
-| Native API issues | Set `LMSTUDIO_MODE=rest` in `.env` |
+| Local models unreachable | Confirm the Ollama box is up: `curl http://192.168.0.240:11434/api/tags` (see `llm-stack/ollama/CLAUDE.md`) |
+| Remote models unreachable | Check `OPENCODE_API_KEY` is set and valid |
+| Wrong model alias resolved | Check `litellm_config.yaml` and `ModelsConfig` intent mappings agree |
 
 ### 7. Try the sample project (optional)
 
@@ -201,7 +190,7 @@ Prompter is **filesystem-first**: each project is a normal folder you can create
    projects\my-research\docs\
    ```
 
-4. **Chat** — syncs `docs/` automatically, then talks to LM Studio:
+4. **Chat** — syncs `docs/` automatically, then routes your message through the intent router to the right model:
 
    ```bash
    python -m app.main chat my-research
@@ -298,14 +287,7 @@ pip install -e ".[windows]"
 
 Uses **Pillow** + **pywin32** (`CF_HDROP`, `ImageGrab`). Text-only fallback uses **pyperclip** if win32 is unavailable.
 
-**Vision models:** With a vision-capable model loaded in LM Studio, set for example:
-
-```env
-LMSTUDIO_VISION_MODEL=your-vision-model-id
-LMSTUDIO_SUPPORTS_VISION=true
-```
-
-Images pasted with Ctrl+V are sent as multimodal `input` to `/api/v1/chat`. On a **text-only** model (default `gemma-4-e4b-it`), images are copied into `docs/`, synced for RAG, and you get a short notice to load a vision model for direct image Q&A.
+**Vision models:** the `vision` intent routes to `local/gemma4-12b` (`gemma4:12b-32k` on the Ollama box) by default — see `VisionSettings` in `app/config.py`. Images pasted with Ctrl+V are sent as multimodal input when the resolved model supports vision; otherwise they're copied into `docs/` and synced for RAG.
 
 **Debugging paste:** `PROMPTER_PASTE_DEBUG=1` logs branches such as `ctrl_v: branch=text`, `ctrl_v_clipboard`, `burst_feed`, `bracketed`.
 
@@ -327,7 +309,7 @@ Open `http://127.0.0.1:8000/docs` for interactive Swagger UI.
 
 | Method | Path | Purpose |
 |--------|------|---------|
-| GET | `/health` | LM Studio + model status |
+| GET | `/health` | Model backend (Ollama/OpenCode Go) reachability status |
 | POST | `/projects` | Create project (writes `instructions.md`) |
 | GET | `/projects` | List projects |
 | GET | `/projects/{project_id}` | Project detail (`instructions_path`, `docs_path`) |
@@ -355,9 +337,10 @@ curl -X POST http://127.0.0.1:8000/projects \
 2. **Instructions** come from `instructions.md` in each project folder.
 3. **Documents** in `docs/` are scanned on `sync` and before each chat message; only new or changed files are re-ingested (mtime + size).
 4. On each **chat message**, relevant chunks are retrieved (lexical search in v1) and combined with instructions and thread history.
-5. The assembled prompt is sent to **LM Studio** via the configured mode (`llm` or `rest`).
+5. The message is routed through `HybridRouter` (`app/router.py`): keyword rules first (`RouterSettings.rules`, confidence 1.0, no LLM call), then the classifier (`ollama/qwen2.5:1.5b-32k`, CPU-only, 30s timeout, falls back to `general_chat` on timeout/failure) for one of 9 intents.
+6. The resolved intent's model alias (`ModelsConfig`) is resolved to real provider params via `app/litellm_resolver.py` + `litellm_config.yaml`, then dispatched through LiteLLM to either the Ollama LAN box (local models) or OpenCode Go (remote models).
 
-Set `DEBUG_PROMPTS=true` to see the full payload sent to the model.
+Set `DEBUG_PROMPTS=true` to see the full assembled prompt sent to the model.
 
 ### RAG (v1 vs future)
 
@@ -374,17 +357,19 @@ Set `DEBUG_PROMPTS=true` to see the full payload sent to the model.
 ```mermaid
 flowchart LR
   CLI[CLI / FastAPI] --> PM[project_manager]
-  CLI --> CS[chat_service]
-  CS --> RAG[rag.py]
-  CS --> LM[lmstudio_client]
+  CLI --> CO[chat_orchestrator]
+  CO --> RAG[rag.py]
+  CO --> RT[router.py]
+  RT --> LR[litellm_resolver]
   PM --> FS[(projects/id)]
   RAG --> FS
-  LM --> LMS[LM Studio :1234]
+  LR --> OL[Ollama :: RTX 3090 LAN box]
+  LR --> OC[OpenCode Go]
 ```
 
 ## Web UI
 
-Prompter includes a dark, LM Studio-inspired web interface with NotebookLM-style source management.
+Prompter includes a dark, source-management-focused web interface with NotebookLM-style source management.
 
 ### One-click start (Windows)
 
@@ -393,7 +378,7 @@ Double-click **`Start Prompter.bat`** in the repo root.
 What it does:
 1. Creates a `.venv` if missing and installs dependencies
 2. Builds the web UI if `web/dist/` is missing (requires Node.js)
-3. Warns if LM Studio is not running (non-blocking)
+3. Warns if the configured model backends aren't reachable (non-blocking)
 4. Starts the server on `http://127.0.0.1:8000`
 5. Opens your browser automatically
 
@@ -431,7 +416,7 @@ python -m app.main serve --port 9000   # custom port
 │  ☑ file2     │ [composer]             │                 │
 │ [+ Add]      │ Using 2 sources        │ [⚙ Settings]   │
 └──────────────┴────────────────────────┴─────────────────┘
-│ LM Studio: gemma-4-e4b-it ● loaded                      │
+│ Model: <resolved intent model> ● loaded                 │
 └──────────────────────────────────────────────────────────┘
 ```
 
@@ -448,15 +433,18 @@ Enabled sources are saved to `projects/{id}/.prompter/sources.json`. Empty list 
 
 ### Settings modal (⚙)
 
-Accessible from the bottom of the right panel. Sections:
+Accessible from the bottom of the right panel. Tabs:
 
-| Section | Fields |
-|---------|--------|
-| LM Studio | Server URL, mode (llm/rest), model name, vision model, vision support |
-| RAG | Top-K results, chunk size, chunk overlap |
-| Advanced | Debug prompts toggle, projects directory (read-only) |
+| Tab | Fields |
+|-----|--------|
+| **Models** | Model alias per intent (`general_chat`, `web_search`, `deep_research`, `coding_basic`, `coding_advanced`, `bash`, `pdf_gen`, `file_ops`, `vision`), local/remote vision model |
+| **Router** | Classifier model, keyword-rules toggle and editor (pattern → intent → tools) |
+| **Embedding** | Embedding model, max tokens, chunk size/overlap, RAG top-K |
+| **Search** | Web-search / deep-research provider, Tavily API key |
+| **Infrastructure** | Ollama base URL, keep-alive, model scheduler toggle, Qdrant URL, OpenCode Go base URL/enabled/API key |
+| **Logging / Debug** | Debug prompts toggle, projects directory (read-only) |
 
-Settings are saved to `data/settings.local.json` and override `.env` values (except secrets like `LMSTUDIO_API_TOKEN` which stay in `.env`).
+Settings are saved to `settings.json` (structured overlay) and override defaults from `app/config.py`; secrets like `OPENCODE_API_KEY`/`TAVILY_API_KEY` stay in `.env`.
 
 ### Building the frontend manually
 
@@ -475,12 +463,17 @@ npm run build
 Prompter/
 ├── app/
 │   ├── main.py              # CLI + FastAPI (all API endpoints)
-│   ├── config.py            # Settings from .env
-│   ├── settings_store.py    # Layered settings (local.json overlay)
-│   ├── lmstudio_client.py   # llm + rest adapters
+│   ├── config.py            # Settings from .env + settings.json (ModelsConfig, RouterSettings, ...)
+│   ├── settings_store.py    # Layered settings (settings.json overlay)
+│   ├── config_validation.py # Startup validation of settings/litellm config
+│   ├── router.py            # HybridRouter: keyword rules -> classifier fallback
+│   ├── litellm_resolver.py  # Resolves model aliases to LiteLLM completion kwargs
+│   ├── chat_orchestrator.py # Prompt assembly + chat + tool loop
+│   ├── model_scheduler.py   # Ollama keep-alive/scheduling
+│   ├── adapters/            # classifier_qwen, embedding_nomic, qdrant_store, search_ddg
+│   ├── tools/                # bash, pdf_gen, file_ops, vision, web_search tool implementations
 │   ├── project_manager.py   # Projects on disk + sources management
 │   ├── rag.py               # Ingest + retrieve chunks (source filter)
-│   ├── chat_service.py      # Prompt assembly + chat
 │   ├── schemas.py           # Pydantic models (incl. Sources, Settings)
 │   ├── terminal_input.py    # CLI chat input (multiline, Ctrl+V, UserTurn)
 │   ├── clipboard_paste.py   # OS clipboard (text, image, file paths)
@@ -491,7 +484,7 @@ Prompter/
 │   ├── src/
 │   │   ├── App.tsx          # 3-column layout
 │   │   ├── api/client.ts    # Typed API client
-│   │   ├── components/      # UI components
+│   │   ├── components/      # UI components (incl. SettingsModal, ModelSelector)
 │   │   └── styles/theme.css # Dark theme CSS variables
 │   ├── dist/                # Built output (served at /)
 │   └── package.json
@@ -500,21 +493,20 @@ Prompter/
 ├── Start Prompter.bat        # Windows one-click launcher
 ├── projects/                # Your projects (filesystem-first)
 │   └── sample-project/
-├── data/
-│   └── settings.local.json  # Web UI settings overrides
+├── litellm_config.yaml      # Model alias -> provider/model + api_base mapping
+├── settings.json            # Structured settings overlay (optional, gitignored)
 ├── tests/
 ├── .env.example
 ├── pyproject.toml
 └── README.md
 ```
 
-## LM Studio integration notes
+## Model backend integration notes
 
-- **Primary (`LMSTUDIO_MODE=llm`)**: `GET /api/v1/models`, `POST /api/v1/chat`. See [LM Studio REST docs](https://lmstudio.ai/docs/developer/rest).
-- **Fallback (`LMSTUDIO_MODE=rest`)**: `GET /v1/models`, `POST /v1/chat/completions` (OpenAI-compatible).
-- Model matching is fuzzy by suffix (e.g. `gemma-4-e4b-it` can match `google/gemma-4-e4b-it`). Prefer an exact id in `.env` if health checks are flaky.
-
-Adapter logic lives in `app/lmstudio_client.py` so you can adjust API details without rewriting the rest of the app.
+- **Local models**: served by **Ollama** on a dedicated RTX 3090 box on the LAN (`llm-stack/ollama` — see that repo's `CLAUDE.md`), reached via LiteLLM's `ollama_chat/<tag>` provider (not bare `ollama/`) to preserve tool-calling behavior. `api_base` for each entry is set in `litellm_config.yaml`.
+- **Remote models**: routed through **OpenCode Go** (`https://opencode.ai/zen/go/v1`, OpenAI-compatible), requires `OPENCODE_API_KEY`.
+- Alias resolution logic lives in `app/litellm_resolver.py`; edit `litellm_config.yaml` to add/change model aliases without touching app code.
+- Routing/classifier logic lives in `app/router.py` and `RouterSettings` in `app/config.py`.
 
 ## License
 
