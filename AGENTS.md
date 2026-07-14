@@ -71,6 +71,16 @@ python -m pytest -q --basetemp=.pytest-tmp/run
 
 **Parallel builders:** one workspace folder = one branch. Other tasks run in other folders (user-created worktrees). Never `git checkout` another task branch in a shared folder.
 
+### Multi-agent per feature
+
+A **feature** may declare 2+ parallel builders when the user prompt (or a wave table under File ownership) lists **non-overlapping FILE SCOPEs**. Coordinators must split only on non-overlapping paths.
+
+Same rules as today: one worktree folder = one branch; never checkout another task’s branch; fork from `main` only; no `git add .`.
+
+**Hard rule:** never assign two agents the same path in one wave. Single-file changes get one owner; other agents take other files (docs, tests, backend).
+
+Prompt contract: each agent’s message must still include branch + FILE SCOPE + acceptance; missing → ask once.
+
 ## Current phase
 
 **Phase 1: Core Platform** — message → route → streamed response; web search toggleable.
@@ -104,3 +114,10 @@ Split by concern — one branch each; minimal diffs on shared files (`App.tsx`, 
 | UI prefs `localStorage` | `App.tsx` |
 | `enabled_tools` backend | `app/schemas.py`, `app/chat_orchestrator.py`, tests |
 | Model dropdown | `ModelSelector.tsx`, adapters |
+
+### Settings UI polish (wave)
+
+| Owner | Files |
+|-------|-------|
+| Docs | `AGENTS.md` |
+| Settings UI | `web/src/components/SettingsModal.tsx`, `web/dist/` (rebuild) |
