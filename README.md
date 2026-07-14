@@ -264,7 +264,7 @@ settings.json         # runtime overlay (gitignored; created on first run)
 docs/                 # handoffs & backend notes
 ```
 
-Intent labels: `general_chat` · `web_search` · `deep_research` · `coding_basic` · `coding_advanced` · `bash` · `pdf_gen` · `file_ops` · `vision`
+Intent labels: `general_chat` · `web_search` · `deep_research` · `coding_basic` · `coding_advanced` · `bash` · `pdf_gen` · `file_ops` · `vision` · `reasoning_medium` · `reasoning_heavy`
 
 ---
 

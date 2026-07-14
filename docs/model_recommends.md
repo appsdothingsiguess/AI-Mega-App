@@ -43,6 +43,8 @@ VRAM figures, and prior benchmark history.
 | Medium | *(same — no smaller reliable option)* | `deepseek-r1:8b-16k` **fails real debugging tasks**, burns entire 14.8k completion budget mid-reasoning, returns empty. Avoid for anything beyond trivial reasoning |
 | Heavy | `deepseek-r1:32b-16k` | Correctly fixed all 4 planted bugs incl. the expert-only race condition; slower (~32-35 tok/s) but the only one confirmed reliable on hard multi-bug debugging |
 
+Router intents `reasoning_medium` / `reasoning_heavy` map to `local/reasoning-*` tiers and may use tools `web_search`, `bash`, `pdf_gen`, `file_ops` (not `vision`).
+
 ### 6. Vision
 | Tier | Model | Why |
 |---|---|---|

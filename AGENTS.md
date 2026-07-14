@@ -24,7 +24,7 @@ Python 3.12, FastAPI (async), React 18 / Vite / TypeScript, LiteLLM, Ollama (Doc
 - `app/protocols.py` — service Protocol interfaces
 - `app/types.py` — shared types (SearchResult, ClassifierOutput, RouteSource, RouteResult, ToolCallDelta)
 - `app/project_manager.py` — project CRUD, threads, filesystem structure
-- Intent labels: `general_chat | web_search | deep_research | coding_basic | coding_advanced | bash | pdf_gen | file_ops | vision`
+- Intent labels: `general_chat | web_search | deep_research | coding_basic | coding_advanced | bash | pdf_gen | file_ops | vision | reasoning_medium | reasoning_heavy`
 
 ## Config architecture
 
@@ -121,3 +121,11 @@ Split by concern — one branch each; minimal diffs on shared files (`App.tsx`, 
 |-------|-------|
 | Docs | `AGENTS.md` |
 | Settings UI | `web/src/components/SettingsModal.tsx`, `web/dist/` (rebuild) |
+
+### Wire reasoning intents (wave)
+
+| Owner | Files |
+|-------|-------|
+| Docs | `AGENTS.md`, `README.md`, `docs/model_recommends.md` |
+| Backend | `app/config.py`, `tests/test_router.py`, `tests/test_settings_store.py`, `tests/test_model_tiers_config.py` |
+| Frontend | `web/src/api/client.ts`, `web/src/components/SettingsModal.tsx`, `web/src/components/ModelSelector.tsx`, `web/dist/` (rebuild) |
