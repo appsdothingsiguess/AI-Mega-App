@@ -508,6 +508,142 @@ Prompter/
 - Alias resolution logic lives in `app/litellm_resolver.py`; edit `litellm_config.yaml` to add/change model aliases without touching app code.
 - Routing/classifier logic lives in `app/router.py` and `RouterSettings` in `app/config.py`.
 
+## Connecting to the Ollama box
+
+There are two separate connectivity paths to the Ollama box, depending on which client you're
+configuring:
+
+- **Prompter itself** — already wired up today via LiteLLM. This is what handles chat, RAG, and
+  the intent-routed model calls described earlier in this README.
+- **opencode CLI** — a planned/future addition for the programming portion of the workflow, not
+  yet wired into Prompter's router. Configured independently of Prompter, talking to Ollama
+  directly.
+
+### In Prompter (current)
+
+Prompter connects to the Ollama box through `litellm_config.yaml`, not through any per-client
+config file — this is already set up, but here's how to verify or change it:
+
+1. **Check the configured endpoint**:
+
+   ```bash
+   grep -A2 "api_base" litellm_config.yaml
+   ```
+
+   Local aliases (`local/*`) should point `api_base` at `http://192.168.0.240:11434`. Edit this
+   file directly if the box's IP or port ever changes.
+
+2. **Verify the box is reachable** from wherever Prompter runs:
+
+   ```bash
+   curl http://192.168.0.240:11434/api/tags
+   ```
+
+   If this fails, Prompter's `/health` endpoint will also report local models as unreachable —
+   fix connectivity here first.
+
+3. **Verify from inside Prompter**:
+
+   ```bash
+   python -m app.main health
+   # or, with the server running:
+   curl http://127.0.0.1:8000/health
+   ```
+
+4. **Adjust without editing files**: the Settings modal's **Infrastructure** tab (⚙ → Infrastructure)
+   exposes the Ollama base URL, keep-alive, and model scheduler toggle at runtime — writes to
+   `settings.json`, overriding `litellm_config.yaml` defaults. Useful for pointing at a different
+   box (e.g. testing) without touching tracked config.
+
+No API key is required — the Ollama box doesn't enforce auth on the LAN.
+
+### In opencode CLI (planned/future)
+
+For the programming/coding portion of the workflow, [opencode](https://opencode.ai) (the terminal
+coding agent CLI — separate from "OpenCode Go", the hosted remote-model API used elsewhere in this
+README) can talk directly to the Ollama box instead of a hosted provider. Ollama exposes an
+OpenAI-compatible endpoint at `/v1`, which opencode supports as a custom provider. **This is not
+yet integrated with Prompter's router** — it's a standalone CLI workflow for when opencode
+development starts.
+
+#### 1. Install opencode
+
+```bash
+curl -fsSL https://opencode.ai/install | bash
+```
+
+Or via npm: `npm install -g opencode-ai`. Verify with `opencode --version`.
+
+#### 2. Point opencode at the Ollama box
+
+Add a custom provider in opencode's config (`~/.config/opencode/config.json`, or `opencode.json`
+in the project root):
+
+```json
+{
+  "provider": {
+    "ollama": {
+      "npm": "@ai-sdk/openai-compatible",
+      "options": {
+        "baseURL": "http://192.168.0.240:11434/v1"
+      },
+      "models": {
+        "qwen3-coder:30b-16k": {},
+        "qwen3:8b-32k": {},
+        "deepseek-r1:32b-16k": {}
+      }
+    }
+  }
+}
+```
+
+- `baseURL` must include the `/v1` suffix — that's Ollama's OpenAI-compatible surface, not the
+  native `/api` one.
+- List only the tags you actually want opencode to offer; any tag from `ollama list` on the box
+  works (see `llm-stack/ollama/CLAUDE.md` for the full table). `qwen3-coder:30b-16k` is the
+  coding-specific pick.
+- No API key is needed — Ollama on this LAN box doesn't require auth. If opencode insists on a
+  non-empty key field, put any placeholder string in it (e.g. `"apiKey": "ollama"`); it's ignored.
+
+#### 3. Select the model
+
+```bash
+opencode
+# then inside opencode:
+/models
+# pick ollama/qwen3-coder:30b-16k (or whichever tag you configured)
+```
+
+Or set a default in config:
+
+```json
+{
+  "model": "ollama/qwen3-coder:30b-16k"
+}
+```
+
+#### 4. Verify it's reachable
+
+Before running opencode, confirm the box responds:
+
+```bash
+curl -s http://192.168.0.240:11434/v1/models | jq
+```
+
+If that fails, opencode will fail the same way — check the Ollama box is up (see
+`llm-stack/ollama/CLAUDE.md`, "Starting Ollama") before debugging opencode itself.
+
+### Notes
+
+- The Ollama box is single-GPU (RTX 3090, 24GB) and swaps models in/out on demand — the first
+  request after a switch will be slower while the model loads (see the auto-load/unload behavior
+  described earlier in this README).
+- `qwen3-coder:30b-16k` and other thinking-capable tags may emit `reasoning_content`/thinking
+  tokens before code — if opencode's output looks truncated, it's likely the same
+  `max_tokens`-vs-thinking-headroom issue documented in `llm-stack/ollama/CLAUDE.md`.
+- This is independent of the `local/*` LiteLLM aliases used by Prompter's own router — opencode
+  talks to Ollama directly and doesn't go through LiteLLM or the intent router.
+
 ## License
 
 MIT (add a `LICENSE` file if you distribute this).
