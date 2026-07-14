@@ -87,10 +87,12 @@ DEFAULT_ASSISTANT_PROMPT = """You are Prompter X, a personal AI assistant for th
 """
 
 DEFAULT_OLLAMA_MODEL_NAMES: dict[str, str] = {
-    "local/qwen3-8b": "qwen3:8b",
-    "local/qwen2.5-coder-7b": "qwen2.5-coder:7b",
-    "local/qwen2.5-vl-3b": "qwen2.5-vl-3b",
-    "local/deepseek-r1-8b": "deepseek-r1:8b",
+    "local/qwen3-8b": "qwen3:8b-32k",
+    "local/qwen2.5-coder-7b": "qwen2.5-coder:7b-32k",
+    "local/qwen3-coder-30b": "qwen3-coder:30b-16k",
+    "local/deepseek-r1-32b": "deepseek-r1:32b-16k",
+    "local/gemma4-12b": "gemma4:12b-32k",
+    "local/deepseek-r1-8b": "deepseek-r1:8b-32k",
 }
 
 INTENT_FIELDS = (
@@ -121,15 +123,15 @@ def _deep_merge(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any
 
 
 class ModelsConfig(BaseModel):
-    general_chat: str = "remote/deepseek-v4-pro"
-    web_search: str = "remote/kimi-k2-6"
-    deep_research: str = "remote/kimi-k2-6"
+    general_chat: str = "local/qwen3-8b"
+    web_search: str = "local/qwen3-8b"
+    deep_research: str = "local/deepseek-r1-32b"
     coding_basic: str = "local/qwen2.5-coder-7b"
-    coding_advanced: str = "remote/deepseek-v4-pro"
+    coding_advanced: str = "local/qwen3-coder-30b"
     bash: str = "local/qwen3-8b"
     pdf_gen: str = "local/qwen3-8b"
     file_ops: str = "local/qwen3-8b"
-    vision: str = "local/qwen2.5-vl-3b"
+    vision: str = "local/gemma4-12b"
 
     def items(self) -> list[tuple[str, str]]:
         return [(name, getattr(self, name)) for name in INTENT_FIELDS]
@@ -142,13 +144,13 @@ class ModelsConfig(BaseModel):
 
 
 class OllamaSettings(BaseModel):
-    base_url: str = "http://localhost:11434"
+    base_url: str = "http://192.168.0.240:11434"
     keep_alive: int = -1
     scheduler_enabled: bool = True
 
 
 class VisionSettings(BaseModel):
-    local_model: str = "ollama/qwen2.5-vl-3b"
+    local_model: str = "ollama/gemma4:12b-32k"
     remote_model: str = ""
 
 
@@ -224,7 +226,7 @@ def _default_routing_rules() -> list[RoutingRule]:
 
 
 class RouterSettings(BaseModel):
-    classifier: str = "ollama/qwen2.5:1.5b"
+    classifier: str = "ollama/qwen2.5:1.5b-32k"
     classifier_prompt: str = DEFAULT_CLASSIFIER_PROMPT
     rules_enabled: bool = True
     rules: list[RoutingRule] = Field(default_factory=_default_routing_rules)

@@ -35,6 +35,7 @@ class QwenClassifierAdapter(Classifier):
                 "top_p": 0.8,
                 "repeat_penalty": 1.05,
                 "num_predict": 96,
+                "num_gpu": 0,
             },
         }
 

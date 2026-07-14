@@ -1,25 +1,39 @@
 # litellm_config.yaml
+# Local models are served by Ollama on the RTX 3090 box (llm-stack/ollama),
+# reachable on the LAN at 192.168.0.240:11434 (start.sh sets OLLAMA_HOST=0.0.0.0:11434).
+# Use the ollama_chat/ provider (not bare ollama/) — it uses the OpenAI-compatible
+# chat format, which is required to preserve tool-calling behavior.
 model_list:
-  # Local models (Ollama)
+  # Local models (Ollama, RTX 3090 @ 192.168.0.240)
   - model_name: local/qwen3-8b
     litellm_params:
-      model: ollama/qwen3:8b
-      api_base: http://localhost:11434
+      model: ollama_chat/qwen3:8b-32k
+      api_base: http://192.168.0.240:11434
 
   - model_name: local/qwen2.5-coder-7b
     litellm_params:
-      model: ollama/qwen2.5-coder:7b
-      api_base: http://localhost:11434
+      model: ollama_chat/qwen2.5-coder:7b-32k
+      api_base: http://192.168.0.240:11434
 
-  - model_name: local/qwen2.5-vl-3b
+  - model_name: local/qwen3-coder-30b
     litellm_params:
-      model: ollama/qwen2.5-vl-3b
-      api_base: http://localhost:11434
+      model: ollama_chat/qwen3-coder:30b-16k
+      api_base: http://192.168.0.240:11434
+
+  - model_name: local/deepseek-r1-32b
+    litellm_params:
+      model: ollama_chat/deepseek-r1:32b-16k
+      api_base: http://192.168.0.240:11434
+
+  - model_name: local/gemma4-12b
+    litellm_params:
+      model: ollama_chat/gemma4:12b-32k
+      api_base: http://192.168.0.240:11434
 
   - model_name: local/deepseek-r1-8b
     litellm_params:
-      model: ollama/deepseek-r1:8b
-      api_base: http://localhost:11434
+      model: ollama_chat/deepseek-r1:8b-32k
+      api_base: http://192.168.0.240:11434
 
   # Remote models (OpenCode Go — OpenAI-compatible chat/completions)
   # model_name = app alias (settings.json). litellm_params.model = OpenCode provider ID.
