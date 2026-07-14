@@ -13,23 +13,27 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 DEFAULT_CLASSIFIER_PROMPT = """You are an intent classifier. Output ONLY valid JSON: {"intent":"<intent>","model":"<model>","tools":[...]}.
 
-Intents: coding_basic, coding_advanced, vision, general_chat, web_search, deep_research, bash, pdf_gen, file_ops
+Intents: coding_basic, coding_advanced, vision, general_chat, web_search, deep_research, bash, pdf_gen, file_ops, reasoning_medium, reasoning_heavy
 
 Intent boundaries — apply before defaulting to general_chat:
 - web_search: ANY "look up"/"find out"/"search online"; current facts (weather, sports scores, showtimes, restaurants, prices); who is CEO/PM; news/headlines/guidelines. NOT vision (weather is web_search). NOT general_chat when internet lookup is needed.
-- deep_research: literature review, compile findings, summarize academic papers/studies, research brief/synthesis, analyze trends across sources. NOT general_chat. NOT web_search for single quick facts.
+- deep_research: literature review, compile findings, summarize academic papers/studies, research brief/synthesis, analyze trends across sources. NOT general_chat. NOT web_search for single quick facts. NOT reasoning_* when the goal is multi-source research synthesis.
+- reasoning_medium: puzzles, step-by-step solutions, "think through", moderate logic/math, multi-step plans. NOT coding_advanced (fix/refactor this code). NOT deep_research (multi-source synthesis). NOT web_search for a single quick fact.
+- reasoning_heavy: hard multi-constraint planning, deep root-cause analysis, expert-level reasoning beyond a single coding patch. NOT coding_advanced. NOT deep_research. NOT web_search for a single quick fact.
 - file_ops: find/locate/open/read/list/copy/move/delete LOCAL files/folders/repo/downloads — including "find the invoice PDF in downloads". Search codebase/project for text/function/TODO. NOT vision (disk search ≠ image OCR). NOT coding.
 - vision: user attached "this image/photo/screenshot/chart/diagram" for classify/identify/describe/OCR/read labels. NOT weather. NOT finding PDFs on disk.
 - pdf_gen: create/export/convert TO PDF — markdown, Word, images, presentation, repo docs. "Make a PDF research report" = pdf_gen (PDF is the deliverable). NOT deep_research when PDF output is requested.
 - general_chat: explain concepts, draft emails, advice, summarize/explain content FROM a named file (README.md, config.yaml) — understanding text, not filesystem ops. NOT file_ops when goal is explain/summarize meaning.
 
-Coding overrides boundaries: write/implement/create/add/scaffold NEW code = coding_basic. Fix/debug/review/add tests to THIS class/file/code = coding_advanced. NOT general_chat. NOT web_search unless user explicitly says look up/search online.
+Coding overrides boundaries: write/implement/create/add/scaffold NEW code = coding_basic. Fix/debug/review/add tests to THIS class/file/code = coding_advanced. NOT general_chat. NOT web_search unless user explicitly says look up/search online. NOT reasoning_* when the task is editing this codebase.
 
 Rules:
 - bash: Run/execute/test/start a terminal command or script (git, npm, pip, pytest, docker, python main.py, "run my script", "test on my pc"). Not writing code.
 - file_ops: filesystem operations on local paths — see boundaries above.
 - pdf_gen: output format is PDF; includes converting images into a single PDF.
 - deep_research: multi-source analytical reports — see boundaries above.
+- reasoning_medium: moderate multi-step reasoning — see boundaries above.
+- reasoning_heavy: hard multi-constraint / root-cause reasoning — see boundaries above.
 - web_search: live/current internet facts — see boundaries above.
 - vision: visual inspection of attached images — see boundaries above.
 - coding_basic: write/create/implement new self-contained code, scripts, functions, schemas, boilerplate, isolated endpoints/hooks, regex, migrations, or small utilities.
@@ -37,9 +41,9 @@ Rules:
 - general_chat: everything else — see boundaries above.
 
 TOOLS — exact values only. Valid tools: web_search, bash, pdf_gen, file_ops, vision. Never use intent/model names as tools.
-Tools map: coding_basic [] | coding_advanced [] | general_chat [] | web_search ["web_search"] | deep_research ["web_search"] | bash ["bash"] | pdf_gen ["pdf_gen"] | file_ops ["file_ops"] | vision ["vision"]
+Tools map: coding_basic [] | coding_advanced [] | general_chat [] | web_search ["web_search"] | deep_research ["web_search"] | bash ["bash"] | pdf_gen ["pdf_gen"] | file_ops ["file_ops"] | vision ["vision"] | reasoning_medium ["web_search","bash","pdf_gen","file_ops"] | reasoning_heavy ["web_search","bash","pdf_gen","file_ops"]
 
-Models (copy exactly): coding_basic local/qwen2.5-coder-7b | coding_advanced remote/deepseek-v4-pro | general_chat remote/deepseek-v4-pro | vision local/qwen2.5-vl-3b | web_search/deep_research remote/kimi-k2-6 | bash/pdf_gen/file_ops local/qwen3-8b
+Models (copy exactly): coding_basic local/qwen2.5-coder-7b | coding_advanced remote/deepseek-v4-pro | general_chat remote/deepseek-v4-pro | vision local/qwen2.5-vl-3b | web_search/deep_research remote/kimi-k2-6 | bash/pdf_gen/file_ops local/qwen3-8b | reasoning_medium local/reasoning-medium | reasoning_heavy local/reasoning-heavy
 
 Examples:
 User: Look up the CEO of OpenAI -> {"intent":"web_search","model":"remote/kimi-k2-6","tools":["web_search"]}
@@ -48,6 +52,11 @@ User: What's the weather like today? -> {"intent":"web_search","model":"remote/k
 User: Find the score of last night's Lakers game -> {"intent":"web_search","model":"remote/kimi-k2-6","tools":["web_search"]}
 User: Summarize recent papers on protein folding -> {"intent":"deep_research","model":"remote/kimi-k2-6","tools":["web_search"]}
 User: Literature review on federated learning privacy -> {"intent":"deep_research","model":"remote/kimi-k2-6","tools":["web_search"]}
+User: Think through this logic puzzle step by step -> {"intent":"reasoning_medium","model":"local/reasoning-medium","tools":["web_search","bash","pdf_gen","file_ops"]}
+User: Solve this puzzle about three switches and three bulbs -> {"intent":"reasoning_medium","model":"local/reasoning-medium","tools":["web_search","bash","pdf_gen","file_ops"]}
+User: Plan how to schedule these conflicting constraints -> {"intent":"reasoning_medium","model":"local/reasoning-medium","tools":["web_search","bash","pdf_gen","file_ops"]}
+User: Do a root cause analysis of this multi-system failure -> {"intent":"reasoning_heavy","model":"local/reasoning-heavy","tools":["web_search","bash","pdf_gen","file_ops"]}
+User: Deep reasoning on a complex multi-step plan with tradeoffs -> {"intent":"reasoning_heavy","model":"local/reasoning-heavy","tools":["web_search","bash","pdf_gen","file_ops"]}
 User: Make me a PDF research report on AI safety -> {"intent":"pdf_gen","model":"local/qwen3-8b","tools":["pdf_gen"]}
 User: Convert markdown README to PDF -> {"intent":"pdf_gen","model":"local/qwen3-8b","tools":["pdf_gen"]}
 User: Convert these images into a single PDF -> {"intent":"pdf_gen","model":"local/qwen3-8b","tools":["pdf_gen"]}
@@ -114,6 +123,8 @@ INTENT_FIELDS = (
     "pdf_gen",
     "file_ops",
     "vision",
+    "reasoning_medium",
+    "reasoning_heavy",
 )
 
 
@@ -141,6 +152,8 @@ class ModelsConfig(BaseModel):
     pdf_gen: str = "local/qwen3-8b"
     file_ops: str = "local/qwen3-8b"
     vision: str = "local/gemma4-12b"
+    reasoning_medium: str = "local/reasoning-medium"
+    reasoning_heavy: str = "local/reasoning-heavy"
 
     def items(self) -> list[tuple[str, str]]:
         return [(name, getattr(self, name)) for name in INTENT_FIELDS]
@@ -169,6 +182,8 @@ class RoutingRule(BaseModel):
     tools: list[str] = Field(default_factory=list)
 
 
+_REASONING_TOOLS = ["web_search", "bash", "pdf_gen", "file_ops"]
+
 DEFAULT_ROUTING_RULES: list[RoutingRule] = [
     RoutingRule(
         patterns=[
@@ -189,6 +204,25 @@ DEFAULT_ROUTING_RULES: list[RoutingRule] = [
         patterns=["deep research", "research report", "research and summarize"],
         intent="deep_research",
         tools=["web_search"],
+    ),
+    RoutingRule(
+        patterns=[
+            "step by step",
+            "think through",
+            "solve this puzzle",
+            "plan how to",
+        ],
+        intent="reasoning_medium",
+        tools=list(_REASONING_TOOLS),
+    ),
+    RoutingRule(
+        patterns=[
+            "deep reasoning",
+            "root cause analysis",
+            "complex multi-step plan",
+        ],
+        intent="reasoning_heavy",
+        tools=list(_REASONING_TOOLS),
     ),
     RoutingRule(
         patterns=[

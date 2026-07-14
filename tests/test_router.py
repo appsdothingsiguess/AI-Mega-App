@@ -7,9 +7,17 @@ from pathlib import Path
 
 import pytest
 
-from app.config import HealthSettings, RouterSettings, RoutingRule, Settings
+from app.config import (
+    DEFAULT_ROUTING_RULES,
+    HealthSettings,
+    RouterSettings,
+    RoutingRule,
+    Settings,
+)
 from app.router import HybridRouter
 from app.types import ClassifierOutput, RouteSource
+
+_REASONING_TOOLS = ["web_search", "bash", "pdf_gen", "file_ops"]
 
 
 class FakeClassifier:
@@ -60,6 +68,40 @@ async def test_keyword_hit_returns_keyword_route_without_classifier() -> None:
     assert result.intent == "web_search"
     assert result.tools == ["web_search"]
     assert result.confidence == 1.0
+    assert result.source is RouteSource.KEYWORD
+    assert classifier.calls == []
+
+
+@pytest.mark.asyncio
+async def test_keyword_reasoning_medium_includes_tools_excludes_vision() -> None:
+    settings = _settings(rules=list(DEFAULT_ROUTING_RULES))
+    classifier = FakeClassifier(
+        ClassifierOutput(intent="general_chat", tools=[], confidence=0.5)
+    )
+    router = HybridRouter(settings, classifier)
+
+    result = await router.route("Please think through this carefully")
+
+    assert result.intent == "reasoning_medium"
+    assert result.tools == _REASONING_TOOLS
+    assert "vision" not in result.tools
+    assert result.source is RouteSource.KEYWORD
+    assert classifier.calls == []
+
+
+@pytest.mark.asyncio
+async def test_keyword_reasoning_heavy_includes_tools_excludes_vision() -> None:
+    settings = _settings(rules=list(DEFAULT_ROUTING_RULES))
+    classifier = FakeClassifier(
+        ClassifierOutput(intent="general_chat", tools=[], confidence=0.5)
+    )
+    router = HybridRouter(settings, classifier)
+
+    result = await router.route("Need a root cause analysis of the outage")
+
+    assert result.intent == "reasoning_heavy"
+    assert result.tools == _REASONING_TOOLS
+    assert "vision" not in result.tools
     assert result.source is RouteSource.KEYWORD
     assert classifier.calls == []
 
@@ -160,19 +202,21 @@ def test_resolve_model_covers_all_intents(
     )
 
     expected = {
-        "general_chat": "remote/deepseek-v4-pro",
-        "web_search": "remote/kimi-k2-6",
-        "deep_research": "remote/kimi-k2-6",
+        "general_chat": "local/qwen3-8b",
+        "web_search": "local/qwen3-8b",
+        "deep_research": "local/deepseek-r1-32b",
         "coding_basic": "local/qwen2.5-coder-7b",
-        "coding_advanced": "remote/deepseek-v4-pro",
+        "coding_advanced": "local/qwen3-coder-30b",
         "bash": "local/qwen3-8b",
         "pdf_gen": "local/qwen3-8b",
         "file_ops": "local/qwen3-8b",
-        "vision": "local/qwen2.5-vl-3b",
+        "vision": "local/gemma4-12b",
+        "reasoning_medium": "local/reasoning-medium",
+        "reasoning_heavy": "local/reasoning-heavy",
     }
 
     assert {intent: router.resolve_model(intent) for intent in expected} == expected
-    assert router.resolve_model("unknown") == "remote/deepseek-v4-pro"
+    assert router.resolve_model("unknown") == "local/qwen3-8b"
 
 
 @pytest.mark.asyncio

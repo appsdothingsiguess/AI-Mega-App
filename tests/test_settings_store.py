@@ -39,7 +39,7 @@ def test_read_creates_defaults_when_missing(_isolated_settings: Path) -> None:
     data = read_settings()  # persists defaults on first read
     assert data["models"]["general_chat"] == "local/qwen3-8b"
     assert data["router"]["rules_enabled"] is True
-    assert len(data["router"]["rules"]) == 7
+    assert len(data["router"]["rules"]) == 9
     assert _isolated_settings.exists()
 
 
@@ -225,3 +225,32 @@ def test_load_settings_merges_new_tier_aliases_into_old_catalog(
         else:
             assert names[alias] == tag
     assert names["local/coding-light"] == ""
+
+
+def test_load_settings_merges_missing_reasoning_model_keys(
+    _isolated_settings: Path,
+) -> None:
+    """settings.json without reasoning_* intents still gets ModelsConfig defaults."""
+    _isolated_settings.write_text(
+        json.dumps(
+            {
+                "models": {
+                    "general_chat": "local/qwen3-8b",
+                    "web_search": "local/qwen3-8b",
+                    "deep_research": "local/deepseek-r1-32b",
+                    "coding_basic": "local/qwen2.5-coder-7b",
+                    "coding_advanced": "local/qwen3-coder-30b",
+                    "bash": "local/qwen3-8b",
+                    "pdf_gen": "local/qwen3-8b",
+                    "file_ops": "local/qwen3-8b",
+                    "vision": "local/gemma4-12b",
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    get_settings.cache_clear()
+    loaded = load_settings()
+    assert loaded["models"]["reasoning_medium"] == "local/reasoning-medium"
+    assert loaded["models"]["reasoning_heavy"] == "local/reasoning-heavy"
+    assert loaded["models"]["general_chat"] == "local/qwen3-8b"

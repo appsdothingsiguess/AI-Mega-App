@@ -27,3 +27,9 @@ def test_tier_aliases_are_not_models_config_fields() -> None:
     field_names = set(ModelsConfig.model_fields.keys())
     for alias in _TIER_ALIASES:
         assert alias not in field_names
+
+
+def test_models_config_reasoning_intent_defaults() -> None:
+    models = ModelsConfig()
+    assert models.reasoning_medium == "local/reasoning-medium"
+    assert models.reasoning_heavy == "local/reasoning-heavy"
