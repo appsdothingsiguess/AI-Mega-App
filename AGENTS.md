@@ -42,7 +42,7 @@ Python 3.12, FastAPI (async), React 18 / Vite / TypeScript, LiteLLM, Ollama (Doc
 
 The **user's message** supplies branch, FILE SCOPE, and acceptance. Wait for it before editing. If branch or scope is missing, ask once — do not guess.
 
-When the prompt includes **Workspace** / **worktree**, treat that folder as isolated: verify `git branch --show-current` matches the named branch; **do not `git checkout` other branches**.
+Parallel tasks use **`git worktree add`**, not `git checkout` / branch switching inside one Cursor window (that swaps the whole IDE checkout). Each worktree folder = one branch = one Cursor window/folder. The prompt must name **branch + absolute Workspace path** (the worktree root). Verify `git branch --show-current` matches and cwd is that folder; **never** `git checkout` / `git switch` to another task branch.
 
 ## Key conventions
 
@@ -69,13 +69,19 @@ python -m pytest -q --basetemp=.pytest-tmp/run
 | **Builder** | Default | Plan: pre-flight **first**, pytest+commit **last** (`008`). Stay in FILE SCOPE. One branch per worktree. |
 | **Integrator** | User says integrator / audit | Audit branches (`008` integrator section). Merge/push only if user asks. |
 
-**Parallel builders:** one workspace folder = one branch. Other tasks run in other folders (user-created worktrees). Never `git checkout` another task branch in a shared folder.
+**Parallel builders:** User creates worktrees from the repo parent, then opens each path in its own Cursor window. One worktree folder = one branch = one Cursor window. Never `git checkout` / `git switch` another task branch in a shared folder. Example (sibling dirs of the main clone):
+
+```bash
+git worktree add ../AI-Mega-App-tool-bash -b feat/tool-bash main
+git worktree add ../AI-Mega-App-tool-grep -b feat/tool-grep-glob main
+git worktree add ../AI-Mega-App-tool-fetch -b feat/tool-web-fetch main
+```
 
 ### Multi-agent per feature
 
 A **feature** may declare 2+ parallel builders when the user prompt (or a wave table under File ownership) lists **non-overlapping FILE SCOPEs**. Coordinators must split only on non-overlapping paths.
 
-Same rules as today: one worktree folder = one branch; never checkout another task’s branch; fork from `main` only; no `git add .`.
+Coordinators assign each builder a **worktree path + branch + FILE SCOPE**; do not assign parallel agents into the same folder. Never checkout another task’s branch; fork from `main` only; no `git add .`.
 
 **Hard rule:** never assign two agents the same path in one wave. Single-file changes get one owner; other agents take other files (docs, tests, backend).
 
