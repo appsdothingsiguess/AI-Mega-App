@@ -63,6 +63,11 @@ KNOWN_ROUTER_TOOLS: tuple[str, ...] = (
     "pdf_gen",
     "file_ops",
     "vision",
+    "grep",
+    "glob",
+    "web_fetch",
+    "todo_write",
+    "ask_user",
 )
 
 # Apply local settings overrides before the first get_settings() call.
