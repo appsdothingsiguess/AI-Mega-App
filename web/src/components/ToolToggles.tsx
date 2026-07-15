@@ -1,4 +1,10 @@
-export type ToolToggleKey = "web_search" | "file_ops" | "bash";
+export type ToolToggleKey =
+  | "web_search"
+  | "file_ops"
+  | "bash"
+  | "grep"
+  | "glob"
+  | "web_fetch";
 
 export type ToolTogglesState = Record<ToolToggleKey, boolean>;
 
@@ -6,12 +12,18 @@ export const DEFAULT_TOOL_TOGGLES: ToolTogglesState = {
   web_search: true,
   file_ops: true,
   bash: true,
+  grep: true,
+  glob: true,
+  web_fetch: true,
 };
 
 const TOOL_LABELS: Record<ToolToggleKey, string> = {
   web_search: "Web search",
   file_ops: "File ops",
   bash: "Bash",
+  grep: "Grep",
+  glob: "Glob",
+  web_fetch: "Fetch URL",
 };
 
 interface Props {
