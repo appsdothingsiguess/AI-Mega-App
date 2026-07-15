@@ -1,0 +1,80 @@
+[
+  {
+    "model": "qwen2.5:3b",
+    "set": "set1",
+    "run_id": "20260715T015040Z",
+    "n": 30,
+    "composite": 0.8,
+    "intent": 0.9,
+    "tools": 0.8666666666666667,
+    "model_acc": 0.9,
+    "tier": 0.9,
+    "latency_median_ms": 286.81,
+    "rc": 0
+  },
+  {
+    "model": "qwen2.5:3b",
+    "set": "set2",
+    "run_id": "20260715T015053Z",
+    "n": 30,
+    "composite": 0.8333333333333334,
+    "intent": 0.9666666666666667,
+    "tools": 0.8666666666666667,
+    "model_acc": 0.9666666666666667,
+    "tier": 0.9666666666666667,
+    "latency_median_ms": 294.14,
+    "rc": 0
+  },
+  {
+    "model": "qwen2.5:3b",
+    "set": "set3",
+    "run_id": "20260715T015105Z",
+    "n": 30,
+    "composite": 0.9,
+    "intent": 0.9333333333333333,
+    "tools": 0.9333333333333333,
+    "model_acc": 0.9333333333333333,
+    "tier": 0.9333333333333333,
+    "latency_median_ms": 290.93,
+    "rc": 0
+  },
+  {
+    "model": "granite3.3:2b",
+    "set": "set1",
+    "run_id": "20260715T015116Z",
+    "n": 30,
+    "composite": 0.6666666666666666,
+    "intent": 0.8666666666666667,
+    "tools": 0.7,
+    "model_acc": 0.9,
+    "tier": 0.9,
+    "latency_median_ms": 185.46,
+    "rc": 0
+  },
+  {
+    "model": "granite3.3:2b",
+    "set": "set2",
+    "run_id": "20260715T015132Z",
+    "n": 30,
+    "composite": 0.7666666666666667,
+    "intent": 0.9666666666666667,
+    "tools": 0.8,
+    "model_acc": 0.9666666666666667,
+    "tier": 0.9666666666666667,
+    "latency_median_ms": 192.66,
+    "rc": 0
+  },
+  {
+    "model": "granite3.3:2b",
+    "set": "set3",
+    "run_id": "20260715T015140Z",
+    "n": 30,
+    "composite": 0.9,
+    "intent": 0.9333333333333333,
+    "tools": 0.9,
+    "model_acc": 0.9333333333333333,
+    "tier": 0.9333333333333333,
+    "latency_median_ms": 192.03,
+    "rc": 0
+  }
+]

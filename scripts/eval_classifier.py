@@ -15,6 +15,8 @@ Usage (from repo root):
                    (general_chat/coding_advanced → remote/deepseek-v4-pro;
                     web_search/deep_research → remote/kimi-k2-6;
                     all other intents keep local/* tier aliases)
+
+Do not run two variants concurrently against the same CPU classifier (num_gpu:0).
 """
 
 from __future__ import annotations
@@ -36,9 +38,11 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
+from app.adapters.classifier_qwen import CLASSIFIER_OLLAMA_OPTIONS  # noqa: E402
 from app.config import DEFAULT_CLASSIFIER_PROMPT, Settings, get_settings  # noqa: E402
 
 EVAL_DIR = REPO_ROOT / "eval" / "classifier"
+PROGRESS_EVERY = 25
 GOLD_MAP_PATH = EVAL_DIR / "gold_map.json"
 GOLD_MAP_REMOTE_PATH = EVAL_DIR / "gold_map.remote.json"
 PROMPT_LOCAL_PATH = EVAL_DIR / "prompts" / "local.txt"
@@ -137,6 +141,8 @@ class ModelSummary:
     tools_acc: float
     model_acc: float
     tier_acc: float
+    latency_mean_ms: float = 0.0
+    latency_median_ms: float = 0.0
     intent_confusion: dict[str, dict[str, int]] = field(default_factory=dict)
     model_confusion: dict[str, dict[str, int]] = field(default_factory=dict)
 
@@ -290,17 +296,48 @@ def parse_classifier_json(response_text: str) -> PredRow:
     )
 
 
-def list_ollama_tags(base_url: str, timeout_s: float) -> list[str]:
+def list_ollama_tags(
+    base_url: str, timeout_s: float, client: httpx.Client | None = None
+) -> list[str]:
     url = f"{base_url.rstrip('/')}/api/tags"
-    with httpx.Client(timeout=timeout_s) as client:
+    own = client is None
+    if own:
+        client = httpx.Client(timeout=timeout_s)
+    try:
         resp = client.get(url)
         resp.raise_for_status()
         models = resp.json().get("models") or []
+    finally:
+        if own:
+            client.close()
     names: list[str] = []
     for m in models:
         if isinstance(m, dict) and isinstance(m.get("name"), str):
             names.append(m["name"])
     return sorted(names)
+
+
+def warm_classifier(
+    client: httpx.Client,
+    *,
+    base_url: str,
+    model: str,
+    keep_alive: int,
+) -> None:
+    """Empty generate with live options so Ollama keeps the CPU classifier resident."""
+    payload = {
+        "model": model,
+        "prompt": "",
+        "stream": False,
+        "keep_alive": keep_alive,
+        "options": dict(CLASSIFIER_OLLAMA_OPTIONS),
+    }
+    resp = client.post(f"{base_url.rstrip('/')}/api/generate", json=payload)
+    resp.raise_for_status()
+    print(
+        f"Warmed classifier {model} (num_gpu={CLASSIFIER_OLLAMA_OPTIONS['num_gpu']})",
+        flush=True,
+    )
 
 
 def pick_classifier_models(
@@ -336,37 +373,29 @@ def pick_classifier_models(
 
 
 def classify_message(
+    client: httpx.Client,
     *,
     base_url: str,
     model: str,
     system_prompt: str,
     message: str,
     keep_alive: int,
-    timeout_s: float,
 ) -> tuple[PredRow, float]:
-    """Mirror app/adapters/classifier_qwen.py payload shape."""
+    """Mirror app/adapters/classifier_qwen.py payload (CLASSIFIER_OLLAMA_OPTIONS)."""
     payload = {
         "model": model,
         "system": system_prompt,
         "prompt": message,
         "stream": False,
         "keep_alive": keep_alive,
-        "options": {
-            "temperature": 0.0,
-            "top_k": 20,
-            "top_p": 0.8,
-            "repeat_penalty": 1.05,
-            "num_predict": 96,
-            "num_gpu": 0,
-        },
+        "options": dict(CLASSIFIER_OLLAMA_OPTIONS),
     }
     started = time.perf_counter()
     url = f"{base_url.rstrip('/')}/api/generate"
     try:
-        with httpx.Client(timeout=timeout_s) as client:
-            resp = client.post(url, json=payload)
-            resp.raise_for_status()
-            response_text = str(resp.json().get("response", ""))
+        resp = client.post(url, json=payload)
+        resp.raise_for_status()
+        response_text = str(resp.json().get("response", ""))
     except (httpx.HTTPError, ValueError, TypeError) as exc:
         latency_ms = (time.perf_counter() - started) * 1000
         return (
@@ -420,10 +449,21 @@ def score_row(gold: GoldRow, pred: PredRow, classifier_model: str, latency_ms: f
     )
 
 
+def _median(values: list[float]) -> float:
+    if not values:
+        return 0.0
+    ordered = sorted(values)
+    mid = len(ordered) // 2
+    if len(ordered) % 2:
+        return ordered[mid]
+    return (ordered[mid - 1] + ordered[mid]) / 2
+
+
 def summarize(details: list[DetailRow], classifier_model: str) -> ModelSummary:
     n = len(details) or 1
     intent_conf: dict[str, Counter[str]] = defaultdict(Counter)
     model_conf: dict[str, Counter[str]] = defaultdict(Counter)
+    latencies = [d.latency_ms for d in details]
     for d in details:
         intent_conf[d.expected["intent"]][d.predicted["intent"]] += 1
         model_conf[d.expected["model"]][d.predicted["model"] or "<empty>"] += 1
@@ -435,6 +475,8 @@ def summarize(details: list[DetailRow], classifier_model: str) -> ModelSummary:
         tools_acc=sum(1 for d in details if d.tools_ok) / n,
         model_acc=sum(1 for d in details if d.model_ok) / n,
         tier_acc=sum(1 for d in details if d.tier_ok) / n,
+        latency_mean_ms=round(sum(latencies) / n, 2) if details else 0.0,
+        latency_median_ms=round(_median(latencies), 2),
         intent_confusion={k: dict(v) for k, v in intent_conf.items()},
         model_confusion={k: dict(v) for k, v in model_conf.items()},
     )
@@ -475,7 +517,7 @@ def write_run_artifacts(
 
 
 def print_summary(summaries: list[ModelSummary], run_dir: Path) -> None:
-    print(f"\nRun dir: {run_dir}")
+    print(f"\nRun dir: {run_dir}", flush=True)
     for s in summaries:
         print(
             f"  {s.classifier_model}: n={s.n} "
@@ -483,7 +525,10 @@ def print_summary(summaries: list[ModelSummary], run_dir: Path) -> None:
             f"intent={s.intent_acc:.1%} "
             f"tools={s.tools_acc:.1%} "
             f"model={s.model_acc:.1%} "
-            f"tier={s.tier_acc:.1%}"
+            f"tier={s.tier_acc:.1%} "
+            f"latency_mean={s.latency_mean_ms:.0f}ms "
+            f"latency_median={s.latency_median_ms:.0f}ms",
+            flush=True,
         )
 
 
@@ -610,39 +655,63 @@ def main(argv: list[str] | None = None) -> int:
     if id_filter:
         models = models[:1]
 
-    print(f"Ollama: {base_url}")
-    print(f"Variant: {args.variant} (gold map: {gold_map_path.name})")
-    print(f"Mode: {mode} ({len(dataset)} rows)")
-    print(f"Models: {', '.join(models)}")
+    print(f"Ollama: {base_url}", flush=True)
+    print(f"Variant: {args.variant} (gold map: {gold_map_path.name})", flush=True)
+    print(f"Mode: {mode} ({len(dataset)} rows)", flush=True)
+    print(f"Models: {', '.join(models)}", flush=True)
 
     ts = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     run_dir = RUNS_DIR / ts
     all_details: list[DetailRow] = []
     summaries: list[ModelSummary] = []
 
-    for model in models:
-        details: list[DetailRow] = []
-        for row in dataset:
-            pred, latency_ms = classify_message(
-                base_url=base_url,
-                model=model,
-                system_prompt=prompt,
-                message=row.message,
-                keep_alive=settings.ollama.keep_alive,
-                timeout_s=timeout_s,
-            )
-            detail = score_row(row, pred, model, latency_ms)
-            details.append(detail)
-            print(
-                f"  [{row.id}] intent {detail.expected['intent']!r}->{detail.predicted['intent']!r} "
-                f"model {detail.expected['model']!r}->{detail.predicted['model']!r} "
-                f"tools_ok={detail.tools_ok} composite={detail.composite_ok} "
-                f"{detail.latency_ms:.0f}ms"
-            )
-            if detail.raw_response:
-                print(f"    raw: {detail.raw_response[:300]!r}")
-        summaries.append(summarize(details, model))
-        all_details.extend(details)
+    # Reuse one client for warm + all rows (live classify also avoids per-call TLS setup).
+    with httpx.Client(timeout=max(timeout_s, 60.0)) as client:
+        for model in models:
+            try:
+                warm_classifier(
+                    client,
+                    base_url=base_url,
+                    model=model,
+                    keep_alive=settings.ollama.keep_alive,
+                )
+            except httpx.HTTPError as exc:
+                print(f"Warning: warmup failed for {model}: {exc}", file=sys.stderr, flush=True)
+            details: list[DetailRow] = []
+            fails = 0
+            for i, row in enumerate(dataset, start=1):
+                pred, latency_ms = classify_message(
+                    client,
+                    base_url=base_url,
+                    model=model,
+                    system_prompt=prompt,
+                    message=row.message,
+                    keep_alive=settings.ollama.keep_alive,
+                )
+                detail = score_row(row, pred, model, latency_ms)
+                details.append(detail)
+                if not detail.composite_ok:
+                    fails += 1
+                    print(
+                        f"  FAIL [{row.id}] intent "
+                        f"{detail.expected['intent']!r}->{detail.predicted['intent']!r} "
+                        f"model {detail.expected['model']!r}->{detail.predicted['model']!r} "
+                        f"tools_ok={detail.tools_ok} {detail.latency_ms:.0f}ms",
+                        flush=True,
+                    )
+                    if detail.raw_response:
+                        print(f"    raw: {detail.raw_response[:300]!r}", flush=True)
+                elif i == 1 or i % PROGRESS_EVERY == 0 or i == len(dataset):
+                    print(
+                        f"  [{i}/{len(dataset)}] last={row.id} "
+                        f"composite_so_far="
+                        f"{sum(1 for d in details if d.composite_ok) / len(details):.1%} "
+                        f"median_ms={_median([d.latency_ms for d in details]):.0f} "
+                        f"fails={fails}",
+                        flush=True,
+                    )
+            summaries.append(summarize(details, model))
+            all_details.extend(details)
 
     write_run_artifacts(
         run_dir,

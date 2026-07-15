@@ -14,12 +14,48 @@ from app.types import ClassifierOutput
 
 logger = logging.getLogger("prompter.router")
 
+# Shared by classify() and warmup() so Ollama loads the classifier on CPU, not VRAM.
+CLASSIFIER_OLLAMA_OPTIONS: dict[str, float | int] = {
+    "temperature": 0.0,
+    "top_k": 20,
+    "top_p": 0.8,
+    "repeat_penalty": 1.05,
+    "num_predict": 96,
+    "num_gpu": 0,
+}
+
 
 class QwenClassifierAdapter(Classifier):
     """Classify user messages with the configured local Ollama classifier."""
 
     def __init__(self, settings: Settings) -> None:
         self.settings = settings
+
+    async def warmup(self) -> None:
+        """Pre-load the classifier into Ollama with the same options as classify().
+
+        Critical: must pass ``num_gpu: 0`` so the model stays on CPU. A generic
+        scheduler warmup without that flag would load it into GPU VRAM instead.
+        """
+        payload = {
+            "model": self._ollama_model_name(),
+            "prompt": "",
+            "stream": False,
+            "keep_alive": self.settings.ollama.keep_alive,
+            "options": dict(CLASSIFIER_OLLAMA_OPTIONS),
+        }
+        timeout_s = self.settings.health.classifier_timeout_s or 30.0
+        async with httpx.AsyncClient(timeout=max(timeout_s, 60.0)) as client:
+            response = await client.post(
+                f"{self.settings.ollama.base_url}/api/generate",
+                json=payload,
+            )
+            response.raise_for_status()
+        logger.info(
+            "Classifier warmed: model=%s num_gpu=%s",
+            payload["model"],
+            CLASSIFIER_OLLAMA_OPTIONS["num_gpu"],
+        )
 
     async def classify(self, message: str) -> ClassifierOutput:
         started = time.perf_counter()
@@ -31,14 +67,7 @@ class QwenClassifierAdapter(Classifier):
             "prompt": message,
             "stream": False,
             "keep_alive": self.settings.ollama.keep_alive,
-            "options": {
-                "temperature": 0.0,
-                "top_k": 20,
-                "top_p": 0.8,
-                "repeat_penalty": 1.05,
-                "num_predict": 96,
-                "num_gpu": 0,
-            },
+            "options": dict(CLASSIFIER_OLLAMA_OPTIONS),
         }
 
         timeout_s = self.settings.health.classifier_timeout_s or 30.0

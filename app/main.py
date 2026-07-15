@@ -233,6 +233,21 @@ async def lifespan(app: FastAPI):
     app.state.orchestrator = orchestrator
     app.state.vector_store = vector_store
 
+    # Classifier must warm with num_gpu:0 (CPU); do not use generic scheduler warmup.
+    classifier = getattr(getattr(orchestrator, "router", None), "classifier", None)
+    if classifier is not None and hasattr(classifier, "warmup"):
+        try:
+            await classifier.warmup()
+        except Exception as exc:  # noqa: BLE001 - Ollama down must not block startup
+            logger.warning("Classifier warmup failed at startup: %s", exc)
+
+    scheduler = getattr(orchestrator, "model_scheduler", None)
+    if scheduler is not None:
+        try:
+            await scheduler.warmup_resident()
+        except Exception as exc:  # noqa: BLE001 - Ollama down must not block startup
+            logger.warning("Embedding warmup failed at startup: %s", exc)
+
     yield
 
     await vector_store.close()

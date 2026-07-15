@@ -43,6 +43,20 @@ class ModelScheduler:
             return self._alias_to_ollama_name(model)
         return _strip_ollama_prefix(model)
 
+    async def warmup_resident(self) -> None:
+        """Force-load non-classifier resident models (embedding) at startup.
+
+        The classifier is warmed separately via ``QwenClassifierAdapter.warmup()``
+        with ``num_gpu: 0`` so it loads on CPU. Generic ``_warmup`` here must not
+        touch the classifier — that would pin it in GPU VRAM without that flag.
+        """
+        classifier_name = _strip_ollama_prefix(self.settings.router.classifier)
+        async with self._lock:
+            for ollama_name in self._resident:
+                if not ollama_name or ollama_name == classifier_name:
+                    continue
+                await self._warmup(ollama_name)
+
     async def ensure_loaded(self, model: str) -> None:
         """Ensure model is loaded, evicting current main if needed."""
         ollama_name = self._resolve_ollama_name(model)

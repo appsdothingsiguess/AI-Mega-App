@@ -67,6 +67,34 @@ async def test_classify_posts_expected_ollama_payload() -> None:
         "top_p": 0.8,
         "repeat_penalty": 1.05,
         "num_predict": 96,
+        "num_gpu": 0,
+    }
+
+
+@pytest.mark.asyncio
+async def test_warmup_uses_same_cpu_options_as_classify() -> None:
+    adapter = QwenClassifierAdapter(_settings())
+    post = AsyncMock(return_value=_mock_response(""))
+
+    with patch("app.adapters.classifier_qwen.httpx.AsyncClient") as client_cls:
+        client = AsyncMock()
+        client.post = post
+        client_cls.return_value.__aenter__.return_value = client
+        await adapter.warmup()
+
+    post.assert_awaited_once()
+    payload = post.await_args.kwargs["json"]
+    assert payload["model"] == "qwen2.5:1.5b"
+    assert payload["prompt"] == ""
+    assert payload["keep_alive"] == -1
+    assert payload["options"]["num_gpu"] == 0
+    assert payload["options"] == {
+        "temperature": 0.0,
+        "top_k": 20,
+        "top_p": 0.8,
+        "repeat_penalty": 1.05,
+        "num_predict": 96,
+        "num_gpu": 0,
     }
 
 
