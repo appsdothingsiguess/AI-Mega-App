@@ -14,14 +14,18 @@ from app.types import ClassifierOutput
 
 logger = logging.getLogger("prompter.router")
 
-# Shared by classify() and warmup() so Ollama loads the classifier on CPU, not VRAM.
+# Shared by classify() and warmup(). qwen2.5:3b fits in VRAM (num_gpu=999 =
+# full offload). num_ctx must exceed the rendered mut12 prompt (~4.4k tokens);
+# 4096 truncates the system prompt and the model answers the user instead of
+# classifying.
 CLASSIFIER_OLLAMA_OPTIONS: dict[str, float | int] = {
     "temperature": 0.0,
     "top_k": 20,
     "top_p": 0.8,
     "repeat_penalty": 1.05,
-    "num_predict": 96,
-    "num_gpu": 0,
+    "num_predict": 250,
+    "num_ctx": 8192,
+    "num_gpu": 999,
 }
 
 
@@ -32,11 +36,7 @@ class QwenClassifierAdapter(Classifier):
         self.settings = settings
 
     async def warmup(self) -> None:
-        """Pre-load the classifier into Ollama with the same options as classify().
-
-        Critical: must pass ``num_gpu: 0`` so the model stays on CPU. A generic
-        scheduler warmup without that flag would load it into GPU VRAM instead.
-        """
+        """Pre-load the classifier into Ollama with the same options as classify()."""
         payload = {
             "model": self._ollama_model_name(),
             "prompt": "",
@@ -52,9 +52,10 @@ class QwenClassifierAdapter(Classifier):
             )
             response.raise_for_status()
         logger.info(
-            "Classifier warmed: model=%s num_gpu=%s",
+            "Classifier warmed: model=%s num_gpu=%s num_ctx=%s",
             payload["model"],
             CLASSIFIER_OLLAMA_OPTIONS["num_gpu"],
+            CLASSIFIER_OLLAMA_OPTIONS["num_ctx"],
         )
 
     async def classify(self, message: str) -> ClassifierOutput:

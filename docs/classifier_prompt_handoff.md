@@ -12,7 +12,7 @@ For another agent: analyze prompts vs failures; propose targeted mutations; vali
 | remote baseline | `20260715T002731Z` | 253 | **80.2%** | 89.3% | 83.0% | 89.3% | 90.9% | 1453 ms |
 | local pre-mut (ref) | `20260715T002117Z` | 253 | 77.1% | 88.9% | 80.2% | 88.9% | 90.1% | 1429 ms |
 
-- Local 3b GPU mut12 meets **≥95%** full (num_ctx=4096, num_predict=250, num_gpu=999).
+- Local 3b GPU mut12 meets **≥95%** full (live `num_ctx=8192` — mut12 prompt ~4.4k tokens; 4096 truncates).
 - Local 1.5b CPU mut7 still the CPU baseline (≥85%, not ≥90%).
 - Remote best true-253 still **80.2%**; stratified remote ids later stuck ~70–82% — stop spamming remote fulls.
 - Early “full” on n=33 (=smoke) overfitted (90–97%). **True dataset = 253 rows.** Smoke/ids ≠ generalization.

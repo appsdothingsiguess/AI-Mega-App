@@ -1,8 +1,47 @@
 # Prompter
 
-Filesystem-first project assistant: instructions + docs → intent routing → streamed chat. Python/FastAPI backend, React UI, LiteLLM to **Ollama** (local) and **OpenCode Go** (remote).
+Personal AI platform (Prompter X) that replaces a hosted chat UI with **filesystem projects**, **intent routing**, and **streamed replies** over local and remote models.
+
+Python/FastAPI backend, React/Vite UI, LiteLLM → **Ollama** (LAN GPU box) and **OpenCode Go** (remote). Projects live under `projects/<id>/` (`instructions.md`, `docs/`, threads) — not a remote workspace DB.
 
 Spec / agents: [`prompter_x_complete_spec.md`](prompter_x_complete_spec.md) · [`AGENTS.md`](AGENTS.md) · [`docs/`](docs/)
+
+---
+
+## How it works
+
+One chat turn, high level:
+
+```
+user message
+    → HybridRouter (keyword rules, then classifier)
+    → intent + tools + model alias (+ confidence)
+    → optional RAG (Qdrant + nomic embeddings over project docs/)
+    → ChatOrchestrator streams the reply (SSE)
+         · local/*  → Ollama via ModelScheduler (VRAM swap)
+         · remote/* → OpenCode Go
+```
+
+**Router.** Config keyword rules can short-circuit known phrases. Everything else hits the **classifier** (`router.classifier`, default `ollama/qwen2.5:3b`): a small Ollama model that returns JSON `{intent, model, tools, confidence}` only — it does not answer the user. Live prompt is mut12 (`DEFAULT_CLASSIFIER_PROMPT` / `settings.json` `router.classifier_prompt`) with `{{MODEL:<intent>}}` filled from `settings.models`. Call options: `num_ctx=8192` (prompt is ~4.4k tokens of boundaries + few-shots — **4096 truncates and the model answers as chat**), `num_predict=250`, full GPU offload (`num_gpu=999`). Parse failure → fallback `general_chat` / `confidence=0` / no tools (then the chat model for `general_chat` loads — often `local/qwen3-8b`).
+
+**Intents → model / tools (defaults).** Aliases resolve through `settings.json` + `ollama_model_names` + `litellm_config.yaml` — never hardcode underlying Ollama tags in app logic.
+
+| Intent | Typical tools | Default model alias |
+|--------|---------------|---------------------|
+| `general_chat` | [] | `local/qwen3-8b` |
+| `coding_basic` | [] | `local/coding-light` |
+| `coding_advanced` | [] | `local/coding-heavy` |
+| `web_search` | `web_search` | `local/tool-calling-medium` |
+| `deep_research` | `web_search` | `local/reasoning-heavy` |
+| `bash` / `pdf_gen` / `file_ops` | matching tool | `local/tool-calling-medium` |
+| `vision` | `vision` | `local/vision-medium` |
+| `reasoning_medium` / `reasoning_heavy` | web_search, bash, pdf_gen, file_ops | `local/reasoning-*` |
+
+**Resident small models.** Startup warms (1) the classifier via `QwenClassifierAdapter.warmup()` with the options above, and (2) the embedding model `nomic-embed-text` via Ollama `/api/embed` (scheduler must not warm the classifier with a bare `/api/generate`). Pull the embed tag on the Ollama host if missing — otherwise RAG warmup 404s.
+
+**UI.** Web chat streams SSE; debug traces show `ROUTE` (classifier decision) separately from `LLM REQUEST` (the reply model). Those are different models by design.
+
+Classifier eval harness / ledger: `scripts/eval_classifier.py`, `eval/classifier/`, [`docs/classifier_prompt.md`](docs/classifier_prompt.md).
 
 ---
 
@@ -167,8 +206,16 @@ Then set Prompter’s `qdrant.url` to `http://<server-lan-ip>:6333` and check `p
 
 Local intents go to **Ollama** on the LAN (`http://192.168.0.240:11434` by default). Remote aliases go through **OpenCode Go** (`OPENCODE_API_KEY`).
 
+On the Ollama box you need at least:
+
+| Tag | Role |
+|-----|------|
+| `qwen2.5:3b` | Intent classifier (GPU, always-on) |
+| `nomic-embed-text` | Doc embeddings for RAG |
+| Plus the chat / coding / reasoning / vision tags mapped in `settings.json` `ollama_model_names` | Reply models swapped by `ModelScheduler` |
+
 ```bash
-curl -s http://192.168.0.240:11434/api/tags   # box up?
+curl -s http://192.168.0.240:11434/api/tags   # box up? tags present?
 python -m app.main health                     # Prompter’s view
 ```
 
@@ -176,7 +223,9 @@ python -m app.main health                     # Prompter’s view
 |------|-----|
 | Wrong IP / port | Edit `api_base` in `litellm_config.yaml`, or ⚙ → Infrastructure |
 | Change model per intent | `settings.json` or ⚙ → Models |
-| Full setup (add models, classifier, opencode CLI) | [`docs/ollama-lan-backend-setup.md`](docs/ollama-lan-backend-setup.md) |
+| Change classifier tag / prompt | `settings.json` `router.classifier` / `router.classifier_prompt` |
+| Full setup (add models, opencode CLI) | [`docs/ollama-lan-backend-setup.md`](docs/ollama-lan-backend-setup.md) |
+| Classifier prompt eval | [`docs/classifier_prompt.md`](docs/classifier_prompt.md), [`docs/classifier_prompt_handoff.md`](docs/classifier_prompt_handoff.md) |
 
 ---
 
@@ -273,7 +322,9 @@ Intent labels: `general_chat` · `web_search` · `deep_research` · `coding_basi
 | Topic | Where |
 |-------|--------|
 | Architecture / phase contracts | `prompter_x_complete_spec.md`, `AGENTS.md` |
+| How a turn is routed | [How it works](#how-it-works) |
 | Ollama / model backends | [`docs/ollama-lan-backend-setup.md`](docs/ollama-lan-backend-setup.md) |
+| Classifier prompt / eval | [`docs/classifier_prompt.md`](docs/classifier_prompt.md) |
 | Qdrant / RAG | [Qdrant (RAG)](#qdrant-rag--optional) |
 | Settings UI | Web → ⚙ (models, router, infra); secrets stay in `.env` |
 | API surface | `/docs` while the server is running |

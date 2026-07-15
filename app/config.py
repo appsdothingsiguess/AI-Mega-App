@@ -321,7 +321,7 @@ def _default_routing_rules() -> list[RoutingRule]:
 
 
 class RouterSettings(BaseModel):
-    classifier: str = "ollama/qwen2.5:1.5b-32k"
+    classifier: str = "ollama/qwen2.5:3b"
     classifier_prompt: str = DEFAULT_CLASSIFIER_PROMPT
     rules_enabled: bool = True
     rules: list[RoutingRule] = Field(default_factory=_default_routing_rules)

@@ -21,7 +21,7 @@ import scripts.eval_classifier as ec  # noqa: E402
 
 ec.CLASSIFIER_OLLAMA_OPTIONS = dict(ec.CLASSIFIER_OLLAMA_OPTIONS)
 ec.CLASSIFIER_OLLAMA_OPTIONS["num_gpu"] = 999
-ec.CLASSIFIER_OLLAMA_OPTIONS["num_ctx"] = 4096
+ec.CLASSIFIER_OLLAMA_OPTIONS["num_ctx"] = 8192
 ec.CLASSIFIER_OLLAMA_OPTIONS["num_predict"] = 250
 
 if __name__ == "__main__":

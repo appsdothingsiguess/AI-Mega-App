@@ -233,7 +233,7 @@ async def lifespan(app: FastAPI):
     app.state.orchestrator = orchestrator
     app.state.vector_store = vector_store
 
-    # Classifier must warm with num_gpu:0 (CPU); do not use generic scheduler warmup.
+    # Classifier must warm via adapter options; do not use generic scheduler warmup.
     classifier = getattr(getattr(orchestrator, "router", None), "classifier", None)
     if classifier is not None and hasattr(classifier, "warmup"):
         try:

@@ -66,13 +66,14 @@ async def test_classify_posts_expected_ollama_payload() -> None:
         "top_k": 20,
         "top_p": 0.8,
         "repeat_penalty": 1.05,
-        "num_predict": 96,
-        "num_gpu": 0,
+        "num_predict": 250,
+        "num_ctx": 8192,
+        "num_gpu": 999,
     }
 
 
 @pytest.mark.asyncio
-async def test_warmup_uses_same_cpu_options_as_classify() -> None:
+async def test_warmup_uses_same_gpu_options_as_classify() -> None:
     adapter = QwenClassifierAdapter(_settings())
     post = AsyncMock(return_value=_mock_response(""))
 
@@ -87,14 +88,14 @@ async def test_warmup_uses_same_cpu_options_as_classify() -> None:
     assert payload["model"] == "qwen2.5:1.5b"
     assert payload["prompt"] == ""
     assert payload["keep_alive"] == -1
-    assert payload["options"]["num_gpu"] == 0
     assert payload["options"] == {
         "temperature": 0.0,
         "top_k": 20,
         "top_p": 0.8,
         "repeat_penalty": 1.05,
-        "num_predict": 96,
-        "num_gpu": 0,
+        "num_predict": 250,
+        "num_ctx": 8192,
+        "num_gpu": 999,
     }
 
 

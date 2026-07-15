@@ -47,8 +47,7 @@ class ModelScheduler:
         """Force-load non-classifier resident models (embedding) at startup.
 
         The classifier is warmed separately via ``QwenClassifierAdapter.warmup()``
-        with ``num_gpu: 0`` so it loads on CPU. Generic ``_warmup`` here must not
-        touch the classifier — that would pin it in GPU VRAM without that flag.
+        with classifier-specific options. Generic ``_warmup`` must not touch it.
         """
         classifier_name = _strip_ollama_prefix(self.settings.router.classifier)
         async with self._lock:
@@ -77,6 +76,19 @@ class ModelScheduler:
                 json={"model": model, "keep_alive": 0},
             )
 
+    def _warmup_request(self, model: str) -> tuple[str, dict[str, object]]:
+        """Pick the correct Ollama endpoint for generate vs embed models."""
+        embedding_name = _strip_ollama_prefix(self.settings.embedding.model)
+        if model == embedding_name:
+            return (
+                f"{self._url}/api/embed",
+                {"model": model, "input": "warmup", "keep_alive": -1},
+            )
+        return (
+            f"{self._url}/api/generate",
+            {"model": model, "prompt": "", "keep_alive": -1},
+        )
+
     async def _warmup(
         self,
         model: str,
@@ -84,14 +96,12 @@ class ModelScheduler:
         backoff: float = 1.0,
     ) -> None:
         """Load model with retry + exponential backoff."""
+        url, payload = self._warmup_request(model)
         delay = backoff
         for attempt in range(retries):
             try:
                 async with httpx.AsyncClient(timeout=60) as client:
-                    resp = await client.post(
-                        f"{self._url}/api/generate",
-                        json={"model": model, "prompt": "", "keep_alive": -1},
-                    )
+                    resp = await client.post(url, json=payload)
                     resp.raise_for_status()
                     return
             except (httpx.HTTPError, httpx.TimeoutException) as exc:
