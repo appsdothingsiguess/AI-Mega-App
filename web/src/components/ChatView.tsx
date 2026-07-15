@@ -12,6 +12,7 @@ import {
   SourcesState,
   SourceChunk,
   StreamChatError,
+  TodoItem,
 } from "../api/client";
 import MessageBubble, { ToolEvent } from "./MessageBubble";
 import ModelSelector from "./ModelSelector";
@@ -68,6 +69,8 @@ interface StreamingMessage {
   isStreaming?: boolean;
   tools?: ToolEvent[];
   sources?: SourceChunk[];
+  todos?: TodoItem[];
+  askUser?: { question: string; options: string[]; answered: boolean };
   error?: string;
 }
 
@@ -221,10 +224,9 @@ export default function ChatView({
     abortRef.current?.abort();
   };
 
-  const handleSend = async () => {
-    if (!projectId || !threadId || !draft.trim() || streaming) return;
-    const content = draft.trim();
-    setDraft("");
+  const sendMessage = async (content: string) => {
+    if (!projectId || !threadId || !content.trim() || streaming) return;
+    const trimmed = content.trim();
     setError(null);
     setTraceEntries([]);
 
@@ -234,7 +236,7 @@ export default function ChatView({
 
     const optimisticUser: StreamingMessage = {
       role: "user",
-      content,
+      content: trimmed,
       created_at: new Date().toISOString(),
     };
     const streamingAssistant: StreamingMessage = {
@@ -256,7 +258,7 @@ export default function ChatView({
       model_override?: string;
       enabled_tools?: Record<string, boolean>;
     } = {
-      content,
+      content: trimmed,
       enabled_tools: { ...toolToggles },
     };
     if (modelOverride) {
@@ -324,6 +326,24 @@ export default function ChatView({
                 ...(msg.tools ?? []),
                 { name: event.name, kind: "result", output: event.output },
               ],
+            }));
+            break;
+
+          case "ask_user":
+            updateStreamingMessage((msg) => ({
+              ...msg,
+              askUser: {
+                question: event.question,
+                options: event.options,
+                answered: false,
+              },
+            }));
+            break;
+
+          case "todos":
+            updateStreamingMessage((msg) => ({
+              ...msg,
+              todos: event.todos,
             }));
             break;
 
@@ -400,6 +420,29 @@ export default function ChatView({
     }
   };
 
+  const handleSend = async () => {
+    if (!draft.trim() || streaming) return;
+    const content = draft.trim();
+    setDraft("");
+    await sendMessage(content);
+  };
+
+  const handleAskUserAnswer = (text: string) => {
+    setMessages((prev) => {
+      const idx = prev.length - 1;
+      if (idx < 0) return prev;
+      const last = prev[idx];
+      if (!last?.askUser) return prev;
+      const next = [...prev];
+      next[idx] = {
+        ...last,
+        askUser: { ...last.askUser, answered: true },
+      };
+      return next;
+    });
+    void sendMessage(text);
+  };
+
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
@@ -425,6 +468,12 @@ export default function ChatView({
   }
 
   const headerTitle = threadTitle ?? threadId.slice(0, 12);
+
+  const last = messages[messages.length - 1];
+  const pendingAskUser =
+    !!last?.askUser &&
+    !last.askUser.answered &&
+    last.askUser.options.length > 0;
 
   return (
     <div style={styles.root}>
@@ -460,6 +509,9 @@ export default function ChatView({
             isStreaming={m.isStreaming}
             tools={m.tools}
             sources={m.sources}
+            todos={m.todos}
+            askUser={m.askUser}
+            onAskUserAnswer={handleAskUserAnswer}
             error={m.error}
           />
         ))}
@@ -503,7 +555,7 @@ export default function ChatView({
             placeholder="Ask something… (Enter to send, Shift+Enter for newline)"
             onChange={(e) => setDraft(e.target.value)}
             onKeyDown={handleKeyDown}
-            disabled={streaming}
+            disabled={streaming || pendingAskUser}
           />
           {streaming ? (
             <button style={styles.stopBtn} onClick={handleStop}>

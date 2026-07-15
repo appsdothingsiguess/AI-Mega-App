@@ -1,13 +1,21 @@
 import { useState } from "react";
-import type { SourceChunk } from "../api/client";
+import type { SourceChunk, TodoItem } from "../api/client";
 import ArtifactRenderer from "./ArtifactRenderer";
+import AskUserPrompt from "./AskUserPrompt";
 import SourceCitations from "./SourceCitations";
+import TodoChecklist from "./TodoChecklist";
 
 export interface ToolEvent {
   name: string;
   kind: "call" | "result";
   input?: Record<string, unknown>;
   output?: string;
+}
+
+interface AskUserState {
+  question: string;
+  options: string[];
+  answered: boolean;
 }
 
 interface Props {
@@ -18,8 +26,17 @@ interface Props {
   isStreaming?: boolean;
   tools?: ToolEvent[];
   sources?: SourceChunk[];
+  todos?: TodoItem[];
+  askUser?: AskUserState;
+  onAskUserAnswer?: (text: string) => void;
   error?: string;
 }
+
+const TOOL_STEP_LABELS: Record<string, string> = {
+  grep: "Searched files",
+  glob: "Found files",
+  web_fetch: "Fetched a page",
+};
 
 function formatToolOutput(output: string): string {
   try {
@@ -55,7 +72,7 @@ function ToolSection({ tools }: { tools: ToolEvent[] }) {
             <div key={i} style={styles.toolItem}>
               <div style={styles.toolHeader}>
                 <span style={styles.toolKind}>{t.kind === "call" ? "Call" : "Result"}</span>
-                <span style={styles.toolName}>{t.name}</span>
+                <span style={styles.toolName}>{TOOL_STEP_LABELS[t.name] ?? t.name}</span>
               </div>
               {t.kind === "call" && t.input && (
                 <pre style={styles.toolBody}>
@@ -81,6 +98,9 @@ export default function MessageBubble({
   isStreaming,
   tools,
   sources,
+  todos,
+  askUser,
+  onAskUserAnswer,
   error,
 }: Props) {
   if (role === "system") return null;
@@ -108,6 +128,15 @@ export default function MessageBubble({
       <div style={styles.assistantBody}>
         {tools && tools.length > 0 && <ToolSection tools={tools} />}
         {sources && sources.length > 0 && <SourceCitations sources={sources} />}
+        {todos && todos.length > 0 && <TodoChecklist todos={todos} />}
+        {askUser && onAskUserAnswer && (
+          <AskUserPrompt
+            question={askUser.question}
+            options={askUser.options}
+            onAnswer={onAskUserAnswer}
+            disabled={!!isStreaming || askUser.answered}
+          />
+        )}
         {(content || isStreaming) && (
           <ArtifactRenderer content={displayContent} isStreaming={isStreaming} />
         )}

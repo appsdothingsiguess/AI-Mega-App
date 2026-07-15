@@ -228,6 +228,12 @@ export interface ChatStreamRequest {
   enabled_tools?: Record<string, boolean>;
 }
 
+export type TodoItem = {
+  content: string;
+  status: "pending" | "in_progress" | "completed";
+  id: string;
+};
+
 export type SseEvent =
   | { type: "chunk"; content: string }
   | { type: "tool_call"; name: string; input: Record<string, unknown> }
@@ -236,6 +242,8 @@ export type SseEvent =
   | { type: "model_loading"; model: string; estimated_seconds: number }
   | { type: "routed"; model: string; intent: string }
   | { type: "debug"; stage: string; data: Record<string, unknown> }
+  | { type: "ask_user"; question: string; options: string[] }
+  | { type: "todos"; todos: TodoItem[] }
   | { type: "done"; usage: Record<string, unknown>; model?: string }
   | { type: "error"; message: string };
 
