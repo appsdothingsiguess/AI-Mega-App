@@ -73,7 +73,11 @@ class NomicEmbeddingAdapter(EmbeddingService):
         async with httpx.AsyncClient() as client:
             response = await client.post(
                 f"{self._base_url}/api/embed",
-                json={"model": model, "input": texts},
+                json={
+                    "model": model,
+                    "input": texts,
+                    "keep_alive": self._settings.ollama.keep_alive,
+                },
             )
             response.raise_for_status()
             data = response.json()

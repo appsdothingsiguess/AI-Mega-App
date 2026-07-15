@@ -78,15 +78,16 @@ class ModelScheduler:
 
     def _warmup_request(self, model: str) -> tuple[str, dict[str, object]]:
         """Pick the correct Ollama endpoint for generate vs embed models."""
+        keep_alive = self.settings.ollama.keep_alive
         embedding_name = _strip_ollama_prefix(self.settings.embedding.model)
         if model == embedding_name:
             return (
                 f"{self._url}/api/embed",
-                {"model": model, "input": "warmup", "keep_alive": -1},
+                {"model": model, "input": "warmup", "keep_alive": keep_alive},
             )
         return (
             f"{self._url}/api/generate",
-            {"model": model, "prompt": "", "keep_alive": -1},
+            {"model": model, "prompt": "", "keep_alive": keep_alive},
         )
 
     async def _warmup(

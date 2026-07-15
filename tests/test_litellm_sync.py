@@ -48,6 +48,7 @@ def test_sync_adds_new_alias(tmp_path: Path) -> None:
         {"local/coding-heavy": "qwen3-coder:30b-16k"},
         "http://localhost:11434",
         config_path,
+        keep_alive=300,
     )
 
     data = _load(config_path)
@@ -55,6 +56,7 @@ def test_sync_adds_new_alias(tmp_path: Path) -> None:
     assert "local/coding-heavy" in entries
     assert entries["local/coding-heavy"]["litellm_params"]["model"] == "ollama_chat/qwen3-coder:30b-16k"
     assert entries["local/coding-heavy"]["litellm_params"]["api_base"] == "http://localhost:11434"
+    assert entries["local/coding-heavy"]["litellm_params"]["keep_alive"] == 300
 
 
 def test_sync_updates_existing_alias_in_place(tmp_path: Path) -> None:

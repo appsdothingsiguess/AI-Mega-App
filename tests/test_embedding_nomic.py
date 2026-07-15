@@ -7,10 +7,14 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from app.adapters.embedding_nomic import NomicEmbeddingAdapter
-from app.config import Settings
+from app.config import OllamaSettings, Settings
 
 
 def _settings(**overrides: object) -> Settings:
+    overrides.setdefault(
+        "ollama",
+        OllamaSettings(base_url="http://localhost:11434", keep_alive=300),
+    )
     return Settings(projects_dir="./projects", data_dir="./data", **overrides)
 
 
@@ -41,6 +45,7 @@ async def test_embed_returns_vectors_and_posts_to_ollama() -> None:
     assert call.kwargs["json"] == {
         "model": "nomic-embed-text",
         "input": ["hello world", "second text"],
+        "keep_alive": 300,
     }
 
 

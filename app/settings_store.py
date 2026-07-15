@@ -229,6 +229,7 @@ def write_settings(data: dict[str, Any]) -> None:
             normalized.get("ollama_model_names", {}),
             normalized.get("ollama", {}).get("base_url", ""),
             Settings.model_fields["litellm_config_path"].default,
+            keep_alive=normalized.get("ollama", {}).get("keep_alive"),
         )
     except Exception:
         logger.exception("Failed to sync litellm_config.yaml after settings write")
