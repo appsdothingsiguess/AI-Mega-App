@@ -33,6 +33,12 @@ from app.model_scheduler import ModelScheduler
 from app.project_manager import ProjectManager
 from app.protocols import EmbeddingService, SearchService, VectorStore, VisionService
 from app.router import HybridRouter
+from app.tools import bash as bash_tool
+from app.tools import file_ops as file_ops_tool
+from app.tools import glob as glob_tool
+from app.tools import grep as grep_tool
+from app.tools import todo_write as todo_write_tool
+from app.tools import web_fetch as web_fetch_tool
 from app.tools import web_search as web_search_tool
 from app.turn_tracker import TurnRecord, TurnTracker
 from app.types import RouteResult, RouteSource, SearchResult, ToolCallDelta
@@ -54,8 +60,41 @@ _TOOLS_REQUIRED_ERROR = (
     "or choose a tool-capable model."
 )
 
+ASK_USER_TOOL_SCHEMA: dict[str, Any] = {
+    "type": "function",
+    "function": {
+        "name": "ask_user",
+        "description": (
+            "Ask the user a clarifying question before continuing. Pauses the "
+            "current turn; the user's next message resumes the conversation."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "question": {
+                    "type": "string",
+                    "description": "The question to ask the user",
+                },
+                "options": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Optional list of suggested answer choices",
+                },
+            },
+            "required": ["question"],
+        },
+    },
+}
+
 _TOOL_SCHEMAS: dict[str, dict[str, Any]] = {
     "web_search": web_search_tool.TOOL_SCHEMA,
+    "bash": bash_tool.TOOL_SCHEMA,
+    "grep": grep_tool.TOOL_SCHEMA,
+    "glob": glob_tool.TOOL_SCHEMA,
+    "web_fetch": web_fetch_tool.TOOL_SCHEMA,
+    "file_ops": file_ops_tool.TOOL_SCHEMA,
+    "todo_write": todo_write_tool.TOOL_SCHEMA,
+    "ask_user": ASK_USER_TOOL_SCHEMA,
 }
 
 
@@ -225,6 +264,17 @@ def _parse_tool_input(arguments: str) -> dict[str, Any] | str:
     except json.JSONDecodeError:
         pass
     return arguments
+
+
+def _parse_json_args(arguments: str) -> tuple[dict[str, Any] | None, str | None]:
+    """Parse tool-call arguments JSON into a dict; return (args, error_message)."""
+    try:
+        args = json.loads(arguments) if arguments else {}
+    except json.JSONDecodeError as exc:
+        return None, f"Invalid JSON arguments: {exc}"
+    if not isinstance(args, dict):
+        return None, "Invalid arguments: expected object"
+    return args, None
 
 
 def _serialize_search_result(result: SearchResult) -> dict[str, Any]:
@@ -573,10 +623,14 @@ class ChatOrchestrator:
                 sse_trace=sse_trace,
                 phase_data=phase_data,
                 disconnect_event=disconnect_event,
+                project_id=project_id,
+                thread_id=thread_id,
             ):
                 parsed = json.loads(event)
                 if parsed.get("type") == "chunk":
                     reply_parts.append(parsed.get("content", ""))
+                elif parsed.get("type") == "ask_user":
+                    reply_parts.append(parsed.get("question", ""))
                 yield event
         except Exception as exc:
             turn_record.error = str(exc)
@@ -829,6 +883,8 @@ class ChatOrchestrator:
         sse_trace: bool = False,
         phase_data: dict[str, Any] | None = None,
         disconnect_event: asyncio.Event | None = None,
+        project_id: str | None = None,
+        thread_id: str | None = None,
     ) -> AsyncIterator[str]:
         tool_schemas = [self._get_tool_schema(t) for t in tools] if tools else None
         try:
@@ -1095,6 +1151,29 @@ class ChatOrchestrator:
                         yield event
                 break
 
+            ask_user_call = next(
+                (tc for tc in tool_calls if tc.name == "ask_user"), None
+            )
+            if ask_user_call is not None:
+                ask_input = _parse_tool_input(ask_user_call.arguments)
+                question = ""
+                options: list[str] = []
+                if isinstance(ask_input, dict):
+                    question = str(ask_input.get("question", ""))
+                    raw_options = ask_input.get("options")
+                    if isinstance(raw_options, list):
+                        options = [str(o) for o in raw_options]
+                yield json.dumps(
+                    {"type": "ask_user", "question": question, "options": options}
+                )
+                if phase_data is not None:
+                    phase_data["llm_iterations"] = iteration
+                    phase_data["token_usage"] = _last_token_usage
+                    phase_data["llm_elapsed_ms"] = _total_llm_ms
+                    phase_data["tools_elapsed_ms"] = _total_tools_ms
+                yield json.dumps({"type": "done", "usage": {}, "model": model})
+                return
+
             assistant_msg: dict[str, Any] = {
                 "role": "assistant",
                 "content": text_buffer or None,
@@ -1119,7 +1198,12 @@ class ChatOrchestrator:
                     }
                 )
                 _t_tool_start = time.perf_counter()
-                result = await self._dispatch_tool(tc.name, tc.arguments)
+                result = await self._dispatch_tool(
+                    tc.name,
+                    tc.arguments,
+                    project_id=project_id,
+                    thread_id=thread_id,
+                )
                 _tool_elapsed = (time.perf_counter() - _t_tool_start) * 1000
                 _total_tools_ms += _tool_elapsed
 
@@ -1162,6 +1246,15 @@ class ChatOrchestrator:
                         "output": result,
                     }
                 )
+                if tc.name == "todo_write":
+                    try:
+                        parsed_result = json.loads(result)
+                    except json.JSONDecodeError:
+                        parsed_result = None
+                    if isinstance(parsed_result, dict) and "todos" in parsed_result:
+                        yield json.dumps(
+                            {"type": "todos", "todos": parsed_result["todos"]}
+                        )
 
             tools_round_complete = True
 
@@ -1204,10 +1297,35 @@ class ChatOrchestrator:
             },
         }
 
-    async def _dispatch_tool(self, name: str, arguments: str) -> str:
+    def _resolve_project_root(self, project_id: str | None) -> Any:
+        """Resolve a project's sandbox root via ProjectManager's public path property."""
+        if not project_id:
+            return None
+        return self.projects.projects_root / project_id
+
+    async def _dispatch_tool(
+        self,
+        name: str,
+        arguments: str,
+        *,
+        project_id: str | None = None,
+        thread_id: str | None = None,
+    ) -> str:
         logger_mcp.info("Dispatch tool name=%s arguments=%s", name, arguments)
         if name == "web_search":
             return await self._dispatch_web_search(arguments)
+        if name == "bash":
+            return await self._dispatch_bash(arguments, project_id)
+        if name == "grep":
+            return await self._dispatch_grep(arguments, project_id)
+        if name == "glob":
+            return await self._dispatch_glob(arguments, project_id)
+        if name == "web_fetch":
+            return await self._dispatch_web_fetch(arguments)
+        if name == "file_ops":
+            return await self._dispatch_file_ops(arguments, project_id)
+        if name == "todo_write":
+            return await self._dispatch_todo_write(arguments, project_id, thread_id)
         return json.dumps(
             {
                 "status": "not_implemented",
@@ -1215,6 +1333,108 @@ class ChatOrchestrator:
                 "message": f"Tool {name!r} is not implemented yet.",
             }
         )
+
+    async def _dispatch_bash(self, arguments: str, project_id: str | None) -> str:
+        args, err = _parse_json_args(arguments)
+        if err:
+            return json.dumps({"error": err})
+        project_root = self._resolve_project_root(project_id)
+        if project_root is None:
+            return json.dumps({"error": "No project context available for bash"})
+        try:
+            return await bash_tool.execute(
+                args.get("command"),
+                args.get("timeout_s", bash_tool.DEFAULT_TIMEOUT_S),
+                project_root,
+            )
+        except Exception as exc:
+            logger_mcp.exception("bash failed")
+            return json.dumps({"error": str(exc)})
+
+    async def _dispatch_grep(self, arguments: str, project_id: str | None) -> str:
+        args, err = _parse_json_args(arguments)
+        if err:
+            return json.dumps({"error": err})
+        project_root = self._resolve_project_root(project_id)
+        if project_root is None:
+            return json.dumps({"error": "No project context available for grep"})
+        try:
+            return await grep_tool.execute(
+                args.get("pattern"),
+                args.get("path", "."),
+                bool(args.get("case_sensitive", False)),
+                project_root,
+            )
+        except Exception as exc:
+            logger_mcp.exception("grep failed")
+            return json.dumps({"error": str(exc)})
+
+    async def _dispatch_glob(self, arguments: str, project_id: str | None) -> str:
+        args, err = _parse_json_args(arguments)
+        if err:
+            return json.dumps({"error": err})
+        project_root = self._resolve_project_root(project_id)
+        if project_root is None:
+            return json.dumps({"error": "No project context available for glob"})
+        try:
+            return await glob_tool.execute(
+                args.get("pattern"),
+                args.get("path", "."),
+                project_root,
+            )
+        except Exception as exc:
+            logger_mcp.exception("glob failed")
+            return json.dumps({"error": str(exc)})
+
+    async def _dispatch_web_fetch(self, arguments: str) -> str:
+        args, err = _parse_json_args(arguments)
+        if err:
+            return json.dumps({"error": err})
+        try:
+            return await web_fetch_tool.execute(args.get("url"))
+        except Exception as exc:
+            logger_mcp.exception("web_fetch failed")
+            return json.dumps({"error": str(exc)})
+
+    async def _dispatch_file_ops(self, arguments: str, project_id: str | None) -> str:
+        args, err = _parse_json_args(arguments)
+        if err:
+            return json.dumps({"error": err})
+        project_root = self._resolve_project_root(project_id)
+        if project_root is None:
+            return json.dumps({"error": "No project context available for file_ops"})
+        try:
+            return await file_ops_tool.execute(
+                args.get("operation"),
+                args.get("path"),
+                args.get("content"),
+                project_root,
+            )
+        except Exception as exc:
+            logger_mcp.exception("file_ops failed")
+            return json.dumps({"error": str(exc)})
+
+    async def _dispatch_todo_write(
+        self,
+        arguments: str,
+        project_id: str | None,
+        thread_id: str | None,
+    ) -> str:
+        args, err = _parse_json_args(arguments)
+        if err:
+            return json.dumps({"error": err})
+        project_root = self._resolve_project_root(project_id)
+        if project_root is None:
+            return json.dumps({"error": "No project context available for todo_write"})
+        if not thread_id:
+            return json.dumps({"error": "No thread context available for todo_write"})
+        try:
+            return await todo_write_tool.execute(
+                args.get("todos"), project_root, thread_id
+            )
+        except Exception as exc:
+            logger_mcp.exception("todo_write failed")
+            return json.dumps({"error": str(exc)})
 
     async def _dispatch_web_search(self, arguments: str) -> str:
         if self.search_service is None:
