@@ -39,7 +39,7 @@ def test_read_creates_defaults_when_missing(_isolated_settings: Path) -> None:
     data = read_settings()  # persists defaults on first read
     assert data["models"]["general_chat"] == "local/qwen3-8b"
     assert data["router"]["rules_enabled"] is True
-    assert len(data["router"]["rules"]) == 9
+    assert len(data["router"]["rules"]) == 15
     assert _isolated_settings.exists()
 
 
