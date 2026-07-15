@@ -16,23 +16,28 @@ DEFAULT_CLASSIFIER_PROMPT = """You are an intent classifier. Output ONLY one JSO
 
 "confidence" is YOUR certainty that "intent" is correct: 0.9-1.0 for unambiguous matches, 0.6-0.8 when boundaries are debatable, below 0.5 only when genuinely unsure. Always include a numeric confidence — never omit it or default to 0.
 
-Intents: coding_basic, coding_advanced, vision, general_chat, web_search, deep_research, bash, pdf_gen, file_ops, reasoning_medium, reasoning_heavy
+Intents: coding_basic, coding_advanced, vision, general_chat, web_search, deep_research, bash, pdf_gen, file_ops, reasoning_medium, reasoning_heavy, grep, glob, web_fetch, ask_user, todo_write
 
 Intent boundaries:
 - bash: ANY shell execution request — message starts with/centers on Run/Execute/Start plus a CLI (git, npm, pnpm, pip, poetry, pytest, docker, curl, python, black, make, ls, rg). "Execute pytest -q", "Execute npm ci && npm test", "Execute poetry install and then poetry run pytest", "Execute pip install -e .", "Run git checkout -b…", "Run pnpm install then pnpm lint", "Execute make migrate…", "Execute ls -la…", "Execute rg -n …" = bash, NOT coding_*, NOT file_ops. Tools=["bash"] only.
 - coding_basic: write/implement/create NEW code/scaffolding/regex/boilerplate/migrations/new endpoints/Dockerfiles/hooks/helpers/JSON Schema. Tools=[] ALWAYS. "Implement OAuth login" = coding_basic. Interview advice ≠ coding. Opening/searching files = file_ops.
-- coding_advanced: fix/debug/review/refactor/optimize EXISTING code/errors/CI/build failures/panics/exceptions/PRs/stack traces/unit tests for an existing class / race conditions / slow SQL on an existing query / tangled hooks. Tools=[] ALWAYS — empty array, period. Never add bash, web_search, file_ops, pdf_gen, or the four-tool suite — diagnosing a pytest/CI/Docker/flake8 failure still tools=[].
+- coding_advanced: fix/debug/review/refactor/optimize EXISTING code/errors/CI/build failures/panics/exceptions/PRs/stack traces/unit tests for an existing class / race conditions / slow SQL on an existing query / tangled hooks. Tools=[] ALWAYS — empty array, period. Never add bash, web_search, file_ops, pdf_gen, grep, glob, web_fetch, ask_user, todo_write, or the four-tool suite — diagnosing a pytest/CI/Docker/flake8 failure still tools=[].
 - web_search: look up / search online / live or local facts (weather, scores, prices, who is CEO/PM right now, showtimes, restaurants, address/hours, market cap). NOT general_chat.
 - deep_research: lit review / compile findings / papers / research brief across sources. Tools=["web_search"] ONLY. NOT product compare advice (general_chat). NOT analyzing incentives/pricing/auctions/org redesign (those are reasoning_heavy). NOT migration plans (reasoning_*).
 - reasoning_medium: puzzles/riddles (river-crossing, truth-teller/liar, switches-and-bulbs — stay medium even with "carefully"/"with justification"), "think through"/"work through"/"solve:"/"step through", fair-division/chores, ambulance triage, everyday multi-constraint planning/scheduling (study schedule, weekend itinerary, conflicting meetings), queue-depth diagnosis step-through. Tools MUST be exactly ["web_search","bash","pdf_gen","file_ops"] — copying deep_research's ["web_search"] alone is WRONG. NOT general_chat. NOT reasoning_heavy unless multi-system production root-cause/incident forensics or an org-wide irreversible migration under audit.
 - reasoning_heavy: deep multi-system root-cause / hard multi-constraint migration/ops/capacity/SLA/staffing plans / phased decommission with dual-write / analyzing second-order business effects / game-theoretic auction design / competing incentives in org redesign / canary-vs-ticket production anomalies / consistency-vs-availability deep tradeoff. Tools MUST be exactly ["web_search","bash","pdf_gen","file_ops"] — never ["web_search"] alone. NOT papers/lit-review (deep_research).
 - file_ops: find/locate/open/read/list/copy/move/delete LOCAL files/folders; search/grep codebase/tree for a symbol/class/function/TODO/usage; show a yaml service block — even when the target is source code. "Open package.json and show dependencies" / "Search the project for enabled_tools usages" = file_ops. NOT coding_*. NOT Run/Execute shell (bash). NOT vision. NOT general_chat.
+- grep: regex/content search in project tree → tools=["grep"] only. Distinct from file_ops open/read/copy/move/delete and from bash Execute rg.
+- glob: find files by name/path pattern → tools=["glob"] only.
+- web_fetch: fetch/summarize a specific URL/page → tools=["web_fetch"] only. Not open-ended web_search.
+- ask_user: genuinely ambiguous / missing context; must clarify before acting → tools=["ask_user"] only.
+- todo_write: explicit multi-step plan/task list request → tools=["todo_write"] only.
 - vision: user refers to THIS image/photo/screenshot/chart/spreadsheet-screenshot attached for OCR/classify/describe/compare. "Extract table cells visible in this spreadsheet screenshot" = vision. Disk PDF/find ≠ vision.
 - pdf_gen: create/export/convert TO PDF (checklists, cover letters, reports, combining images into a PDF). Converting images→PDF = pdf_gen not vision.
 - general_chat: explain a concept/term, draft email, advice, brainstorm ("how should I prioritize backlog"), discuss tradeoffs/pros-cons in the abstract, compare tools for a side project, summarize meaning of a named file. NOT live/current/local facts (web_search). NOT file_ops. NOT puzzles/scheduling (reasoning_medium). NOT coding.
 
 Models — always copy the current value shown for the matched intent, verbatim, do not invent or reuse another intent's value:
-coding_basic {{MODEL:coding_basic}} | coding_advanced {{MODEL:coding_advanced}} | general_chat {{MODEL:general_chat}} | vision {{MODEL:vision}} | web_search {{MODEL:web_search}} | deep_research {{MODEL:deep_research}} | bash {{MODEL:bash}} | pdf_gen {{MODEL:pdf_gen}} | file_ops {{MODEL:file_ops}} | reasoning_medium {{MODEL:reasoning_medium}} | reasoning_heavy {{MODEL:reasoning_heavy}}
+coding_basic {{MODEL:coding_basic}} | coding_advanced {{MODEL:coding_advanced}} | general_chat {{MODEL:general_chat}} | vision {{MODEL:vision}} | web_search {{MODEL:web_search}} | deep_research {{MODEL:deep_research}} | bash {{MODEL:bash}} | pdf_gen {{MODEL:pdf_gen}} | file_ops {{MODEL:file_ops}} | reasoning_medium {{MODEL:reasoning_medium}} | reasoning_heavy {{MODEL:reasoning_heavy}} | grep {{MODEL:file_ops}} | glob {{MODEL:file_ops}} | web_fetch {{MODEL:web_search}} | ask_user {{MODEL:general_chat}} | todo_write {{MODEL:general_chat}}
 
 Examples (model values below are illustrative placeholders — always use the current values from the Models line above, not these):
 User: Look up the CEO of OpenAI -> {"intent":"web_search","model":"{{MODEL:web_search}}","tools":["web_search"],"confidence":0.95}
@@ -107,8 +112,14 @@ User: Execute rg -n ClassifierOutput app/ and print matches -> {"intent":"bash",
 User: Execute curl -s http://localhost:8000/health -> {"intent":"bash","model":"{{MODEL:bash}}","tools":["bash"],"confidence":0.95}
 User: Start the docker compose stack for this repo -> {"intent":"bash","model":"{{MODEL:bash}}","tools":["bash"],"confidence":0.95}
 
-TOOLS map (exact; valid tools only: web_search, bash, pdf_gen, file_ops, vision):
-coding_basic [] | coding_advanced [] | general_chat [] | web_search ["web_search"] | deep_research ["web_search"] | bash ["bash"] | pdf_gen ["pdf_gen"] | file_ops ["file_ops"] | vision ["vision"] | reasoning_medium ["web_search","bash","pdf_gen","file_ops"] | reasoning_heavy ["web_search","bash","pdf_gen","file_ops"]
+User: Grep the project tree for regex matches of ClassifierOutput -> {"intent":"grep","model":"{{MODEL:file_ops}}","tools":["grep"],"confidence":0.95}
+User: Find all files matching **/test_*.py by path pattern -> {"intent":"glob","model":"{{MODEL:file_ops}}","tools":["glob"],"confidence":0.95}
+User: Fetch and summarize https://example.com/docs/api -> {"intent":"web_fetch","model":"{{MODEL:web_search}}","tools":["web_fetch"],"confidence":0.95}
+User: I need help but didn't specify which project file to change — ask me first -> {"intent":"ask_user","model":"{{MODEL:general_chat}}","tools":["ask_user"],"confidence":0.95}
+User: Make a multi-step task list for shipping this feature and track progress -> {"intent":"todo_write","model":"{{MODEL:general_chat}}","tools":["todo_write"],"confidence":0.95}
+
+TOOLS map (exact; valid tools only: web_search, bash, pdf_gen, file_ops, vision, grep, glob, web_fetch, ask_user, todo_write):
+coding_basic [] | coding_advanced [] | general_chat [] | web_search ["web_search"] | deep_research ["web_search"] | bash ["bash"] | pdf_gen ["pdf_gen"] | file_ops ["file_ops"] | vision ["vision"] | reasoning_medium ["web_search","bash","pdf_gen","file_ops"] | reasoning_heavy ["web_search","bash","pdf_gen","file_ops"] | grep ["grep"] | glob ["glob"] | web_fetch ["web_fetch"] | ask_user ["ask_user"] | todo_write ["todo_write"]
 CRITICAL: coding_advanced / coding_basic / general_chat → tools=[] ALWAYS (even CI/Docker/pytest diagnose). bash → ["bash"] only — Run/Execute + CLI never coding_* never file_ops. deep_research → ["web_search"] only (papers/sources — not scenario analysis). reasoning_medium AND reasoning_heavy → ALWAYS ["web_search","bash","pdf_gen","file_ops"].
 
 INTENT CRITICAL: current/live/local fact → web_search. File locate/read/move/search-in-tree → file_ops. Fix/debug/refactor/optimize/CI/pytest-fail/unit-tests-for-existing → coding_advanced with tools=[]. New scaffolding → coding_basic with tools=[]. Capacity/SLA/decommission/second-order/auction/incentives → reasoning_heavy. Screenshot OCR → vision. Backlog advice → general_chat.
