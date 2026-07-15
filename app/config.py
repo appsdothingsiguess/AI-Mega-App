@@ -236,8 +236,6 @@ class RoutingRule(BaseModel):
     tools: list[str] = Field(default_factory=list)
 
 
-_REASONING_TOOLS = ["web_search", "bash", "pdf_gen", "file_ops"]
-
 DEFAULT_ROUTING_RULES: list[RoutingRule] = [
     RoutingRule(
         patterns=[
@@ -247,36 +245,17 @@ DEFAULT_ROUTING_RULES: list[RoutingRule] = [
             "weather in",
         ],
         intent="web_search",
-        tools=["web_search"],
+        tools=["web_search", "ask_user", "todo_write"],
     ),
     RoutingRule(
         patterns=["make a pdf", "create a pdf", "generate a pdf", "export to pdf"],
         intent="pdf_gen",
-        tools=["pdf_gen"],
+        tools=["pdf_gen", "ask_user", "todo_write"],
     ),
     RoutingRule(
         patterns=["deep research", "research report", "research and summarize"],
         intent="deep_research",
-        tools=["web_search"],
-    ),
-    RoutingRule(
-        patterns=[
-            "step by step",
-            "think through",
-            "solve this puzzle",
-            "plan how to",
-        ],
-        intent="reasoning_medium",
-        tools=list(_REASONING_TOOLS),
-    ),
-    RoutingRule(
-        patterns=[
-            "deep reasoning",
-            "root cause analysis",
-            "complex multi-step plan",
-        ],
-        intent="reasoning_heavy",
-        tools=list(_REASONING_TOOLS),
+        tools=["web_search", "ask_user", "todo_write"],
     ),
     RoutingRule(
         patterns=[
@@ -287,12 +266,12 @@ DEFAULT_ROUTING_RULES: list[RoutingRule] = [
             "run this script",
         ],
         intent="bash",
-        tools=["bash"],
+        tools=["bash", "grep", "glob", "ask_user", "todo_write"],
     ),
     RoutingRule(
         patterns=["list files", "find the file", "browse files", "find in my files"],
         intent="file_ops",
-        tools=["file_ops"],
+        tools=["file_ops", "grep", "glob", "ask_user", "todo_write"],
     ),
     RoutingRule(
         patterns=[
@@ -303,7 +282,7 @@ DEFAULT_ROUTING_RULES: list[RoutingRule] = [
             "add a feature to",
         ],
         intent="coding_advanced",
-        tools=[],
+        tools=["bash", "file_ops", "ask_user", "todo_write"],
     ),
     RoutingRule(
         patterns=[
@@ -313,7 +292,67 @@ DEFAULT_ROUTING_RULES: list[RoutingRule] = [
             "analyze this data",
         ],
         intent="coding_basic",
-        tools=[],
+        tools=["ask_user", "todo_write"],
+    ),
+    RoutingRule(
+        patterns=["view", "look", "image", "photo"],
+        intent="vision",
+        tools=["vision", "web_search"],
+    ),
+    RoutingRule(
+        patterns=["pdf", "make a pdf", "make pdf"],
+        intent="pdf_gen",
+        tools=["pdf_gen", "ask_user", "todo_write"],
+    ),
+    RoutingRule(
+        patterns=["brainstorm", "think through this"],
+        intent="reasoning_medium",
+        tools=[
+            "file_ops",
+            "pdf_gen",
+            "bash",
+            "web_search",
+            "ask_user",
+            "todo_write",
+        ],
+    ),
+    RoutingRule(
+        patterns=["complex problem", "complex", "difficult debug"],
+        intent="reasoning_heavy",
+        tools=[
+            "file_ops",
+            "pdf_gen",
+            "bash",
+            "web_search",
+            "ask_user",
+            "todo_write",
+        ],
+    ),
+    RoutingRule(
+        patterns=["grep for", "search for", "search the codebase"],
+        intent="grep",
+        tools=["grep"],
+    ),
+    RoutingRule(
+        patterns=["find all", "find files", "list all .*files"],
+        intent="glob",
+        tools=["glob"],
+    ),
+    RoutingRule(
+        patterns=[
+            "fetch this url",
+            "fetch http",
+            "summarize this page",
+            "fetch and summarize",
+            "fetch https",
+        ],
+        intent="web_fetch",
+        tools=["web_fetch"],
+    ),
+    RoutingRule(
+        patterns=["plan and do", "multi-step", "todo list for"],
+        intent="todo_write",
+        tools=["todo_write"],
     ),
 ]
 
