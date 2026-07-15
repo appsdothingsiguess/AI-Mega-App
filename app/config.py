@@ -219,7 +219,9 @@ def render_classifier_prompt(template: str, models: "ModelsConfig") -> str:
 
 class OllamaSettings(BaseModel):
     base_url: str = "http://192.168.0.240:11434"
-    keep_alive: int = -1
+    # Seconds of idle time before Ollama unloads the model (Ollama-side purge).
+    # 300 = 5m; -1 = forever. Protects VRAM if the app exits uncleanly.
+    keep_alive: int = 300
     scheduler_enabled: bool = True
 
 

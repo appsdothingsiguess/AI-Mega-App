@@ -20,7 +20,7 @@ def _settings() -> Settings:
             classifier_prompt="Classify this message.",
             rules=[],
         ),
-        ollama=OllamaSettings(base_url="http://ollama.test", keep_alive=-1),
+        ollama=OllamaSettings(base_url="http://ollama.test", keep_alive=300),
     )
 
 
@@ -60,7 +60,7 @@ async def test_classify_posts_expected_ollama_payload() -> None:
     assert payload["system"] == "Classify this message."
     assert payload["prompt"] == "Look up today's weather"
     assert payload["stream"] is False
-    assert payload["keep_alive"] == -1
+    assert payload["keep_alive"] == 300
     assert payload["options"] == {
         "temperature": 0.0,
         "top_k": 20,
@@ -87,7 +87,7 @@ async def test_warmup_uses_same_gpu_options_as_classify() -> None:
     payload = post.await_args.kwargs["json"]
     assert payload["model"] == "qwen2.5:1.5b"
     assert payload["prompt"] == ""
-    assert payload["keep_alive"] == -1
+    assert payload["keep_alive"] == 300
     assert payload["options"] == {
         "temperature": 0.0,
         "top_k": 20,

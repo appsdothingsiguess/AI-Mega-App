@@ -851,7 +851,7 @@ export default function SettingsModal({ onClose, onSaved }: Props) {
                   }
                 />
               </Field>
-              <Field label="Keep alive (seconds, -1 = forever)">
+              <Field label="Keep alive (seconds; 300 = 5m idle unload, -1 = forever)">
                 <input
                   style={{ ...styles.input, width: 100 }}
                   type="number"

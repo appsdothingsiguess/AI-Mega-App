@@ -72,7 +72,7 @@ async def test_warmup_resident_embedding_uses_embed_endpoint() -> None:
     assert call.kwargs["json"] == {
         "model": "nomic-embed-text",
         "input": "warmup",
-        "keep_alive": -1,
+        "keep_alive": 300,
     }
 
 
@@ -112,7 +112,7 @@ async def test_unload_and_warmup_on_swap() -> None:
     assert warmup_call.kwargs["json"] == {
         "model": "qwen3:8b-32k",
         "prompt": "",
-        "keep_alive": -1,
+        "keep_alive": 300,
     }
     assert scheduler._loaded_main == "qwen3:8b-32k"
 

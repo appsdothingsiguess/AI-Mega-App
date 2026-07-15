@@ -32,6 +32,7 @@ def sync_litellm_config(
     ollama_model_names: dict[str, str],
     base_url: str,
     path: str | Path,
+    keep_alive: int | None = None,
 ) -> None:
     """Upsert ``local/*`` alias entries into the LiteLLM ``model_list``."""
     config_path = Path(path)
@@ -57,6 +58,8 @@ def sync_litellm_config(
         litellm_params = entry.setdefault("litellm_params", {})
         litellm_params["model"] = f"ollama_chat/{tag}"
         litellm_params["api_base"] = base_url
+        if keep_alive is not None:
+            litellm_params["keep_alive"] = keep_alive
 
     config_path.parent.mkdir(parents=True, exist_ok=True)
     config_path.write_text(
