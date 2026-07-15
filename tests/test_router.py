@@ -17,7 +17,14 @@ from app.config import (
 from app.router import HybridRouter
 from app.types import ClassifierOutput, RouteSource
 
-_REASONING_TOOLS = ["web_search", "bash", "pdf_gen", "file_ops"]
+_REASONING_TOOLS = [
+    "file_ops",
+    "pdf_gen",
+    "bash",
+    "web_search",
+    "ask_user",
+    "todo_write",
+]
 
 
 class FakeClassifier:
@@ -97,7 +104,7 @@ async def test_keyword_reasoning_heavy_includes_tools_excludes_vision() -> None:
     )
     router = HybridRouter(settings, classifier)
 
-    result = await router.route("Need a root cause analysis of the outage")
+    result = await router.route("Need a difficult debug of the outage")
 
     assert result.intent == "reasoning_heavy"
     assert result.tools == _REASONING_TOOLS
