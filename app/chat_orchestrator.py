@@ -481,6 +481,12 @@ class ChatOrchestrator:
             turn_record.route_source = route.source.value
             turn_record.route_confidence = route.confidence
 
+        logger_llm.info(
+            "classify_elapsed_ms=%.1f intent=%s",
+            (_t_route_done - _t_start) * 1000,
+            intent,
+        )
+
         if enabled_tools:
             tools = [t for t in tools if t in enabled_tools]
 
@@ -528,7 +534,18 @@ class ChatOrchestrator:
             and self.model_scheduler
             and self.settings.ollama.scheduler_enabled
         ):
+            _t_ensure = time.perf_counter()
             await self.model_scheduler.ensure_loaded(model_alias)
+            logger_llm.info(
+                "ensure_loaded_elapsed_ms=%.1f model_alias=%s",
+                (time.perf_counter() - _t_ensure) * 1000,
+                model_alias,
+            )
+        else:
+            logger_llm.info(
+                "ensure_loaded_skipped=True model_alias=%s",
+                model_alias,
+            )
 
         reply_parts: list[str] = []
 
@@ -1024,6 +1041,12 @@ class ChatOrchestrator:
 
             _llm_elapsed = (time.perf_counter() - _t_llm_start) * 1000
             _total_llm_ms += _llm_elapsed
+            logger_llm.info(
+                "llm_call_elapsed_ms=%.1f alias=%s iteration=%s",
+                _llm_elapsed,
+                model,
+                iteration,
+            )
 
             resolved_model = litellm_kwargs.get("model")
             if _is_deepseek_r1_model(model, resolved_model):

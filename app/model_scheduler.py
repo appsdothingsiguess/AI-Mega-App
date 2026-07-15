@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 from typing import TYPE_CHECKING
 
 import httpx
@@ -12,6 +13,7 @@ if TYPE_CHECKING:
     from app.config import Settings
 
 logger = logging.getLogger("prompter.scheduler")
+logger_llm = logging.getLogger("prompter.llm")
 
 _scheduler: ModelScheduler | None = None
 
@@ -58,16 +60,27 @@ class ModelScheduler:
 
     async def ensure_loaded(self, model: str) -> None:
         """Ensure model is loaded, evicting current main if needed."""
+        t0 = time.perf_counter()
+        swapped = False
         ollama_name = self._resolve_ollama_name(model)
-        if ollama_name in self._resident or ollama_name == self._loaded_main:
-            return
-        async with self._lock:
-            if ollama_name == self._loaded_main:
+        try:
+            if ollama_name in self._resident or ollama_name == self._loaded_main:
                 return
-            if self._loaded_main and self._loaded_main not in self._resident:
-                await self._unload(self._loaded_main)
-            await self._warmup(ollama_name)
-            self._loaded_main = ollama_name
+            async with self._lock:
+                if ollama_name == self._loaded_main:
+                    return
+                if self._loaded_main and self._loaded_main not in self._resident:
+                    await self._unload(self._loaded_main)
+                await self._warmup(ollama_name)
+                self._loaded_main = ollama_name
+                swapped = True
+        finally:
+            logger_llm.info(
+                "ensure_loaded_elapsed_ms=%.1f ensure_loaded_swapped=%s model=%s",
+                (time.perf_counter() - t0) * 1000,
+                swapped,
+                ollama_name,
+            )
 
     async def _unload(self, model: str) -> None:
         async with httpx.AsyncClient() as client:
