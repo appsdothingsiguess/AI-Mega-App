@@ -1,5 +1,5 @@
-import { useState } from "react";
-import ReactMarkdown from "react-markdown";
+import { memo, useMemo, useState } from "react";
+import ReactMarkdown, { type Components } from "react-markdown";
 import { Highlight, themes } from "prism-react-renderer";
 
 interface Props {
@@ -13,7 +13,13 @@ function detectLanguage(className?: string): string {
   return match?.[1] ?? "text";
 }
 
-function CodeBlock({ code, language }: { code: string; language: string }) {
+const CodeBlock = memo(function CodeBlock({
+  code,
+  language,
+}: {
+  code: string;
+  language: string;
+}) {
   const [copied, setCopied] = useState(false);
 
   const handleCopy = async () => {
@@ -51,58 +57,63 @@ function CodeBlock({ code, language }: { code: string; language: string }) {
       </Highlight>
     </div>
   );
-}
+});
+
+const markdownComponents: Components = {
+  code({ className, children, ...props }) {
+    const text = String(children).replace(/\n$/, "");
+    const isBlock = className || text.includes("\n");
+    if (!isBlock) {
+      return (
+        <code style={styles.inlineCode} {...props}>
+          {children}
+        </code>
+      );
+    }
+    const lang = detectLanguage(className);
+    return <CodeBlock code={text} language={lang} />;
+  },
+  pre({ children }) {
+    return <>{children}</>;
+  },
+  a({ href, children }) {
+    return (
+      <a href={href} style={styles.link} target="_blank" rel="noreferrer">
+        {children}
+      </a>
+    );
+  },
+  p({ children }) {
+    return <p style={styles.paragraph}>{children}</p>;
+  },
+  ul({ children }) {
+    return <ul style={styles.list}>{children}</ul>;
+  },
+  ol({ children }) {
+    return <ol style={styles.list}>{children}</ol>;
+  },
+  h1({ children }) {
+    return <h1 style={styles.h1}>{children}</h1>;
+  },
+  h2({ children }) {
+    return <h2 style={styles.h2}>{children}</h2>;
+  },
+  h3({ children }) {
+    return <h3 style={styles.h3}>{children}</h3>;
+  },
+};
 
 export default function ArtifactRenderer({ content, isStreaming }: Props) {
+  const markdown = useMemo(
+    () => (
+      <ReactMarkdown components={markdownComponents}>{content}</ReactMarkdown>
+    ),
+    [content],
+  );
+
   return (
     <div style={styles.root}>
-      <ReactMarkdown
-        components={{
-          code({ className, children, ...props }) {
-            const text = String(children).replace(/\n$/, "");
-            const isBlock = className || text.includes("\n");
-            if (!isBlock) {
-              return (
-                <code style={styles.inlineCode} {...props}>
-                  {children}
-                </code>
-              );
-            }
-            const lang = detectLanguage(className);
-            return <CodeBlock code={text} language={lang} />;
-          },
-          pre({ children }) {
-            return <>{children}</>;
-          },
-          a({ href, children }) {
-            return (
-              <a href={href} style={styles.link} target="_blank" rel="noreferrer">
-                {children}
-              </a>
-            );
-          },
-          p({ children }) {
-            return <p style={styles.paragraph}>{children}</p>;
-          },
-          ul({ children }) {
-            return <ul style={styles.list}>{children}</ul>;
-          },
-          ol({ children }) {
-            return <ol style={styles.list}>{children}</ol>;
-          },
-          h1({ children }) {
-            return <h1 style={styles.h1}>{children}</h1>;
-          },
-          h2({ children }) {
-            return <h2 style={styles.h2}>{children}</h2>;
-          },
-          h3({ children }) {
-            return <h3 style={styles.h3}>{children}</h3>;
-          },
-        }}
-      >
-        {content}
-      </ReactMarkdown>
+      {markdown}
       {isStreaming && <span style={styles.cursor}>▋</span>}
     </div>
   );

@@ -318,7 +318,8 @@ export default function DebugTracePanel({
 
   if (!visible) return null;
 
-  const filtered = filterTraceEntries(entries, filter);
+  const cappedEntries = entries.slice(-200);
+  const filtered = filterTraceEntries(cappedEntries, filter);
 
   const handleFetchLastTurn = async () => {
     if (!lastTurnUrl) return;
@@ -425,7 +426,7 @@ export default function DebugTracePanel({
       </div>
 
       {/* Swim lane */}
-      <SwimLane entries={entries} />
+      <SwimLane entries={cappedEntries} />
 
       {/* Content */}
       <div style={styles.list}>

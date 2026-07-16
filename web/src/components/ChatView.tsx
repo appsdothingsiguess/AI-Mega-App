@@ -1,4 +1,5 @@
 import {
+  useCallback,
   useEffect,
   useRef,
   useState,
@@ -62,6 +63,7 @@ function countEnabled(s: SourcesState): number {
 }
 
 interface StreamingMessage {
+  clientKey: string;
   role: "user" | "assistant";
   content: string;
   created_at: string;
@@ -100,13 +102,18 @@ function useVerbCycle(active: boolean): string {
   return verb;
 }
 
-function toDisplayMessage(m: MessageRecord): StreamingMessage {
+function toDisplayMessage(m: MessageRecord, index: number): StreamingMessage {
   return {
+    clientKey: `${m.created_at}-${m.role}-${index}`,
     role: m.role as "user" | "assistant",
     content: m.content,
     created_at: m.created_at,
     model: m.model,
   };
+}
+
+function newClientKey(): string {
+  return crypto.randomUUID();
 }
 
 export default function ChatView({
@@ -135,15 +142,31 @@ export default function ChatView({
   const bottomRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const abortRef = useRef<AbortController | null>(null);
+  const scrollRafRef = useRef<number | null>(null);
+  const sendMessageRef = useRef<(content: string) => Promise<void>>(
+    async () => undefined,
+  );
 
   const thinkingVerb = useVerbCycle(awaitingFirstChunk);
 
   const scrollBottom = () =>
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
 
+  const scheduleScrollBottom = () => {
+    if (scrollRafRef.current != null) return;
+    scrollRafRef.current = requestAnimationFrame(() => {
+      scrollRafRef.current = null;
+      scrollBottom();
+    });
+  };
+
   useEffect(() => {
     return () => {
       abortRef.current?.abort();
+      if (scrollRafRef.current != null) {
+        cancelAnimationFrame(scrollRafRef.current);
+        scrollRafRef.current = null;
+      }
     };
   }, []);
 
@@ -235,11 +258,13 @@ export default function ChatView({
     abortRef.current = controller;
 
     const optimisticUser: StreamingMessage = {
+      clientKey: newClientKey(),
       role: "user",
       content: trimmed,
       created_at: new Date().toISOString(),
     };
     const streamingAssistant: StreamingMessage = {
+      clientKey: newClientKey(),
       role: "assistant",
       content: "",
       created_at: new Date().toISOString(),
@@ -306,7 +331,7 @@ export default function ChatView({
               ...msg,
               content: msg.content + event.content,
             }));
-            setTimeout(scrollBottom, 30);
+            scheduleScrollBottom();
             break;
 
           case "tool_call":
@@ -356,15 +381,16 @@ export default function ChatView({
 
           case "debug":
             if (sseTraceEnabled) {
-              setTraceEntries((prev) => [
-                ...prev,
-                {
-                  id: `${Date.now()}-${prev.length}`,
-                  timestamp: new Date().toISOString(),
-                  stage: event.stage,
-                  data: event.data,
-                },
-              ]);
+              setTraceEntries((prev) =>
+                prev
+                  .concat({
+                    id: `${Date.now()}-${prev.length}`,
+                    timestamp: new Date().toISOString(),
+                    stage: event.stage,
+                    data: event.data,
+                  })
+                  .slice(-200),
+              );
             }
             break;
 
@@ -420,6 +446,8 @@ export default function ChatView({
     }
   };
 
+  sendMessageRef.current = sendMessage;
+
   const handleSend = async () => {
     if (!draft.trim() || streaming) return;
     const content = draft.trim();
@@ -427,7 +455,7 @@ export default function ChatView({
     await sendMessage(content);
   };
 
-  const handleAskUserAnswer = (text: string) => {
+  const handleAskUserAnswer = useCallback((text: string) => {
     setMessages((prev) => {
       const idx = prev.length - 1;
       if (idx < 0) return prev;
@@ -440,8 +468,8 @@ export default function ChatView({
       };
       return next;
     });
-    void sendMessage(text);
-  };
+    void sendMessageRef.current(text);
+  }, []);
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.key === "Enter" && !e.shiftKey) {
@@ -499,9 +527,9 @@ export default function ChatView({
             No messages yet — send one below
           </div>
         )}
-        {messages.map((m, i) => (
+        {messages.map((m) => (
           <MessageBubble
-            key={i}
+            key={m.clientKey}
             role={m.role}
             content={m.content}
             createdAt={m.created_at}

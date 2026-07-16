@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { memo, useMemo, useState } from "react";
 import type { SourceChunk, TodoItem } from "../api/client";
 import ArtifactRenderer from "./ArtifactRenderer";
 import AskUserPrompt from "./AskUserPrompt";
@@ -90,7 +90,23 @@ function ToolSection({ tools }: { tools: ToolEvent[] }) {
   );
 }
 
-export default function MessageBubble({
+function areEqual(prev: Props, next: Props): boolean {
+  return (
+    prev.role === next.role &&
+    prev.content === next.content &&
+    prev.createdAt === next.createdAt &&
+    prev.model === next.model &&
+    prev.isStreaming === next.isStreaming &&
+    prev.error === next.error &&
+    prev.tools === next.tools &&
+    prev.sources === next.sources &&
+    prev.todos === next.todos &&
+    prev.askUser === next.askUser &&
+    prev.onAskUserAnswer === next.onAskUserAnswer
+  );
+}
+
+function MessageBubble({
   role,
   content,
   createdAt,
@@ -103,6 +119,11 @@ export default function MessageBubble({
   onAskUserAnswer,
   error,
 }: Props) {
+  const displayContent = useMemo(
+    () => (role === "assistant" ? stripToolMarkup(content) : content),
+    [role, content],
+  );
+
   if (role === "system") return null;
 
   const time = createdAt
@@ -119,8 +140,6 @@ export default function MessageBubble({
       </div>
     );
   }
-
-  const displayContent = role === "assistant" ? stripToolMarkup(content) : content;
 
   return (
     <div style={styles.assistantRow}>
@@ -153,6 +172,8 @@ export default function MessageBubble({
     </div>
   );
 }
+
+export default memo(MessageBubble, areEqual);
 
 const styles: Record<string, React.CSSProperties> = {
   userRow: {
