@@ -2,6 +2,28 @@
 
 For another agent: analyze prompts vs failures; propose targeted mutations; validate carefully. Do not commit/push unless asked.
 
+## 2026-07-16 update: `eval/classifier/prompts/local.txt` was stale, now re-synced
+
+`local.txt` had drifted back to the **pre-mut12** prompt (3-key output, no `confidence`,
+11 intents — missing the Phase 1.5 tools `grep`/`glob`/`web_fetch`/`ask_user`/`todo_write`
+added by commit `5a4ae91`) while `DEFAULT_CLASSIFIER_PROMPT` in `app/config.py` had moved on
+to mut12 + Phase 1.5. Running `--full --variant local` against the stale file scored only
+**69.6%** composite — that regression was a test-harness artifact, not a real accuracy drop.
+Re-synced `local.txt` from `render_classifier_prompt(DEFAULT_CLASSIFIER_PROMPT, ModelsConfig())`
+(old file kept as `local.txt.pre-mut12.bak`). Re-running full-253 against the actual production
+classifier (`qwen2.5:3b`, see next paragraph) now reproduces the recorded mut12 winner:
+**96.0% composite, 324ms median** (run `20260716T055503Z`), matching `20260715T020647Z`'s 96.8%
+within normal run-to-run noise. **Lesson for future mutation sessions: re-sync `local.txt` from
+the live `DEFAULT_CLASSIFIER_PROMPT` before trusting a full-253 run — don't assume it still
+matches production.**
+
+**Also found while investigating:** this doc's "Classifier under test" (below) still says
+`qwen2.5:1.5b-32k` — that's stale. Production's actual classifier default (`app/config.py:376`,
+`settings.json`) is `ollama/qwen2.5:3b`, i.e. the **mut12/3b-GPU** row in the table below, not
+the mut7/1.5b-CPU row. Testing a prompt-file fix against `qwen2.5:1.5b-32k` (the wrong, no
+-longer-live model) will make a correct prompt look broken — confirm which model `settings.json`
+actually points at before drawing conclusions from an eval run.
+
 ## Goal / status
 
 | Variant | Run | n | Composite | Intent | Tools | Model | Tier | Median latency |

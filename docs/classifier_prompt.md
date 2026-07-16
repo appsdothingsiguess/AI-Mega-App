@@ -96,3 +96,11 @@ Override with `--prompt-file` / `--gold-map` when needed. Dataset tools are vali
 
 - **Promoted:** mut12 local wording → `DEFAULT_CLASSIFIER_PROMPT` in `app/config.py` (and local `settings.json` `router.classifier_prompt`).
 - **Adaptation:** concrete gold aliases → `{{MODEL:<intent>}}` placeholders; live JSON keeps `confidence` (fourth key) so router/adapter stay compatible. Eval `local.txt` remains the concrete-alias mut12 artifact.
+
+## 2026-07-16 re-verification (post token-budget-fix pull)
+
+| Run | Type | Model | Composite | Intent | Tools | Model | Tier | Median latency | Note |
+|---|---|---|---|---|---|---|---|---|---|
+| `20260716T054907Z` | full | qwen2.5:1.5b-32k | 69.6% | 81.8% | 81.8% | 80.2% | 82.2% | 287 ms | `local.txt` had drifted to stale pre-mut12 text; misleading low score, harness artifact not a real regression |
+| `20260716T055226Z` | full | qwen2.5:1.5b-32k | 52.6% | 81.8% | 59.7% | 81.8% | 83.0% | 324 ms | `local.txt` re-synced to live mut12, but tested against wrong model (1.5b was never mut12's target; production moved to 3b) — tools compliance (reasoning suite) collapsed |
+| `20260716T055503Z` | full | qwen2.5:3b | **96.0%** | 96.4% | 96.8% | 97.2% | 97.6% | 324 ms | Correct model (matches `settings.json`/`app/config.py:376` production default) + re-synced `local.txt` — reproduces `20260715T020647Z`'s 96.8% winner within noise. Confirms no real regression; root cause was `local.txt` staleness compounded by testing against the wrong model. |

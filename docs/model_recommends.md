@@ -53,7 +53,7 @@ Router intents `reasoning_medium` / `reasoning_heavy` map to `local/reasoning-*`
 | Heavy | `gemma4:31b-12k` | PASS both, largest weights — but **smallest ctx (12k)** of the three despite being biggest, so it's a poor fit for image + long-document tasks |
 
 ### 7. Classification / routing (fixed, no tiers)
-`qwen2.5:1.5b-32k` — CPU-only intent classifier, 100% accuracy, ~1.3s latency. Always called with `num_gpu:0`, so it costs **zero GPU VRAM**.
+**Updated 2026-07-16:** the classifier moved off CPU. Production default (`app/config.py:376`, `settings.json`) is now `ollama/qwen2.5:3b` on GPU (`num_gpu: 999`, `num_ctx: 8192`), running the "mut12" prompt — 96.0-96.8% composite accuracy on the full 253-row eval, ~300-330ms median latency. This replaced `qwen2.5:1.5b-32k` (CPU-only, `num_gpu:0`, mut7 prompt, 86.6% composite, ~1.1s latency) because mut7/1.5b topped out below the 90%+ accuracy target. `qwen2.5:1.5b-32k` is still installed but no longer the routed classifier.
 
 ---
 
@@ -61,9 +61,9 @@ Router intents `reasoning_medium` / `reasoning_heavy` map to `local/reasoning-*`
 
 `OLLAMA_MAX_LOADED_MODELS` is unset on this box, so Ollama keeps multiple models resident and evicts LRU only when VRAM runs out — the real limit is fitting inside 24GB, not a hard model-count cap.
 
-### The classifier pairs with everything, including reasoning models
+### The classifier now competes for GPU headroom — concurrency figures below need re-verification
 
-`qwen2.5:1.5b-32k` runs CPU-only (`num_gpu:0`) and never touches GPU VRAM. **Every model in this stack — including all three `deepseek-r1` reasoning tags — can run alongside it with zero VRAM cost.** Treat it as always-on; it never competes for GPU headroom, so it isn't a factor in any of the sizing below.
+**Stale as of 2026-07-16:** this section assumed the CPU-only `qwen2.5:1.5b-32k` classifier (zero VRAM cost). Production has since moved to `qwen2.5:3b` on GPU (`num_gpu: 999`) — see section 7 above. That model **does** consume GPU VRAM and **does** compete with task models for headroom, so the "always-on, zero-VRAM-cost" framing below is no longer accurate and the concurrent-pairs table hasn't been re-measured against the new classifier. Treat the numbers below as pre-migration reference only until a fresh `gpu_sanity_check.sh`/VRAM pass is run with `qwen2.5:3b` loaded alongside each combo.
 
 ### Practical concurrent pairs (classifier + 2 task models)
 
