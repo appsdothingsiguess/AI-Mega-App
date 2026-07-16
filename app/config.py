@@ -152,15 +152,15 @@ DEFAULT_OLLAMA_MODEL_NAMES: dict[str, str] = {
     "local/deepseek-r1-32b": "deepseek-r1:32b-16k",
     "local/gemma4-12b": "gemma4:12b-32k",
     "local/deepseek-r1-8b": "deepseek-r1:8b-32k",
-    "local/coding-light": "",
-    "local/coding-medium": "",
-    "local/coding-heavy": "",
-    "local/reasoning-medium": "",
-    "local/reasoning-heavy": "",
-    "local/vision-light": "",
-    "local/vision-medium": "",
-    "local/vision-heavy": "",
-    "local/tool-calling-medium": "",
+    "local/coding-light": "qwen2.5-coder:7b-16k",
+    "local/coding-medium": "qwen3-coder:30b-16k",
+    "local/coding-heavy": "qwen3-coder:30b-24k",
+    "local/reasoning-medium": "deepseek-r1:8b-32k",
+    "local/reasoning-heavy": "deepseek-r1:32b-16k",
+    "local/vision-light": "gemma4:12b-16k",
+    "local/vision-medium": "gemma4:26b-16k",
+    "local/vision-heavy": "gemma4:31b-12k",
+    "local/tool-calling-medium": "qwen3:8b-32k",
 }
 
 INTENT_FIELDS = (
@@ -524,6 +524,11 @@ class Settings(BaseSettings):
             self.search.tavily_api_key = self.tavily_api_key
         if self.qdrant_url.strip():
             self.qdrant.url = self.qdrant_url.strip()
+        for alias, tag in self.ollama_model_names.items():
+            if not str(tag).strip():
+                raise ValueError(
+                    f"ollama_model_names['{alias}'] must be a non-empty string"
+                )
         return self
 
     @property

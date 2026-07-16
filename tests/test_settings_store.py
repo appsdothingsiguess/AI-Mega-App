@@ -200,7 +200,7 @@ def test_qdrant_url_env_overrides_settings_json(
 def test_load_settings_merges_new_tier_aliases_into_old_catalog(
     _isolated_settings: Path,
 ) -> None:
-    """settings.json written before tiers existed must still expose placeholders."""
+    """settings.json written before tiers existed must still expose catalog tags."""
     from app.config import DEFAULT_OLLAMA_MODEL_NAMES
 
     old_catalog = {
@@ -224,7 +224,7 @@ def test_load_settings_merges_new_tier_aliases_into_old_catalog(
             assert names[alias] == old_catalog[alias]
         else:
             assert names[alias] == tag
-    assert names["local/coding-light"] == ""
+    assert names["local/coding-light"] == "qwen2.5-coder:7b-16k"
 
 
 def test_load_settings_merges_missing_reasoning_model_keys(

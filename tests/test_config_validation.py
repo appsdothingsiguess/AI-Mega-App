@@ -85,14 +85,9 @@ async def test_missing_ollama_model_names_is_error(
             "local/reasoning-heavy",
         ],
     )
-    settings = _settings(
-        tmp_path,
-        monkeypatch,
-        ollama_model_names={
-            "local/qwen2.5-coder-7b": "qwen2.5-coder:7b",
-            "local/qwen2.5-vl-3b": "qwen2.5-vl-3b",
-        },
-    )
+    settings = _settings(tmp_path, monkeypatch)
+    # Catalog merge fills missing keys from defaults; drop one after load.
+    del settings.ollama_model_names["local/qwen3-8b"]
 
     with patch("app.config_validation.httpx.AsyncClient") as client_cls:
         client = AsyncMock()
@@ -107,6 +102,62 @@ async def test_missing_ollama_model_names_is_error(
 
     assert any("local/qwen3-8b" in error for error in errors)
     assert any("ollama_model_names" in error for error in errors)
+
+
+@pytest.mark.asyncio
+async def test_empty_ollama_model_names_is_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    litellm_path = tmp_path / "litellm_config.yaml"
+    _write_litellm_config(
+        litellm_path,
+        [
+            "local/qwen3-8b",
+            "remote/deepseek-v4-pro",
+            "remote/kimi-k2-6",
+            "local/tool-calling-medium",
+            "local/coding-light",
+            "local/coding-heavy",
+            "local/vision-medium",
+            "local/reasoning-medium",
+            "local/reasoning-heavy",
+        ],
+    )
+    settings = _settings(tmp_path, monkeypatch)
+    settings.ollama_model_names["local/qwen3-8b"] = ""
+
+    with patch("app.config_validation.httpx.AsyncClient") as client_cls:
+        client = AsyncMock()
+        tags_response = MagicMock()
+        tags_response.raise_for_status = MagicMock()
+        collections_response = MagicMock()
+        collections_response.raise_for_status = MagicMock()
+        client.get = AsyncMock(side_effect=[tags_response, collections_response])
+        client_cls.return_value.__aenter__.return_value = client
+
+        errors, warnings = await validate_config(settings)
+
+    assert any("empty entry" in error for error in errors)
+    assert any("local/qwen3-8b" in error for error in errors)
+
+
+def test_settings_rejects_empty_ollama_model_names(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from pydantic import ValidationError
+
+    isolated = tmp_path / "isolated_settings.json"
+    isolated.write_text("{}", encoding="utf-8")
+    monkeypatch.setenv("SETTINGS_JSON_PATH", str(isolated))
+    names = dict(DEFAULT_OLLAMA_MODEL_NAMES)
+    names["local/coding-light"] = ""
+    with pytest.raises(ValidationError) as exc_info:
+        Settings(
+            projects_dir=tmp_path / "projects",
+            data_dir=tmp_path / "data",
+            ollama_model_names=names,
+        )
+    assert "ollama_model_names" in str(exc_info.value)
 
 
 @pytest.mark.asyncio

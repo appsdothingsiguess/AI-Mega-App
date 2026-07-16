@@ -1,4 +1,4 @@
-"""Tests for placeholder tier aliases in the Ollama model catalog."""
+"""Tests for tier aliases in the Ollama model catalog."""
 
 from __future__ import annotations
 
@@ -16,11 +16,24 @@ _TIER_ALIASES = (
     "local/tool-calling-medium",
 )
 
+_EXPECTED_TIER_TAGS = {
+    "local/coding-light": "qwen2.5-coder:7b-16k",
+    "local/coding-medium": "qwen3-coder:30b-16k",
+    "local/coding-heavy": "qwen3-coder:30b-24k",
+    "local/reasoning-medium": "deepseek-r1:8b-32k",
+    "local/reasoning-heavy": "deepseek-r1:32b-16k",
+    "local/vision-light": "gemma4:12b-16k",
+    "local/vision-medium": "gemma4:26b-16k",
+    "local/vision-heavy": "gemma4:31b-12k",
+    "local/tool-calling-medium": "qwen3:8b-32k",
+}
 
-def test_tier_aliases_present_with_empty_placeholder_values() -> None:
+
+def test_tier_aliases_present_with_resolved_ollama_tags() -> None:
     for alias in _TIER_ALIASES:
         assert alias in DEFAULT_OLLAMA_MODEL_NAMES
-        assert DEFAULT_OLLAMA_MODEL_NAMES[alias] == ""
+        assert DEFAULT_OLLAMA_MODEL_NAMES[alias] == _EXPECTED_TIER_TAGS[alias]
+        assert DEFAULT_OLLAMA_MODEL_NAMES[alias].strip() != ""
 
 
 def test_tier_aliases_are_not_models_config_fields() -> None:

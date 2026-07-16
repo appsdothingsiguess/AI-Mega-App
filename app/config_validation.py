@@ -37,9 +37,15 @@ async def validate_config(settings: Settings) -> tuple[list[str], list[str]]:
             )
 
     for alias in settings.models.values():
-        if alias.startswith("local/") and alias not in settings.ollama_model_names:
+        if not alias.startswith("local/"):
+            continue
+        if alias not in settings.ollama_model_names:
             errors.append(
                 f"Alias '{alias}' has no entry in settings.ollama_model_names"
+            )
+        elif not str(settings.ollama_model_names[alias]).strip():
+            errors.append(
+                f"Alias '{alias}' has empty entry in settings.ollama_model_names"
             )
 
     local_aliases = [alias for alias in settings.models.values() if alias.startswith("local/")]
