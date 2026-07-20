@@ -1,137 +1,70 @@
-# Prompter X — Agent Entry Point
+# AI Mega App — Agent Entry Point
 
-**Architecture spec (source of truth):** `prompter_x_complete_spec.md`
-
-## What This Is
-
-Personal AI platform replacing Claude.ai (web) with intent routing, local/remote model management, and deep research. Built on FastAPI + React/Vite + filesystem projects.
+Personal AI platform: a claude.ai-parity web UI backed by local models on a dedicated Ubuntu GPU box. FastAPI backend orchestrates chat, routing, tools, RAG, and hermes-style memory; llama.cpp `llama-server` instances managed by llama-swap do all inference through one OpenAI-compatible endpoint. The old Ollama/LiteLLM/React codebase in this repo is a post-mortem, not a foundation — build from `PLAN.md`, not from existing `app/` or `web/` code.
 
 ## Stack
 
-Python 3.12, FastAPI (async), React 18 / Vite / TypeScript, LiteLLM, Ollama (Docker), Qdrant (Docker).
+| Layer | Choice |
+|---|---|
+| Backend | Python 3.12, FastAPI, httpx, uvicorn (async, SSE-native) |
+| Inference | llama.cpp `llama-server` behind llama-swap (`:8080`, OpenAI-compatible; groups: resident small models + swapped big-model slot) |
+| Frontend | TypeScript compiled by plain `tsc` → native ES modules; no React, no bundler, no framework |
+| Storage | SQLite (WAL) + sqlite-vec + FTS5 — one file for chats, memories, vectors, traces |
+| Projects | Filesystem-first (`projects/<id>/instructions.md`, `docs/`) |
+| Coding agent | opencode serve (delegated, never nested in the chat tool loop) |
+| Browser | BrowserOS via MCP client (host machine, escalation path only) |
 
-## Related rules (always applied)
+## Pointer hierarchy (read in this order)
 
-| Rule | Topic |
-|------|--------|
-| `.cursor/rules/008-git-discipline.mdc` | Plan order, branches, worktrees, commits, pytest, roles |
-| `.cursor/rules/006-no-scope-creep.mdc` | FILE SCOPE, frozen `project_manager.py`, no ChatService |
-| `.cursor/rules/007-no-hardcoding.mdc` | Models/aliases from `settings.json`, intent labels |
-| `.cursor/rules/009-no-ref-do-not-copy.mdc` | `ref_do_not_copy/` blacklisted |
+1. `PLAN.md` — architecture source of truth. Adhere to it; flag conflicts, never improvise around it.
+2. `docs/FEATURES.md` — per-feature specs (interfaces, config keys, debug spans, toggles).
+3. `docs/PHASE_PROMPTS.md` — task prompts per phase.
+4. `docs/CURSOR_RULES.md` — the full `.cursor/rules/` ruleset, hooks, and `.cursorignore`.
 
-## Frozen contracts — read only, never modify
+## Frozen contracts (once they exist)
 
-- `app/protocols.py` — service Protocol interfaces
-- `app/types.py` — shared types (SearchResult, ClassifierOutput, RouteSource, RouteResult, ToolCallDelta)
-- `app/project_manager.py` — project CRUD, threads, filesystem structure
-- Intent labels: `general_chat | web_search | deep_research | coding_basic | coding_advanced | bash | pdf_gen | file_ops | vision | reasoning_medium | reasoning_heavy`
+Interface files are the real constraint layer — the type checker enforces what prose cannot. When created, these are read-only without owner approval:
+
+- `app/protocols.py` / `app/types.py` — service Protocols and shared types
+- SQLite schema and SSE event vocabulary (`done`/`error` terminal events)
+- Classifier output schema: `{class, effort, needs_tools}` — classes, never model names
+- Routing aliases: `chat-default | coder | reasoner | vision | utility | embed | classifier | needle`
 
 ## Config architecture
 
-| File | Contains | Secrets? |
-|------|----------|----------|
-| `settings.json` | Models, router, embedding, search, infra | No |
-| `.env` | API keys (`OPENCODE_API_KEY`, etc.) | Yes |
-| `litellm_config.yaml` | Model alias → endpoint routing | No |
+| File | Written by | Contains |
+|---|---|---|
+| `config.yaml` | humans, checked in | models, routing table, tools, prompts, defaults |
+| `settings.local.yaml` | Settings UI overlay | user overrides |
+| `.env` | humans, never committed | secrets only |
+| `llama-swap.yaml` | `gpu/swapgen.py` only | generated — never hand-edit |
+| `opencode.json` | config generator only | opencode provider wiring |
 
-## Reference material (blacklisted)
+Model names live in `config.yaml`, resolved at runtime — zero-code swaps.
 
-`ref_do_not_copy/` is excluded (`.cursorignore`, `.gitignore`) — see rule 009. Use in-repo docs under `docs/` for design handoffs.
+## Verification gate
 
-## Task contract
-
-The **user's message** supplies branch, FILE SCOPE, and acceptance. Wait for it before editing. If branch or scope is missing, ask once — do not guess.
-
-Parallel tasks use **`git worktree add`**, not `git checkout` / branch switching inside one Cursor window (that swaps the whole IDE checkout). Each worktree folder = one branch = one Cursor window/folder. The prompt must name **branch + absolute Workspace path** (the worktree root). Verify `git branch --show-current` matches and cwd is that folder; **never** `git checkout` / `git switch` to another task branch.
-
-## Key conventions
-
-- Streaming via SSE; `ChatOrchestrator.handle_message()` — ChatService is deleted
-- All I/O async; model names from `settings.json` / `litellm_config.yaml` — never hardcoded in app logic
-- `ModelScheduler` serializes local model swaps; Qdrant down = warning, not fatal
-
-## Verification (builders)
-
-Default gate: **pytest from repo root** (not `web/`). Do not start uvicorn / `npm run dev` unless the task requires live E2E.
+From repo root, before any completion report:
 
 ```bash
 python -m pytest -q --basetemp=.pytest-tmp/run
+npx tsc --noEmit
 ```
 
-- Baseline on `main`: **240 passed, 2 failed** (known harness issues). **New** failures are regressions.
-- Add/update tests when behavior contracts change.
-- Git procedure, plan order, completion report: `008-git-discipline.mdc`.
+Tests run against a fake llama-swap; no GPU in CI. A feature PR = code + wiring (registered and reachable end-to-end) + tests + `docs/<feature>.md`. "Built but not injected" is a rejected PR. Every pipeline stage writes a debug span — a feature invisible in the Debug panel is not done.
 
-## Roles
+## Worktrees and parallel agents
 
-| Role | Assigned when | You must |
-|------|----------------|----------|
-| **Builder** | Default | Plan: pre-flight **first**, pytest+commit **last** (`008`). Stay in FILE SCOPE. One branch per worktree. |
-| **Integrator** | User says integrator / audit | Audit branches (`008` integrator section). Merge/push only if user asks. |
+The user's task prompt supplies **branch + FILE SCOPE + acceptance**; if missing, ask once — never guess. One task = one branch = one FILE SCOPE = one worktree folder (`git worktree add ../AI-Mega-App-<task> -b feat/<task> main`), one Cursor window each. Fork from `main` only; never `git checkout`/`git switch` to another task's branch inside a shared checkout. Stage by explicit path (never `git add .`), conventional commits, completion report with branch/commits/files/pytest. Full procedure: `docs/CURSOR_RULES.md` → `007-git-worktrees`.
 
-**Parallel builders:** User creates worktrees from the repo parent, then opens each path in its own Cursor window. One worktree folder = one branch = one Cursor window. Never `git checkout` / `git switch` another task branch in a shared folder. Example (sibling dirs of the main clone):
+## Boundaries (three tiers)
 
-```bash
-git worktree add ../AI-Mega-App-tool-bash -b feat/tool-bash main
-git worktree add ../AI-Mega-App-tool-grep -b feat/tool-grep-glob main
-git worktree add ../AI-Mega-App-tool-fetch -b feat/tool-web-fetch main
-```
+- **Always:** run the verification gate; write debug spans; add tests with behavior changes; keep modules under ~300 lines.
+- **Ask first:** new dependencies; schema, SSE-event, or `config.yaml` key changes; touching frozen contracts; CI/hooks/`.cursor/` edits.
+- **Never:** hand-edit generated files (`llama-swap.yaml`, `web/js/**`); secrets outside `.env`; `git add .` / force-push / merge / push without explicit user request; read or copy `ref_do_not_copy/`.
 
-### Multi-agent per feature
-
-A **feature** may declare 2+ parallel builders when the user prompt (or a wave table under File ownership) lists **non-overlapping FILE SCOPEs**. Coordinators must split only on non-overlapping paths.
-
-Coordinators assign each builder a **worktree path + branch + FILE SCOPE**; do not assign parallel agents into the same folder. Never checkout another task’s branch; fork from `main` only; no `git add .`.
-
-**Hard rule:** never assign two agents the same path in one wave. Single-file changes get one owner; other agents take other files (docs, tests, backend).
-
-Prompt contract: each agent’s message must still include branch + FILE SCOPE + acceptance; missing → ask once.
+When blocked by scope or constraints: stop and report. A described blocker is success; an improvised out-of-scope change is not.
 
 ## Current phase
 
-**Phase 1: Core Platform** — message → route → streamed response; web search toggleable.
-
-## File ownership (Phase 1 task wave)
-
-If the user prompt lists FILE SCOPE, **the prompt wins**. Otherwise defer to this table:
-
-| Owner | Files |
-|-------|-------|
-| Task 1 (LiteLLM) | `app/config.py`, `pyproject.toml`, `litellm_config.yaml`, `app/model_scheduler.py`, `app/config_validation.py` |
-| Task 2a (Embedding) | `app/protocols.py`, `app/types.py`, `app/adapters/embedding_nomic.py` |
-| Task 2b (Qdrant) | `app/adapters/qdrant_store.py`, `docker-compose.yml` |
-| Task 2c (Search) | `app/adapters/search_ddg.py` |
-| Task 3 (Router) | `app/router.py`, `app/adapters/classifier_qwen.py` |
-| Task 4 (Orchestrator) | `app/chat_orchestrator.py`, `app/main.py` |
-| Task 5 (SSE) | `app/main.py` (extends Task 4) |
-| Task 6 (MCP) | `app/tools/web_search.py` |
-| Task 7 (Settings) | `app/settings_store.py`, `settings.json`, `web/src/components/SettingsModal.tsx` |
-| Task 8 (Frontend) | `web/src/api/client.ts`, `web/src/components/ChatView.tsx`, `web/src/components/MessageBubble.tsx`, new TSX |
-
-### Bug-fix overlap
-
-Split by concern — one branch each; minimal diffs on shared files (`App.tsx`, `app/main.py`, `app/chat_orchestrator.py`).
-
-| Concern | Typical files |
-|---------|----------------|
-| Nav UI | `App.tsx`, `ProjectSidebar.tsx`, `ProjectGrid.tsx`, `ChatView.tsx` |
-| Stop button UI | `ChatView.tsx` |
-| Stop / SSE disconnect backend | `app/main.py`, `app/chat_orchestrator.py` |
-| UI prefs `localStorage` | `App.tsx` |
-| `enabled_tools` backend | `app/schemas.py`, `app/chat_orchestrator.py`, tests |
-| Model dropdown | `ModelSelector.tsx`, adapters |
-
-### Settings UI polish (wave)
-
-| Owner | Files |
-|-------|-------|
-| Docs | `AGENTS.md` |
-| Settings UI | `web/src/components/SettingsModal.tsx`, `web/dist/` (rebuild) |
-
-### Wire reasoning intents (wave)
-
-| Owner | Files |
-|-------|-------|
-| Docs | `AGENTS.md`, `README.md`, `docs/model_recommends.md` |
-| Backend | `app/config.py`, `tests/test_router.py`, `tests/test_settings_store.py`, `tests/test_model_tiers_config.py` |
-| Frontend | `web/src/api/client.ts`, `web/src/components/SettingsModal.tsx`, `web/src/components/ModelSelector.tsx`, `web/dist/` (rebuild) |
+**Phase 0 — Ground truth.** Box setup: llama.cpp build, llama-swap systemd unit, initial model downloads, hand-written first `llama-swap.yaml`, swap-latency and sqlite-vec benchmarks. Deliverable is a doc of measured facts. **No app code in Phase 0.** See `PLAN.md` §5.
