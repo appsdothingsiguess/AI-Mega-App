@@ -1,6 +1,6 @@
 # AI Mega App — Build Plan v2
 
-**Date:** 2026-07-20
+**Date:** 2026-07-20 (rev 2 — owner feedback applied: TypeScript, hardware confirmed 3090+3070, hermes-style memory, claude.ai 1:1 UI, no auth, opencode/BrowserOS division of labor)
 **Status:** Planning. Supersedes `prompter_x_complete_spec.md` (kept only as a post-mortem reference).
 **Confidence tags:** [FACT] verifiable · [INFERENCE] reasoned · [UNCERTAIN] guess, verify before building.
 
@@ -43,7 +43,7 @@ Carry-forward that *did* work: SSE streaming contract, filesystem-first projects
 
 ```
 ┌────────────────────────── Any machine on LAN ──────────────────────────┐
-│  Browser → Web UI (vanilla JS modules + CSS, SSE)                      │
+│  Browser → Web UI (TypeScript→ES modules + CSS, SSE)                   │
 │  BrowserOS (optional, host machine) ← MCP → backend                    │
 │  opencode serve (optional, host machine, for host-side coding)         │
 └────────────────────────────────┬───────────────────────────────────────┘
@@ -78,13 +78,13 @@ Carry-forward that *did* work: SSE streaming contract, filesystem-first projects
 | Layer | Choice | Why |
 |---|---|---|
 | Backend | Python 3.12 + FastAPI + httpx + uvicorn | Async SSE-native, already known, minimal deps. No LiteLLM, no LangChain, no agent framework. |
-| Frontend | **Vanilla ES modules + CSS custom properties + `<template>` elements. No React, no Vite, no build step.** | Key Rule 2 verbatim; Odysseus does exactly this at far larger scope. Each view = one JS module + one CSS file; Rule 3 (no 1000-line files) enforced by module-per-component. Markdown render: `marked` + DOMPurify (two small vendored libs); highlight: `highlight.js`. |
+| Frontend | **TypeScript compiled with plain `tsc` → native ES modules. No React, no bundler, no framework.** | Owner approved TS ("light"). `tsc` is the entire build: `src/*.ts` → `web/js/*.js`, browser loads modules directly. Each view = one TS module + one CSS file; Rule 3 (no 1000-line files) enforced by module-per-component. Markdown render: `marked` + DOMPurify (small vendored libs); highlight: `highlight.js`. |
 | Storage | **SQLite (WAL) + sqlite-vec extension** — one file for chats, messages, memories, vectors, debug traces, settings-overlay | Single-user scale. Qdrant was a second service to babysit; sqlite-vec removes Docker dependency for the data plane. Escape hatch: `VectorStore` interface so Qdrant can return if corpus outgrows sqlite-vec (>~1M vectors). [INFERENCE — sqlite-vec comfortably handles personal-scale corpora; verify with a 100k-chunk benchmark in Phase 0] |
 | Projects | Filesystem-first (`projects/<id>/instructions.md`, `docs/`) — the one part of the old app that worked | Keep, but thread/message storage moves to SQLite (filesystem JSON threads made model-attribution and search painful). |
 | Inference | llama.cpp `llama-server` instances, managed by **llama-swap** | Spec §1. See §4.1. |
 | Config | `config.yaml` (one file, checked in with defaults) + `.env` (secrets only) + generated `llama-swap.yaml` (machine-written, never hand-edited) | Two hand-edited files instead of three. Settings UI writes a `settings.local.yaml` overlay. |
 
-**Frontend risk flag** [UNCERTAIN]: no-build vanilla JS means no TypeScript. Mitigation: JSDoc type annotations + `tsc --checkJs` in CI as a *linter* (types without a build step). If DOM complexity grows past ~30 components, revisit with lit-html (still no build) before ever reaching for React. This is the single decision most likely to get re-litigated; committing to it now per Key Rule 2.
+If DOM complexity grows past ~30 components, revisit with lit-html (still no bundler) before ever reaching for React.
 
 ---
 
@@ -93,6 +93,26 @@ Carry-forward that *did* work: SSE streaming contract, filesystem-first projects
 ### 4.1 llama.cpp + llama-swap (spec §1, §2, §14)
 
 **Decision: llama-swap in front of plain `llama-server` instances — not llama.cpp's native router mode.** Rationale: router mode keeps one resident model per worker and lacks llama-swap's group semantics (pin classifier+embedder+needle resident while big models swap); llama-swap also fronts any OpenAI/Anthropic-compatible backend if we ever add vllm/whisper/SD servers, and has TTL, metrics, and a monitoring UI we'd otherwise write. [FACT re: capabilities; INFERENCE re: choice]
+
+**Hardware (confirmed):** RTX 3090 (24GB) + RTX 3070 (8GB), 64GB system RAM, Ryzen 9. Future: dual 3090 + dual 3070 split across **two computers** — llama-swap only manages processes on its own machine, so the two-box future means one llama-swap per box and a `model → endpoint` map in our config; the backend already selects by model name, so this is additive, not a redesign. [FACT re: llama-swap scope]
+
+**Placement strategy for the current pair:** the 3070 is the *residents* card — classifier, embedder, Needle live there permanently (all three fit in well under 8GB, leaving room for a light utility model). The 3090 is the *main slot* — one big model at a time (30B/32B quants), swapped by llama-swap. This means big-model swaps never evict the router/RAG path, and CPU (Ryzen 9) covers <2B fallbacks (spec §2.1).
+
+**Model roster** — carried over from the current Ollama tier system, re-expressed as GGUF entries. Tier aliases survive; only the runtime changes. Context lengths that were baked into Ollama tags (`-16k`, `-32k`) become `-c` flags:
+
+| Alias (kept) | Model (GGUF) | Card | Notes |
+|---|---|---|---|
+| `coding-light` | Qwen2.5-Coder-7B | 3070 or 3090 | Q4 fits 3070 (~4.5GB) → can stay hot beside residents [UNCERTAIN — verify headroom in Phase 0] |
+| `coding-medium` / `coding-heavy` | Qwen3-Coder-30B (A3B MoE) | 3090 | Same weights, different `-c` (16k/24k) → **one llama-swap entry per ctx, same file** — no double disk/VRAM cost at rest |
+| `reasoning-medium` | DeepSeek-R1-8B | 3090 | |
+| `reasoning-heavy` | DeepSeek-R1-32B | 3090 | Q4 ~19GB — tight with 16k ctx; Phase 0 measures |
+| `vision-light/medium/heavy` | Gemma4 12B/26B/31B + mmproj | 3090 | 31B may not fit at useful quant+ctx on 24GB [UNCERTAIN — Phase 0 decides whether heavy tier survives] |
+| `tool-calling-medium` | Qwen3-8B | 3090 (or 3070 Q4) | |
+| `classifier` | ~1.7B (Qwen3-1.7B) | 3070 resident | |
+| `embed` | nomic-embed-v2 or Qwen3-embedding | 3070 resident | |
+| `needle` | Cactus Needle 26M | 3070 resident (or CPU — it's 14MB) | |
+
+The roster was tuned for a lone 3090; the 3070 residents card is the new headroom — Phase 0's job is to re-measure, not trust these notes.
 
 **GPU delegation (spec §14):** at backend startup, run `nvidia-smi --query-gpu=index,name,memory.total,memory.free --format=csv` → GPU inventory endpoint → Settings UI lets the user assign each model to a GPU (or CPU for <2B models, spec §2.1). A deterministic Python module (`gpu/swapgen.py`) renders `llama-swap.yaml` from `config.yaml` model entries + GPU assignments:
 
@@ -124,7 +144,7 @@ Changing assignments → regenerate file → llama-swap config reload. **This is
 
 ### 4.2 Web application (spec §4)
 
-- Layout: left nav (Chats / Projects / Settings / Debug), center chat, right context panel (project sources / artifact view), Material-ish flat design via one `theme.css` of custom properties (Future §3 themes = swap that file).
+- **Design target: mirror claude.ai web 1:1** (owner directive) — collapsible left sidebar (new chat, Chats, Projects, recents), centered chat column, right-side artifact/context panel, model picker in the composer, per-message model label, plus a Settings area and the Debug view (our additions). Build a static HTML/CSS mock of the claude.ai layout *first* and get it approved before any logic — UI parity was where the last build quietly diverged (Bug 3). Theme via one `theme.css` of custom properties (Future §3 themes = swap that file).
 - Every view is a JS module exporting `mount(el, state)` / `unmount()`. A 200-line `router.js` (hash-based) and a 150-line `store.js` (pub/sub state) — hand-written, no framework.
 - SSE client with auto-reconnect and a hard rule learned from Bug 2: **every stream must terminate with `done` or `error`; UI shows "connection lost" if neither arrives.**
 
@@ -139,12 +159,20 @@ Three layers, strictly ordered; every decision emitted to the debug panel with s
    - Timeout 2s → default chat model. Confidence < threshold → default chat model, flagged in debug panel.
 4. **Optional upgrade path** [INFERENCE, Phase 6+]: a ModernBERT-style fine-tuned classifier head (vLLM Semantic Router's approach) if the generative classifier's accuracy plateaus; the router interface doesn't change.
 
-### 4.4 opencode integration (spec §6)
+### 4.4 opencode integration (spec §6) — division of labor, with corrections to the owner's proposal
 
-- `opencode serve` runs as a systemd unit on the Ubuntu box; optionally also on the host machine (user-launched). Both registered in Settings with URL + basic-auth password.
-- opencode's `opencode.json` on both machines points its provider at llama-swap's `/v1` (custom OpenAI-compatible provider) — so opencode uses the same local models. Written by our config generator, not by hand and not by AI (Future §8 rule).
-- Web app surface: a "Code" area that (a) lists opencode sessions via its OpenAPI API, (b) creates a session against a chosen directory, (c) streams session events into a viewer, (d) "Open in VS Code" deep-link for full projects. The chat router can *suggest* delegating a coding request to opencode but never silently does it — user confirms. [INFERENCE — keeps agent loops from nesting, the failure mode the old handoff warned about]
-- [UNCERTAIN]: opencode's event-stream endpoint shape and session API stability across versions — pin the opencode version, smoke-test in Phase 4 before building UI on it. The TS SDK is official; from Python we call the HTTP API directly (it's OpenAPI-specified).
+Owner's proposal and where I push back:
+
+1. **"In-chat coding artifacts (simple python script, debugging a file) go through opencode on Ubuntu."** — **Pushback: don't.** A simple script or single-file debug is one completion by the chat/coding model + a sandbox run; routing it through opencode adds a full agent loop (session create → agent plans → tool calls → file writes) for a task with no repo, multiplying latency and failure points for zero gain. The dividing line that works: **no workspace → chat model + artifact sandbox; real directory/repo → opencode session scoped to it.** "Debug this file" sits on the line: if the file was pasted/attached, it's chat-side; if it lives in a project/repo path on the box, delegate to opencode. [INFERENCE — this is also how Claude.ai itself splits artifacts vs. Claude Code]
+2. **"App can use opencode's tool calling to search files etc (not sure)."** — **Correct to: no.** opencode's API is session-based (create session → prompt → agent acts); it is not a tool-RPC you call for one `grep`. [FACT — OpenAPI surface is sessions/messages/events] Our own `file_ops` tool (~100 lines, project-scoped) does file search directly — faster, deterministic, debuggable (Key Rule 1: if plain programming does the task, no AI in the loop).
+3. **VS Code integration is indeed separate:** opencode's IDE extension talks to its own opencode instance; nothing for our backend to do beyond docs + a "open this project in VS Code + opencode" workflow doc.
+
+Design:
+- `opencode serve` as a systemd unit on the Ubuntu box (primary — spec: generation happens on Ubuntu); optionally also user-launched on the Windows host for host-side repos. Both registered in Settings by URL. No auth (owner: open LAN).
+- opencode's `opencode.json` on both machines points its provider at llama-swap's `/v1` (custom OpenAI-compatible provider) — same local models. Written by our config generator, not by hand and not by AI (Future §8 rule).
+- **Docs deliverable (owner §9):** `docs/opencode.md` includes switching opencode's provider between local llama-swap and **opencode zen** (its hosted gateway, the old "OpenCode Go") — an `opencode.json` provider/model edit + API key; document both directions.
+- Web app surface: a "Code" area that (a) lists sessions via the OpenAPI API, (b) creates a session against a chosen directory, (c) streams session events into a viewer, (d) "Open in VS Code" deep-link. The router can *suggest* delegation; the user confirms — agent loops never nest silently.
+- [UNCERTAIN]: opencode's event-stream endpoint shape and API stability across versions — pin the version, smoke-test in Phase 4 before building UI on it.
 
 ### 4.5 Projects (spec §7)
 
@@ -160,17 +188,20 @@ Two tiers, both toggleable:
 ### 4.7 Tool calls (spec §9)
 
 - Primary path: llama.cpp native tool calling (`--jinja` + model chat template) through the OpenAI `tools` API; orchestrator runs the accumulate-deltas → dispatch → append-result loop (max N iterations, N in config). The old spec's delta-merge logic was correct — reuse the *pattern*.
-- **Needle assist (spec §9.1):** for models tagged `tool_call: weak` in config, the orchestrator can route the *tool-selection step* to resident Needle: query + tool schemas → Needle emits the JSON call → orchestrator executes → result handed to the main model as context for the answer. Toggleable per model; debug panel marks turns that used it. Constraint honored: Needle is single-shot — multi-step loops still require a competent tool model or the router escalating model class. [FACT re: Needle's scope]
+- **Needle assist (spec §9.1):** for models tagged `tool_call: weak` in config, the orchestrator routes the *call-emission step* to resident Needle: query + tool schemas → Needle emits the JSON call → orchestrator executes → result to the main model. Toggleable per model; debug panel marks Needle-assisted turns.
+- **On the owner's "Needle is fast enough to chain many calls" idea — half right.** Speed is genuinely not the constraint (6000 tok/s prefill; repeated invocation is nearly free). The constraint is that Needle emits **one call per inference with no conditional planning** — "tool chaining is not in scope" per Cactus themselves. [FACT] So chains work exactly when *deciding what's next* doesn't require reasoning: either (a) a bigger model plans the step list and Needle fills each call's arguments, or (b) the next step is mechanically determined (fixed pipelines like search→fetch→fetch). Anything with branching on results stays with the main model. Architecture: Needle is the **dispatcher**, never the **planner** — and the debug panel will show per-step who decided vs. who emitted.
+- **Custom training is real and cheap** [FACT]: Cactus ships a local fine-tuning playground — tool spec → synthetic data (Gemini API) → train → eval in ~10 min, ~120 examples/tool recommended. Plan: once our tool registry stabilizes (end of Phase 3), fine-tune Needle on our exact schemas and re-run the router/tool eval; adopt only if it beats the untuned baseline. In-context learning is not yet supported, so schema changes mean retraining — another reason to wait for a stable registry. [FACT]
 - Tools are one module each under `tools/`, self-describing (`name, schema, execute()`, `enabled` flag) — registry auto-discovers; toggling a tool off = config flag (Key Rule 6).
 - Initial set: `web_search`, `fetch_url`, `file_ops` (project-scoped), `run_code` (Tier 2 sandbox), `browser` (BrowserOS MCP), `memory_save/search`.
 
-### 4.8 RAG + memory (spec §10) — **spec sentence is truncated ("similar to …")**
+### 4.8 RAG + memory (spec §10) — reference confirmed: **hermes-agent**
 
-The spec cuts off mid-sentence. Building the consensus design (Open WebUI/hermes-style) unless you name the reference: [UNCERTAIN — confirm the intended reference app]
+How hermes actually does it [FACT — hermes docs]: fact-based "holographic memory" in **SQLite + FTS5** (not a vector DB!), memories injected into the user message inside a tagged `<memory-context>` block, pluggable memory providers, and a **background self-improvement review** that after a turn may quietly save a memory or update a skill. Our adaptation:
 
-- **RAG:** per-project doc ingestion → heading-aware chunking (~512 tokens, 20% overlap; AST chunking for code via tree-sitter later) → embeddings (resident embed model via llama-swap `/v1/embeddings`) → sqlite-vec + SQLite FTS5 → **hybrid retrieval** (vector + BM25, reciprocal-rank fusion) → top-k into context with source citations in the UI.
-- **Memory:** three stores — (a) user preferences/custom prompts (spec §17): plain editable text, always injected; (b) project memories: model-proposed facts, user-approved, injected in that project; (c) global memories: `memory_save` tool + retrieval by embedding at chat start. All visible/editable in Settings → Memory (no invisible memory).
-- Chat history itself is embedded per-message-batch → enables "search my past chats" (spec §13).
+- **RAG (documents):** per-project ingestion → heading-aware chunking (~512 tokens, 20% overlap; AST chunking for code via tree-sitter later) → embeddings (resident embed model via llama-swap `/v1/embeddings`) → sqlite-vec + FTS5 → **hybrid retrieval** (vector + BM25, reciprocal-rank fusion) → top-k with source citations in the UI.
+- **Memory (hermes-style facts):** discrete fact rows in SQLite (FTS5 + optional embedding), three scopes — user preferences/custom prompts (always injected, spec §17), project memories, global memories. Injected as a tagged context block, hermes-fashion. All visible/editable in Settings → Memory; nothing invisible.
+- **Self-improvement loop (the part the owner flagged as "super cool"):** after a turn completes, a background job on the utility model reviews the transcript and may *propose* a memory write or an update to a skill/instruction file — proposals land in a review queue in the UI, auto-accept optional per scope. Phased: manual `memory_save` tool in Phase 3; background reviewer in Phase 5; skill *creation* (hermes' full loop) belongs with Future §7 custom skills. [INFERENCE — hermes writes silently; queue-first is safer for a system you're also debugging]
+- Chat history embedded per-message-batch → "search my past chats" (spec §13).
 
 ### 4.9 Attachments (spec §11)
 
@@ -183,13 +214,16 @@ Upload endpoint → type sniff → extractor registry: text/code (direct), pdf (
 - **Router eval:** keep the old repo's one good idea — a labeled prompt→expected-route CSV + `eval_router.py` scoring script, run on classifier prompt/model changes.
 - **E2E smoke:** Playwright, ~10 flows (send message, switch model, upload file, artifact render, debug panel populates), run against a fake-LLM backend so CI needs no GPU.
 - **Live hardware check:** `scripts/preflight.py` — nvidia-smi present, llama-swap up, each configured model loads and answers 1 token, embeddings endpoint alive. Run on the box, not CI.
-- Gate: no feature merges without its tests; CI = lint (ruff) + `tsc --checkJs` + pytest + Playwright-vs-fake.
+- Gate: no feature merges without its tests; CI = lint (ruff) + `tsc --noEmit` typecheck + pytest + Playwright-vs-fake.
 
 ### 4.11 Vector DB (spec §13) — covered in §3.1/§4.8 (sqlite-vec; Qdrant behind interface if needed).
 
-### 4.12 BrowserOS (spec §15)
+### 4.12 BrowserOS (spec §15) — placement and role, with corrections to the owner's proposal
 
-Backend ships a generic **MCP client** (`tools/browser.py`) connecting to BrowserOS's built-in MCP server on the host machine; its 31+ tools are exposed to capable models as a `browser` toolset (off by default — browser actions are consequential; per-chat toggle). BrowserOS itself can also point its own agent at llama-swap `/v1` independently. [UNCERTAIN — MCP transport BrowserOS exposes (SSE vs streamable-HTTP vs stdio-only) and its LAN reachability; verify in Phase 5 before UI work. Note: spec says "BrowserClaw" once — assuming BrowserOS per the URL given.]
+1. **Placement: host machine (Windows), not Ubuntu.** BrowserOS is a GUI Chromium fork — on the headless GPU box it would need a virtual display and you'd never see what the agent is doing. Host is where you already browse and stay logged in; that's the whole value (authenticated sessions, watching the agent). [INFERENCE from FACT that it's a desktop browser]
+2. **"Browser agent so the app can do deep research" — pushback: browser-driving is the *wrong primary* for deep research.** Perplexity-style deep research is search-API fan-out + parallel HTTP fetch + synthesis — dozens of sources a minute, headless, robust. A browser agent reads one page at a time through a GUI. So: deep research (Future §1) runs on `search` + `fetch_url`; the **BrowserOS toolset is the escalation path** for what fetch can't do — JS-heavy pages, logged-in content (Gmail, dashboards), interactive tasks, and MCP-connector-style automation. Both exposed as tools; the model (or user toggle) picks.
+3. Backend ships a generic **MCP client** (`tools/browser.py`) connecting to BrowserOS's built-in MCP server (31+ tools: navigate, click, scrape, screenshot) over LAN; exposed to capable models as the `browser` toolset, off by default, per-chat toggle (browser actions are consequential). BrowserOS can also independently point its own in-browser agent at llama-swap `/v1`.
+4. [UNCERTAIN — MCP transport BrowserOS exposes (SSE vs streamable-HTTP vs stdio-only) and whether its MCP server accepts non-localhost connections; if localhost-only, a tiny relay on the host or an SSH tunnel bridges it. Verify in Phase 5 before UI work. Note: spec says "BrowserClaw" once — assuming BrowserOS per the URL given.]
 
 ### 4.13 Search (spec §16)
 
@@ -223,24 +257,34 @@ Each phase ends with: features **wired end-to-end** (no "adapter exists but not 
 
 **Phase 4 — Code.** Docker exec sandbox + `run_code` tool, Tier-2 artifacts, opencode serve on box (+ optional host), Code area UI (sessions, delegation flow), opencode config generator. Exit: replaces Cursor for small/medium tasks.
 
-**Phase 5 — Reach + hardening.** BrowserOS MCP tool, Tavily fallback polish, `llama-bench` panel, preflight script, security pass (LAN auth on backend, sandbox audit), full docs (per-feature `docs/<feature>.md`: what/why/how-to-extend — Key Rule 7).
+**Phase 5 — Reach + hardening.** BrowserOS MCP tool, memory self-improvement reviewer, Tavily fallback polish, `llama-bench` panel, preflight script, sandbox audit (no backend auth — owner: trusted LAN, fully open; the *sandbox* still gets locked down because tool-executed code is not the owner), full docs (per-feature `docs/<feature>.md`: what/why/how-to-extend — Key Rule 7).
 
-**Future (unordered, post-5):** deep research pipeline, open-design, themes, benchmark suite, Obsidian, Google integrations, custom skills, one-click MCP add (programmatic `opencode.json`/our-config writer — already designed via generators).
+**Future (unordered, post-5):** **remote model providers (owner v2: opencode zen/"Go", Anthropic, Kimi — each is one entry in a provider registry with base URL + key in `.env`; llama-swap and remotes are all OpenAI-compatible endpoints to `llm_client`, Anthropic gets a thin adapter, so no LiteLLM needed even then)**, deep research pipeline, open-design, themes, benchmark suite, Obsidian, Google integrations, custom skills (+ hermes-style skill creation loop), one-click MCP add (programmatic `opencode.json`/our-config writer — already designed via generators).
 
 ---
 
 ## 6. Build discipline (Cursor + Claude Code)
 
-- **Rules files** (rewrite, don't reuse old ones): `001-stack` (vanilla JS/no frameworks/no Ollama/no LiteLLM — affirmatively phrased), `002-modularity` (module-per-feature, `enabled` flags, file size cap ~300 lines), `003-config` (all model/provider names from config; generated files never hand-edited), `004-observability` (every new pipeline stage must write a debug span + emit terminal SSE event), `005-integration` (a feature PR must include wiring + test + docs page — "built but not injected" is a rejected PR), `006-git` (worktrees, FILE SCOPE, no `git add .` — carry over, it worked).
+- **Rules files** (rewrite, don't reuse old ones): `001-stack` (TypeScript+tsc only, no frameworks/bundlers, no Ollama, no LiteLLM — affirmatively phrased), `002-modularity` (module-per-feature, `enabled` flags, file size cap ~300 lines), `003-config` (all model/provider names from config; generated files never hand-edited), `004-observability` (every new pipeline stage must write a debug span + emit terminal SSE event), `005-integration` (a feature PR must include wiring + test + docs page — "built but not injected" is a rejected PR), `006-git` (worktrees, FILE SCOPE, no `git add .` — carry over, it worked).
 - **Per-feature workflow:** design note (½ page: interfaces, config keys, debug spans, toggle) → approved → build in worktree → tests → wire → demo checklist → docs. The old repo died in the gap between "built" and "wired"; rule 005 exists to close it.
 - **AI-generation guardrail (Key Rule 1):** generators (swapgen, opencode config, MCP registration), extractors, and SQL schema are deterministic hand-written code; agents implement against written interfaces, never invent config formats.
 
 ---
 
-## 7. Open questions — need your answers before Phase 0 ends
+## 7. Resolved decisions (owner answers, 2026-07-20) + remaining unknowns
 
-1. **GPU inventory** [UNCERTAIN]: spec says multi-GPU; the old box had one RTX 3090. Exact cards + VRAM decide the model roster and whether a `resident` group fits on a spare GPU or CPU. List them.
-2. **Spec §10 truncation**: "RAG and memory system similar to ___" — name the reference (hermes-agent memory? Open WebUI? Claudian?). §4.8 builds the consensus design meanwhile.
-3. **Host machine role**: is the host Windows? Determines opencode-on-host and BrowserOS setup instructions (both run there, backend stays on Ubuntu).
-4. **Model roster**: which specific GGUFs per class (chat/coder/reasoner/vision/classifier). Phase 0 benchmarks decide, but candidates should be picked deliberately, not by an agent.
-5. **Auth**: backend is LAN-only — is single-password auth enough (recommended), or fully open on trusted LAN?
+Resolved:
+1. **Hardware:** 3090 + 3070, 64GB RAM, Ryzen 9 (future: 2×3090 + 2×3070 across two boxes → per-box llama-swap, §4.1).
+2. **Memory reference:** hermes-agent, including the self-improvement idea (§4.8).
+3. **Host:** Windows now, maybe Linux later — BrowserOS + optional opencode live there; backend stays on Ubuntu.
+4. **Per-task model config:** user-configurable in Settings, same pattern as the current app's tier table (§4.1 roster keeps the aliases).
+5. **Auth:** none — fully open on trusted LAN.
+6. **Frontend:** TypeScript (tsc-only, no bundler). **UI:** claude.ai 1:1 mirror + Settings.
+7. **Remote providers** (opencode zen, Anthropic, Kimi): v2/Future.
+
+Remaining unknowns (Phase 0/4/5 verification tasks, not blockers):
+- Exact quant + ctx fits on 24GB for `reasoning-heavy` and `vision-heavy` (§4.1 table).
+- llama.cpp `--device` flag spelling per installed build; llama-swap reload endpoint name.
+- opencode API/event-stream stability across versions (pin it).
+- BrowserOS MCP transport + non-localhost reachability from the Ubuntu backend.
+- sqlite-vec performance at 100k chunks (benchmark, else Qdrant returns behind the interface).
