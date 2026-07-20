@@ -1,0 +1,32 @@
+---
+description: "Core stack — the only approved technologies"
+alwaysApply: true
+---
+Architecture source of truth: @PLAN.md. When this rule and PLAN.md seem to
+conflict, PLAN.md wins — flag the conflict instead of improvising.
+
+Backend: Python 3.12 + FastAPI + httpx + uvicorn. These four are the entire
+backend dependency core; new runtime dependencies need owner approval first.
+
+Inference: llama.cpp `llama-server` instances managed by llama-swap. The one
+inference surface is llama-swap's OpenAI-compatible endpoint, reached through
+`app/llm_client.py`. The `model` field in the request selects the model;
+llama-swap performs all loading and swapping, so the app contains zero
+scheduler or model-lifecycle code. Two boxes each run their own llama-swap;
+`config.yaml` maps model alias → endpoint, so the second box is additive.
+
+Model names, aliases, and routing labels come from `config.yaml`, resolved at
+runtime — this enables zero-code model swaps and keeps prompts model-agnostic.
+
+Frontend: TypeScript compiled with plain `tsc` to native ES modules the
+browser loads directly. `tsc` is the entire build; UI structure comes from
+hand-written modules (`mount(el, state)` / `unmount()`), keeping every view
+small and framework-free. Vendored small libs only: marked, DOMPurify,
+highlight.js.
+
+Storage: one SQLite file (WAL) + sqlite-vec + FTS5 for chats, messages,
+memories, vectors, debug traces. Vector access goes through the `VectorStore`
+interface so the backing store can change without touching callers.
+
+Streaming: SSE end-to-end. Every stream terminates with a `done` or `error`
+event — consumers rely on this contract.

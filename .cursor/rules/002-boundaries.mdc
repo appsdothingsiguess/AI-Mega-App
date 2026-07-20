@@ -1,0 +1,38 @@
+---
+description: "Agent boundaries, file scope, and stop conditions"
+alwaysApply: true
+---
+# Three-tier boundaries
+
+**Always (no need to ask):**
+- Run `python -m pytest -q --basetemp=.pytest-tmp/run` from repo root and
+  `npx tsc --noEmit` before declaring a task done.
+- Write a debug span for every new pipeline stage (see @PLAN.md §4.16).
+- Add or update tests alongside any behavior change.
+- Follow naming: snake_case Python, camelCase TypeScript.
+
+**Ask first (describe the change, wait for approval):**
+- New dependencies (pyproject.toml, vendored JS libs).
+- SQLite schema changes, SSE event-type changes, `config.yaml` key changes.
+- Modifying frozen interface files listed in @AGENTS.md.
+- Any edit to CI, hooks, or `.cursor/` configuration.
+
+**Never (hard stop — report instead):**
+- Editing generated files (`llama-swap.yaml`, `web/js/**`) — regenerate them
+  from their source instead.
+- Putting secrets anywhere except `.env`.
+- `git add .`, force-push, merge/rebase/push without an explicit user request.
+- Reading or copying from `ref_do_not_copy/`.
+
+# FILE SCOPE contract
+
+The user's task prompt supplies branch, FILE SCOPE, and acceptance criteria.
+Edit only files inside FILE SCOPE. If branch or scope is missing, ask once
+before editing. If the correct fix requires a file outside scope, stop and
+describe what needs changing and why — the scope owner applies it.
+
+# Stop condition
+
+When a task cannot be completed inside its scope, constraints, or the
+approved stack, pause and request clarification. A reported blocker is a
+successful outcome; an improvised out-of-scope change is not.

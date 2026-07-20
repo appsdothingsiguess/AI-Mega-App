@@ -1,0 +1,32 @@
+---
+description: "Use when committing, branching, creating worktrees, or running
+  a multi-agent task wave — git discipline for parallel agents"
+alwaysApply: false
+---
+One task = one branch = one FILE SCOPE = one worktree folder. Fork from
+`main` only.
+
+Pre-flight (before any edit): run `git status` and
+`git branch --show-current`; confirm the branch matches the task prompt and
+`git log main..HEAD --oneline` contains only this task's commits. On mismatch
+or foreign commits, stop and report — another agent may own this checkout.
+
+Worktrees: parallel builders each get a sibling folder via
+`git worktree add ../AI-Mega-App-<task> -b feat/<task> main`, opened as its
+own Cursor window. Inside a worktree, stay on its branch; switching branches
+swaps the whole checkout under other agents.
+
+Commits: stage files by name (`git add <files-in-scope>`), one commit = one
+concern, conventional messages (`feat(router): ...`, `fix(sse): ...`,
+`test(...)`, `docs(...)`). Staging by explicit path keeps out-of-scope and
+untracked files out of the commit.
+
+Out-of-scope test fallout gets a minimal fix in its own
+`fix(<area>): required by <task>` commit.
+
+Completion report: branch, commits vs `main`, files touched
+(`git diff main..HEAD --name-only`), pytest result, overlap notes. Commit all
+in-scope work before reporting.
+
+Merge, rebase, cherry-pick, and push are integrator actions performed only on
+explicit user request; builders end at the completion report.

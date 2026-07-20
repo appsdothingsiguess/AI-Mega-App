@@ -1,0 +1,35 @@
+---
+description: "FastAPI backend conventions"
+globs: ["app/**/*.py"]
+alwaysApply: false
+---
+All I/O-performing functions are async; sync code is reserved for pure
+computation. HTTP calls use `httpx.AsyncClient` instances created in the
+FastAPI lifespan and closed at shutdown.
+
+Modules stay under ~300 lines. When a module grows past that, split by
+responsibility — module-per-feature is the architecture (@PLAN.md §6), not a
+style preference.
+
+Every pipeline stage (route, rag, llm request, tool dispatch, swap wait, SSE
+emit) writes a debug span row (trace_id, timestamps, model, latency, token
+counts) — the debug panel is core infrastructure and features are only "done"
+when observable in it.
+
+Every SSE stream terminates with a `done` or `error` event, including on
+provider failure, timeout, and cancellation — the UI treats a stream ending
+any other way as a connection loss.
+
+Feature modules under `tools/` are self-describing (`name`, `schema`,
+`execute()`, `enabled` flag) and register through auto-discovery, so toggling
+a feature is a config flag.
+
+Config access goes through the loaded settings object; model names, provider
+URLs, prompts, and thresholds come from `config.yaml` so behavior changes
+without code edits.
+
+Pydantic models validate requests at the API boundary and config at load
+time; dataclasses carry internal data.
+
+Tests use pytest + pytest-asyncio against a fake llama-swap (canned OpenAI
+responses); every new module ships with its test file.

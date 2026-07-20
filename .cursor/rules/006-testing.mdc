@@ -1,0 +1,26 @@
+---
+description: "Testing conventions and the feature integration gate"
+globs: ["tests/**/*", "eval/**/*", "scripts/preflight.py"]
+alwaysApply: false
+---
+Run pytest from the repo root: `python -m pytest -q --basetemp=.pytest-tmp/run`.
+CI gate = ruff + `npx tsc --noEmit` + pytest + Playwright-vs-fake.
+
+Tests run against a fake llama-swap (canned OpenAI-format responses) so CI
+needs no GPU. Live-hardware checks belong in `scripts/preflight.py`, which
+runs on the box only.
+
+A feature PR contains four things: the code, the wiring (registered at
+startup and reachable end-to-end), the tests, and its `docs/<feature>.md`
+page. "Built but not injected" was the old repo's fatal pattern — an adapter
+without startup wiring is an incomplete PR.
+
+Contract tests: golden SSE transcripts (full event sequence for a turn) are
+diffed on change; changing the SSE contract means updating the golden files
+deliberately in the same PR.
+
+Router changes run the eval harness (`eval/` labeled prompt→route CSV +
+scoring script) and report the score; Phase 2 exit criterion is ≥90%.
+
+Failing tests are signals to fix code or fix the test's contract with the
+owner — keep them, make them pass.

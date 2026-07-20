@@ -1,0 +1,33 @@
+---
+description: "Config file discipline — hand-edited vs generated vs secrets"
+globs: ["config.yaml", "settings.local.yaml", ".env.example",
+        "llama-swap.yaml", "app/gpu/**/*.py", "config/**/*"]
+alwaysApply: false
+---
+Three config surfaces, three owners (@PLAN.md §3.1):
+
+| File | Written by | Contains |
+|---|---|---|
+| `config.yaml` | humans (checked in) | models, routing table, tools, prompts, defaults |
+| `settings.local.yaml` | Settings UI | user overlay on config.yaml |
+| `.env` | humans (never committed) | secrets and API keys only |
+| `llama-swap.yaml` | `gpu/swapgen.py` only | generated llama-swap process config (per box) |
+| `opencode.json` | config generator only | opencode provider wiring |
+
+Generated files carry a "generated — do not hand-edit" header. To change
+their output, edit the generator (`swapgen.py` etc.) and regenerate — this
+keeps GPU reassignment a Settings-UI action, not a file edit.
+
+Generators are deterministic hand-written Python: given the same
+`config.yaml` + GPU assignments they emit byte-identical output, and their
+output is covered by golden-file tests.
+
+Secrets are read from `.env` through the settings object; `config.yaml` and
+everything checked into git stay secret-free. New keys get a documented
+placeholder in `.env.example`.
+
+Routing labels (`chat-default`, `coder`, `coder-small`, `reasoner`, `vision`,
+`utility`, `embed`, `classifier`, `needle`) are config vocabulary: application
+code and prompts use the alias, `config.yaml` maps alias → model file → box +
+GPU. The classifier emits classes, and the `routing:` table resolves classes
+to aliases, so model changes are config edits only.

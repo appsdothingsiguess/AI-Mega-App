@@ -1,165 +1,119 @@
-# Parallel agent prompts (human copy-paste)
+# Parallel Agent Prompts (human copy-paste)
 
-**For you, not for agents to ingest.** Paste into new Cursor Agent chats. Agents load `.cursor/rules/008-git-discipline.mdc` automatically.
+**For you, not for agents to ingest.** Paste these into new Cursor Agent chats when running a parallel wave by hand. The per-phase task list and FILE SCOPEs live in `docs/PHASE_PROMPTS.md` — this file is the *mechanics*: how to set up worktrees, what a builder/integrator prompt looks like, and the Cursor 3 patterns that keep a wave safe.
+
+Cursor auto-loads the always-apply rules (`001-stack`, `002-boundaries`); the git rule (`007-git-worktrees`) is agent-requested — name it in the prompt so it loads.
+
+---
 
 ## One folder = one branch (read this first)
 
-Every Agent chat in the same Cursor window/folder shares **one** `git checkout`. If any agent switches branches, **all** chats see it — commits and WIP land on the wrong branch.
+Every Agent chat in the same Cursor window/folder shares **one** `git checkout`. If one agent switches branches, **all** chats in that folder follow — commits land on the wrong branch. **Parallel tasks therefore require git worktrees: one folder per task, one Cursor window each.**
 
-**Parallel tasks require git worktrees** — one folder per task, one Cursor window each.
-
-### Setup (before opening builder chats)
-
-From your main clone on `main`:
+### Setup (from the main clone on `main`)
 
 ```bash
 git pull origin main
-git worktree add -b phase1/cot-thinking-display ../megaapp-cot main
-git worktree add -b phase1/markdown-tool-rendering ../megaapp-md main
-git worktree add -b phase1/project-isolation-prompt-refresh ../megaapp-iso main
+git worktree add ../AI-Mega-App-p1-llm-client   -b p1/llm-client   main
+git worktree add ../AI-Mega-App-p1-chat-sse      -b p1/chat-sse     main
+git worktree add ../AI-Mega-App-p1-web-shell     -b p1/web-shell    main
 ```
 
-Open **File → Open Folder** for each `../megaapp-*` path. Run builder prompts only in that window.
+Open each `../AI-Mega-App-*` folder in its own Cursor window (**File → Open Folder**). Run one builder chat per window. Or use Cursor's native worktree option in the Agents Window, which creates the isolated folder for you.
 
-Cleanup when done:
+Cleanup when a branch is merged: `git worktree remove ../AI-Mega-App-p1-llm-client`.
 
-```bash
-git worktree remove ../megaapp-cot
-```
-
-Alternative: Cursor **`/worktree`** in Agent chat (creates isolated folder automatically).
+Branch/worktree naming: branches `p<phase>/<task>`, folders `../AI-Mega-App-p<phase>-<task>` (matches `docs/PHASE_PROMPTS.md`).
 
 ---
 
-## Option A workflow
+## Wave workflow
 
-1. **Worktrees** — one per task (above)
-2. **One builder chat per worktree window** — paste builder prompt
-3. **Integrator chat** — main clone on `main` only; audits all branches
-4. You: optional UI smoke tests; approve merges
+1. **Plan Mode first (Shift+Tab).** For any multi-file task, plan read-only, review the plan, save it to `.cursor/plans/`. Plan with a high-capability model (Composer 2 / Claude Opus); execute with a faster one (Composer 1.5 / Sonnet).
+2. **Dependency order.** Run the "Wave 1 (sequential)" task that defines shared files/interfaces *first* and merge it before the parallel wave — worktrees prevent file conflicts, not semantic ones (an interface change one agent makes that another consumes).
+3. **One builder chat per worktree window.** Paste the builder template below.
+4. **Integrator chat** on the main clone only — audits every branch, merges on your say-so.
+5. You: optional UI smoke test; approve merges.
 
----
-
-## Agent plan order (required)
-
-Tell the agent (or enforce in prompt):
+### Agent plan order (enforce in the prompt)
 
 | Order | Step |
-|-------|------|
-| **1 — FIRST** | Git pre-flight only (`status`, correct branch, `git log main..HEAD`) — **no code edits** |
-| 2 … n−1 | Implementation in FILE SCOPE |
-| **n — LAST** | Pytest, commit, `008` completion report — **no new code after this** |
+|---|---|
+| **1 — FIRST** | Git pre-flight only (`git status`, `git branch --show-current`, `git log main..HEAD`) — **no code edits** |
+| 2 … n−1 | Implementation inside FILE SCOPE |
+| **n — LAST** | `pytest` + `tsc --noEmit`, commit, completion report — **no new code after** |
 
-If the agent’s plan starts with “edit MessageBubble” before git pre-flight, **reject the plan** and ask it to reorder.
+If a plan starts with an edit before git pre-flight, reject it and ask for a reorder.
+
+---
+
+## Optional: write the contract first
+
+For a wave with any overlap risk, drop a contract at `.cursor/agent-contracts/<task-id>.md` before starting (see `docs/CURSOR_RULES.md` §9). It makes review deterministic — the integrator checks the diff against the contract's FILE SCOPE, not taste.
 
 ---
 
 ## Builder prompt (template)
 
 ```markdown
-You are a **builder** agent for Prompter X. Follow `.cursor/rules/008-git-discipline.mdc` exactly. Commits are mandatory (FILE SCOPE below).
+You are a **builder** agent for the AI Mega App. Follow `.cursor/rules/007-git-worktrees` exactly, plus the always-on 001-stack / 002-boundaries. Architecture source of truth: @PLAN.md. Commits are mandatory (FILE SCOPE below).
 
 ## Workspace
-This Cursor window is an isolated worktree for **one** task.
-- Expected folder: <e.g. ../megaapp-cot>
-- Expected branch: `phase1/<task-name>`
-- **Do NOT run `git checkout` to any other branch.**
+This Cursor window is an isolated worktree for ONE task.
+- Expected folder: <e.g. ../AI-Mega-App-p1-llm-client>
+- Expected branch: `p1/<task-name>`
+- Do NOT `git checkout` any other branch in this shared checkout.
 
 ## Plan order (mandatory)
-1. **FIRST:** 008 pre-flight only — report results before any code change
-2. Implementation (FILE SCOPE only)
-3. **LAST:** pytest, commit, completion report
+1. FIRST: git pre-flight only — report results before any code change.
+2. Implementation — FILE SCOPE only.
+3. LAST: `python -m pytest -q --basetemp=.pytest-tmp/run` (repo root) + `npx tsc --noEmit`, commit, completion report.
 
 ## Task
-<description>
+<one-paragraph description; @-reference the relevant docs/FEATURES.md spec and any interface files>
 
 ## Branch
-`phase1/<task-name>` — already checked out in this worktree (user created worktree from `main`). If branch is missing, **stop and report** — do not checkout another branch in a shared clone.
+`p1/<task-name>` — already checked out in this worktree (created from `main`). If it's missing, STOP and report — do not checkout another branch in a shared clone.
 
 ## FILE SCOPE
-- <paths>
+- <explicit paths — the only files you may edit>
 
 ## FORBIDDEN
-- Files outside FILE SCOPE (except minimal test fallout, separate commit)
-- `git checkout` / `git switch` to other branches
-- merge, rebase, cherry-pick, push
-- Unrelated fixes in one commit
+- Files outside FILE SCOPE (except minimal test fallout in a separate `fix(...)` commit)
+- Frozen interfaces in @AGENTS.md; generated files (`llama-swap.yaml`, `web/js/**`)
+- `git checkout`/`git switch` to other branches; merge, rebase, cherry-pick, push
+- Unrelated changes bundled into one commit
 
 ## Acceptance
-- Behavior: <…>
-- Tests: `python -m pytest -q --basetemp=.pytest-tmp/run` from repo root
-- Baseline: 240 passed / 2 failed OK unless **new** failures
-- Manual UI: deferred to human
+- Behavior: <what to demo>
+- Every new pipeline stage writes a debug span; every SSE stream ends with `done`/`error`
+- Tests: `python -m pytest -q --basetemp=.pytest-tmp/run` from repo root + `npx tsc --noEmit`
+- Manual UI: deferred to human unless the task is UI E2E
 
 ## When done
-Commit with: `feat(<task>): <message>`
-Completion report per 008 (branch, `git log main..HEAD`, files, pytest, merge notes).
-```
-
----
-
-## Example: CoT thinking (your prompt — worktree-adjusted)
-
-```markdown
-You are a **builder** agent for Prompter X. Follow `.cursor/rules/008-git-discipline.mdc` exactly. Commits are mandatory.
-
-## Workspace
-Worktree folder: `../megaapp-cot` — branch `phase1/cot-thinking-display` must already be checked out here.
-**Do NOT `git checkout` other branches.**
-
-## Plan order (mandatory)
-1. **FIRST:** 008 pre-flight — report before any edits
-2. Backend + frontend implementation
-3. **LAST:** pytest, commit `feat: render CoT thinking blocks in chat UI`, completion report
-
-## Task
-CONTEXT: @web/src/components/MessageBubble.tsx @app/chat_orchestrator.py
-
-Bug #6: CoT reasoning is debug-only (`llm_reasoning`). Add user-visible thinking UI.
-
-BACKEND: Emit `{"type": "thinking", "content": "..."}` when reasoning exists (not gated on sse_trace).
-
-FRONTEND: MessageBubble — collapsible "Thinking" block above response; client.ts event type if missing.
-
-## Branch
-`phase1/cot-thinking-display` — worktree already on this branch from `main`.
-
-## FILE SCOPE
-- app/chat_orchestrator.py
-- web/src/components/MessageBubble.tsx
-- web/src/api/client.ts (thinking event type only if missing)
-
-## FORBIDDEN
-- protocols.py, types.py, router.py, project_manager.py, App.tsx
-- git checkout to other branches; merge/rebase/cherry-pick/push
-
-## Acceptance
-- deepseek-r1: collapsible Thinking block; no empty block without reasoning; main stream OK
-- pytest from repo root; manual UI deferred
-
-## When done
-008 completion report.
+Commit `feat(<task>): <message>`. Completion report per 007: branch, commits vs `main`, `git diff main..HEAD --name-only`, pytest/tsc result, overlap notes.
 ```
 
 ---
 
 ## Integrator prompt
 
-Run from **main clone only** (`AI Megaapp` on `main`). Integrator may `git checkout` each branch to audit — **no parallel builders running in that folder**.
+Run from the **main clone only** (on `main`, no parallel builders active in that folder — the integrator may `git checkout` each branch to audit).
 
 ```markdown
-You are an **integrator** for Prompter X. Follow `008`. Read-only audit first — merge only if I ask.
+You are an **integrator** for the AI Mega App. Follow `.cursor/rules/007-git-worktrees`. Read-only audit first — merge only if I ask.
 
 ## Branches
-1. `phase1/<branch-a>` — <task>
-2. `phase1/<branch-b>` — <task>
+1. `p1/<branch-a>` — <task>
+2. `p1/<branch-b>` — <task>
 
-Per branch: `git log main..HEAD`, `git diff main..HEAD --name-only`, checkout + pytest.
-Reject stacked branches. Table: branch | commits | files | pytest | merge-ready | notes.
+Per branch: `git log main..HEAD --oneline` (reject stacked branches), `git diff main..HEAD --name-only` (vs that task's FILE SCOPE), checkout + `python -m pytest -q --basetemp=.pytest-tmp/run` + `npx tsc --noEmit`.
+Deliver a table: branch | commits | files | pytest | tsc | merge-ready (yes/no/cherry-pick) | notes.
+Flag semantic/interface drift between branches. Merge/push only when I say so.
 ```
 
 ---
 
 ## Human manual UI (optional)
 
-Per worktree: uvicorn (repo root) + `npm run dev` in `web/`. Use different ports if running multiple worktrees.
+Per worktree: `uvicorn` from repo root + serve `web/` (tsc watch). Use different ports if running multiple worktrees at once. CI and unit tests run against a fake llama-swap, so no GPU is needed to verify a wave — only live-hardware checks (`scripts/preflight.py`) need the box.

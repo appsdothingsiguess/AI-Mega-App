@@ -1,6 +1,6 @@
 # AI Mega App — Build Plan v2
 
-**Date:** 2026-07-20 (rev 2 — owner feedback applied: TypeScript, hardware confirmed 3090+3070, hermes-style memory, claude.ai 1:1 UI, no auth, opencode/BrowserOS division of labor)
+**Date:** 2026-07-20 (rev 4 — corrected fleet to 1×3090 + 2×3070 across two boxes, no cross-box RPC, PC2 coder-small lane; pinned reasoner = DeepSeek-R1-Distill-Qwen-32B + DeepSeek-for-coding guidance; opencode vs Qwen Code decision. rev 2: TypeScript, hermes-style memory, claude.ai 1:1 UI, no auth, opencode/BrowserOS division of labor)
 **Status:** Planning. Supersedes `prompter_x_complete_spec.md` (kept only as a post-mortem reference).
 **Confidence tags:** [FACT] verifiable · [INFERENCE] reasoned · [UNCERTAIN] guess, verify before building.
 
@@ -94,13 +94,28 @@ If DOM complexity grows past ~30 components, revisit with lit-html (still no bun
 
 **Decision: llama-swap in front of plain `llama-server` instances — not llama.cpp's native router mode.** Rationale: router mode keeps one resident model per worker and lacks llama-swap's group semantics (pin classifier+embedder+needle resident while big models swap); llama-swap also fronts any OpenAI/Anthropic-compatible backend if we ever add vllm/whisper/SD servers, and has TTL, metrics, and a monitoring UI we'd otherwise write. [FACT re: capabilities; INFERENCE re: choice]
 
-**Hardware (confirmed):** RTX 3090 (24GB) + RTX 3070 (8GB), 64GB system RAM, Ryzen 9. Future: dual 3090 + dual 3070 split across **two computers** — llama-swap only manages processes on its own machine, so the two-box future means one llama-swap per box and a `model → endpoint` map in our config; the backend already selects by model name, so this is additive, not a redesign. [FACT re: llama-swap scope]
+**Hardware (confirmed, rev 4 — owner corrected the future topology):** the fleet is **one RTX 3090 (24GB) + two RTX 3070 (8GB)** — *not* the "2×3090 + 2×3070" the earlier revisions assumed. It splits across **two computers**:
 
-**Placement strategy (rev 3 — owner: old tier list was for the lone-3090/Ollama era; consolidate):**
+- **PC1 — the Ubuntu 26.04 backend box:** RTX 3090 (24GB) + RTX 3070 (8GB), 64GB system RAM, Ryzen 9.
+- **PC2 — a second machine on the LAN:** RTX 3070 (8GB).
 
-- **CPU (Ryzen 9):** classifier + Needle. Owner confirms the old classifier ran fine on CPU; Needle is 26M — trivial. This frees the 3070 entirely.
-- **3070 (8GB):** embedder (resident) + **`utility` small model** (Qwen3-8B-class, Q4, resident) for titles, summaries, compaction, memory review — and instant fallback replies while the 3090 swaps.
-- **3090 (24GB):** the big-model slot, one at a time, llama-swap `swap: true`.
+llama-swap only manages processes on its own machine, so two boxes means **one llama-swap per box** plus a `model → endpoint` map in `config.yaml`; the backend already selects by model name, so PC2 is additive, not a redesign. [FACT re: llama-swap scope]
+
+**Do NOT pool the two boxes into one big model via llama.cpp RPC.** RPC combines VRAM across machines but is explicitly *not* a speedup — it adds per-token network overhead, both boxes must run byte-identical llama.cpp builds, and it only pays off for a model too big for a single node. Our entire roster is sized to fit 24GB, so RPC would make inference *slower* for zero gain. PC2 is therefore an independent inference node, not a VRAM extender. [FACT — llama.cpp RPC pools memory, does not parallelize compute; see `tools/rpc/README.md`]
+
+**Placement strategy (rev 4 — hot path stays on PC1; PC2's 3070 breaks the single-3090 serialization bottleneck):**
+
+| Box | Device | Residents (always loaded) | Swap slot |
+|---|---|---|---|
+| **PC1** | Ryzen 9 CPU | `classifier` (1.7B) + `needle` (26M) | — |
+| **PC1** | RTX 3070 (8GB) | `embed` + `utility` (Qwen3-8B, Q4) | — |
+| **PC1** | RTX 3090 (24GB) | `chat-default` (kept warm) | `coder` / `reasoner` / `vision` (`swap: true`) |
+| **PC2** | RTX 3070 (8GB) | `coder-small` (Qwen3-Coder-7B, Q4) — warm coding + instant-fallback lane | (optional 1–2 small `swap` models) |
+
+- **CPU (Ryzen 9):** classifier + Needle. They run on *every* turn, so they must stay local to the backend — never behind a LAN hop. Owner confirms the classifier ran fine on CPU; Needle is 26M — trivial. This keeps the 3070 free for model work.
+- **PC1 3070 (8GB):** embedder (resident) + **`utility` small model** (Qwen3-8B, Q4, resident) for titles, summaries, compaction, memory review — and instant fallback replies while the 3090 swaps. These are hot per-turn tasks, co-located with the backend for zero LAN latency.
+- **PC1 3090 (24GB):** the big-model slot, one at a time, llama-swap `swap: true`.
+- **PC2 3070 (8GB):** a **second, independent llama-swap node** hosting a warm `coder-small` (Qwen3-Coder-7B). Its job is *concurrency*: today a coding request and a chat request serialize on the lone 3090; a dedicated warm coder on PC2 gives (a) instant first-token fallback during a 3090 swap and (b) a parallel lane so opencode delegation, quick code artifacts, and background jobs never contend with the big card. Things tolerant of one LAN hop go here; the hot path (router, embeddings) stays on PC1.
 
 **Consolidated roster** — the light/medium/heavy triads collapse to ~one model per class. Rationale: the triads existed to dodge Ollama swap costs on a shared card; with llama-swap + a dedicated utility card, fewer/better models win. Speed floor: **nothing under ~25 tok/s at its working quant** (owner: "no 10 tok/s"); Q4_K_M is the default quant, Q5/Q6 only where headroom allows. 2026 references for 24GB: Qwen3.6-27B dense ≈ 30–40 tok/s; 35B-A3B MoE ≈ 50 tok/s; Qwen3-32B Q4_K_M ≈ 20GB. [FACT — published 3090 benchmarks; exact numbers re-measured in Phase 0]
 
@@ -108,14 +123,17 @@ If DOM complexity grows past ~30 components, revisit with lit-html (still no bun
 |---|---|---|---|
 | `chat-default` | Qwen3.6-35B-A3B (MoE) or Qwen3.6-27B | 3090, **always loaded** | General chat + native tool calling. MoE preferred: ~50 tok/s. |
 | `coder` | Qwen3-Coder-30B-A3B (MoE) | 3090 swap | All coding tiers. Ctx variants (16k/24k) = two llama-swap entries, same weights file. |
-| `reasoner` | DeepSeek-R1-32B **or** Qwen3.6 thinking variant | 3090 swap | Owner confirms R1-32B fits. Dense 32B ≈ 25–35 tok/s — at the speed floor; Phase 0 A/Bs it against the MoE thinking variant, keep one. |
+| `reasoner` | **DeepSeek-R1-Distill-Qwen-32B** (Q4_K_M) — A/B vs a Qwen3.6 thinking variant | 3090 swap | Best DeepSeek option that fits 24GB: Q4_K_M ≈ 18–20GB, MIT license, strong on LiveCodeBench/CodeForces, visible chain-of-thought. Dense 32B ≈ 25–35 tok/s — at the speed floor, so it's the "think hard" tool, not a snappy default. Phase 0 A/Bs it against the MoE thinking variant; keep one. |
 | `vision` | Gemma4-27B-class + mmproj | 3090 swap | Owner confirms Gemma sizes fit. One vision model, not three. |
-| `utility` | Qwen3-8B Q4 | 3070 resident | Titles/summaries/compaction/memory reviewer/instant fallback. |
-| `embed` | nomic-embed-v2 / Qwen3-embedding | 3070 resident | |
+| `utility` | Qwen3-8B Q4 | PC1 3070 resident | Titles/summaries/compaction/memory reviewer/instant fallback. |
+| `coder-small` | Qwen3-Coder-7B Q4 | **PC2 3070 resident** | Warm coding lane on the second box: instant-fallback + parallel to the 3090 so coding never serializes behind chat. Doubles as a secondary general lane. |
+| `embed` | nomic-embed-v2 / Qwen3-embedding | PC1 3070 resident | |
 | `classifier` | Qwen3-1.7B-class | CPU resident | Router (grammar-constrained). |
 | `needle` | Cactus Needle 26M | CPU resident | Tool-call dispatcher. |
 
-Old tier aliases (`coding-light/medium/heavy`, `reasoning-*`, `vision-*`) remain as **routing labels in config that point at this roster** — the router/Settings vocabulary survives, the model count drops from ~12 to ~8 (4 big, 4 small). Users can still add models per class in Settings.
+**On DeepSeek for coding (owner Q):** DeepSeek's runnable-on-24GB options are the `reasoner` slot above and **DeepSeek-Coder-V2-Lite** (16B MoE, ~81% HumanEval, ~9–10GB at Q4). We *skip* Coder-V2-Lite as a primary — Qwen3-Coder-30B beats it for day-to-day agentic coding and Qwen3-Coder-7B already fills the fast-small niche on PC2. DeepSeek's real role here is the **reasoner** (hard, deliberate coding/logic), not the daily driver. DeepSeek-V3.2 / V4 / R2 are 600B-class MoE — not local on a 3090; they belong in the Future remote-provider registry only. [FACT — 2026 3090 benchmarks; DeepSeek-Coder-V2 now trails Qwen2.5/3-Coder]
+
+Old tier aliases (`coding-light/medium/heavy`, `reasoning-*`, `vision-*`) remain as **routing labels in config that point at this roster** — the router/Settings vocabulary survives, the model count drops from ~12 to ~9 (4 big, 5 small). Users can still add models per class in Settings.
 
 **Default model / always-loaded (owner §4):** `chat-default` has no TTL and the backend re-warms it whenever the 3090 has been idle on another model for N minutes (config, default ~10) — a ~20-line deterministic policy, so a fresh chat almost always gets an instant first token. `utility` on the 3070 answers trivial/background tasks with zero swap wait regardless.
 
@@ -180,6 +198,8 @@ Design:
 - **Docs deliverable (owner §9):** `docs/opencode.md` includes switching opencode's provider between local llama-swap and **opencode zen** (its hosted gateway, the old "OpenCode Go") — an `opencode.json` provider/model edit + API key; document both directions.
 - Web app surface: a "Code" area that (a) lists sessions via the OpenAPI API, (b) creates a session against a chosen directory, (c) streams session events into a viewer, (d) "Open in VS Code" deep-link. The router can *suggest* delegation; the user confirms — agent loops never nest silently.
 - [UNCERTAIN]: opencode's event-stream endpoint shape and API stability across versions — pin the version, smoke-test in Phase 4 before building UI on it.
+
+**Why opencode over Qwen Code (Alibaba's Claude-Code clone) — owner Q:** opencode stays the primary harness. It's the better fit for *this* app because (a) its `@opencode-ai/sdk` is a **type-safe TS client generated from the server's OpenAPI spec** — a clean match for our tsc-only frontend; (b) it's **provider-agnostic by design** (any OpenAI-compatible `/v1`), where Qwen Code is optimized for Qwen models first; and (c) one opencode server multiplexes many clients/sessions, while `qwen serve` binds **one workspace per process** (a port each) — awkward for a multi-project app. The one real caveat: an LLM vendor tunes its own harness for its own model first, and our `coder` **is** Qwen3-Coder-30B. So in **Phase 4, A/B the same Qwen3-Coder-30B running in opencode vs in Qwen Code** on 3 real tasks; if Qwen-Code-in-harness is materially better, add it as an *optional second harness* (both are OpenAI-compatible clients of llama-swap → one entry in the same provider registry as Future §5). Don't switch the plan on it now. [FACT — opencode SDK from OpenAPI; Qwen Code Qwen-optimized + one-workspace-per-daemon]
 
 ### 4.5 Projects (spec §7)
 
@@ -281,7 +301,7 @@ Each phase ends with: features **wired end-to-end** (no "adapter exists but not 
 ## 7. Resolved decisions (owner answers, 2026-07-20) + remaining unknowns
 
 Resolved:
-1. **Hardware:** 3090 + 3070, 64GB RAM, Ryzen 9 (future: 2×3090 + 2×3070 across two boxes → per-box llama-swap, §4.1).
+1. **Hardware:** the fleet is **1×3090 + 2×3070** — PC1 (Ubuntu backend) has the 3090 + one 3070 + 64GB RAM + Ryzen 9; PC2 has the other 3070. Per-box llama-swap with a `model → endpoint` map; no cross-box RPC (§4.1). PC2's 3070 hosts a warm `coder-small` concurrency lane.
 2. **Memory reference:** hermes-agent, including the self-improvement idea (§4.8).
 3. **Host:** Windows now, maybe Linux later — BrowserOS + optional opencode live there; backend stays on Ubuntu.
 4. **Per-task model config:** user-configurable in Settings, same pattern as the current app's tier table (§4.1 roster keeps the aliases).

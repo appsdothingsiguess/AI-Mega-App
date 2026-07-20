@@ -1,9 +1,0 @@
----
-description: "Security guardrails"
-alwaysApply: true
----
-API keys and secrets live in .env only. settings.json contains structured config, never secrets.
-
-All .env values are accessed through the Settings class, never os.environ directly in application code.
-
-Validate all user input at the API boundary. Use Pydantic models for request validation.

@@ -1,8 +1,13 @@
-projects/
 ref_do_not_copy/
+projects/
+models/
+web/js/
 .git/
 node_modules/
 __pycache__/
 *.pyc
+*.gguf
+*.sqlite*
 logs/
 .venv/
+.pytest-tmp/

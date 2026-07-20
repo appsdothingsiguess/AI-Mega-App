@@ -1,6 +1,6 @@
 # Cursor Ruleset — AI Mega App Rebuild
 
-Complete `.cursor/rules/` content for the rebuild. Copy each fenced block into the named file.
+Complete `.cursor/rules/` content for the rebuild. **These blocks are already live** in `.cursor/rules/` (synced 2026-07-20, rev 4). Editing a rule means editing both the live `.mdc` and its block here — they must stay identical. Sections 8–11 below cover the rest of the Cursor 3 system (Skills, hooks, parallel-agent files, Plan Mode, model selection) that live *outside* `.cursor/rules/`.
 
 Design constraints applied (from the Cursor 3 research):
 
@@ -211,11 +211,11 @@ Secrets are read from `.env` through the settings object; `config.yaml` and
 everything checked into git stay secret-free. New keys get a documented
 placeholder in `.env.example`.
 
-Routing labels (`chat-default`, `coder`, `reasoner`, `vision`, `utility`,
-`embed`, `classifier`, `needle`) are config vocabulary: application code and
-prompts use the alias, `config.yaml` maps alias → model file → GPU. The
-classifier emits classes, and the `routing:` table resolves classes to
-aliases, so model changes are config edits only.
+Routing labels (`chat-default`, `coder`, `coder-small`, `reasoner`, `vision`,
+`utility`, `embed`, `classifier`, `needle`) are config vocabulary: application
+code and prompts use the alias, `config.yaml` maps alias → model file → box +
+GPU. The classifier emits classes, and the `routing:` table resolves classes
+to aliases, so model changes are config edits only.
 ```
 
 ---
@@ -362,3 +362,72 @@ logs/
 ```
 
 `web/js/` (tsc output) and `*.gguf`/`*.sqlite*` are the additions over the old file: agents reason from source, and multi-GB binaries poison both indexing and context.
+
+---
+
+## 8. Skills — on-demand workflows (`.cursor/skills/<name>/SKILL.md`)
+
+Rules are always-on or path-triggered *guardrails*; **Skills are deep workflows the agent pulls only when the task matches**, keeping context clean. Cursor sees skill names + one-line descriptions up front and loads full content on demand. Two facts drive how we use them:
+
+- **Rules beat Skills on conflict** — so guardrails (stack, boundaries, config discipline) stay in `.cursor/rules/`; Skills hold *procedures* (a Phase-0 measurement runbook, a router-eval procedure, a "wire a new tool" checklist), never new constraints.
+- ⚠️ **Availability:** as of the Cursor 3 research window, Agent Skills were confirmed only in the **nightly** channel, with conflicting signals about stable release. Verify your build before depending on a Skill; anything a Skill does must degrade to "the agent reads the doc" on stable.
+
+A `SKILL.md` is plain Markdown; for discovery/portability add a YAML header with `name` + `description`. The **`description` is the routing signal — write it as a trigger, not a capability** ("Use when the user asks to…"). Example, ready to drop into `.cursor/skills/wire-a-tool/SKILL.md`:
+
+```markdown
+---
+name: wire-a-tool
+description: Use when adding a new backend tool under app/tools/ — enforces the self-describing + auto-discovery + debug-span + test + docs contract.
+---
+
+# Wire a new tool
+
+1. Create `app/tools/<name>.py` exporting `name`, `schema`, `execute()`, `enabled`.
+2. Confirm the registry auto-discovers it (no manual import list).
+3. Emit a debug span in `execute()` (trace_id, args, latency, result size).
+4. Add `tests/tools/test_<name>.py` against the fake llama-swap.
+5. Add `docs/<name>.md` (what / why / how-to-extend).
+6. Verify end-to-end: the tool is reachable from a chat turn and visible in the Debug panel.
+
+A tool that isn't registered + traced + tested + documented is an incomplete PR (see rule 006).
+```
+
+Keep skills small and single-purpose; a top-level `concepts/SKILL.md` can hold cross-cutting "true north" (the @PLAN.md principles) that language/area skills extend rather than duplicate.
+
+---
+
+## 9. Parallel-agent files — contracts + verification
+
+Rule `007-git-worktrees` covers branch/worktree/commit discipline. Two more Cursor 3 patterns make parallel waves safe; both are plain files, no framework:
+
+**Agent contract (`.cursor/agent-contracts/<task-id>.md`)** — written *before* an agent starts, so review is against the contract, not taste:
+
+```markdown
+# Contract: <task-id>
+- Goal: <one sentence>
+- Non-goals: <what this task must NOT touch>
+- FILE SCOPE: <explicit paths — the only files this agent may edit>
+- Constraints: no new deps; follow existing patterns; frozen files off-limits
+- Acceptance: <tests that must pass> + <behavior to demo>
+- Stop condition: if an out-of-scope change is required, pause and report
+```
+
+**Verification pass** — after each agent completes, a lightweight check that the diff touched **only** the scoped files and that the gate passes. This is exactly the `stop`-hook opportunity noted in §7: diff `git diff main..HEAD --name-only` against the contract's FILE SCOPE and reject strays before merge. Worktrees prevent *file* conflicts but not **semantic** ones (Agent A changes an SSE event shape, Agent B consumes the old shape) — so decompose dependency-first: don't start a dependent task until its prerequisite is merged. `docs/PHASE_PROMPTS.md` already sequences waves this way.
+
+---
+
+## 10. Plan Mode as the architectural gate
+
+Cursor 3 Plan Mode (`Shift+Tab` in agent input) restricts the agent to **read-only** exploration and emits a reviewable Markdown plan before any code. Use it before every multi-file task: it forces interface-first thinking, surfaces dependencies, and produces an artifact you can save to `.cursor/plans/` and `@file`-reference next session. Cursor has **no persistent session memory**, so re-inject context at each session start — `@`-reference `@PLAN.md`, the relevant `docs/FEATURES.md` spec, and the saved plan, plus "do not modify these interfaces: @app/protocols.py". The real constraint layer is still machine-checkable: interfaces in `app/protocols.py`/`app/types.py`, the SSE event vocabulary, and `tsc --noEmit` — a violated interface is a type error, no prompt needed (the "Interface Freeze" pattern in @AGENTS.md).
+
+---
+
+## 11. Model selection (solo, two-model pattern)
+
+Match the model to the phase, not the task:
+
+- **Plan** with a high-capability model (Composer 2 or Claude Opus) — planning generates the constraints the executor is then bounded by.
+- **Execute** scoped, well-specified tasks with a faster/cheaper model (Composer 1.5 or Claude Sonnet); the tighter the contract + interfaces, the smaller the model you can hand it to.
+- **High-parallelism CLI waves:** prefer the higher-rate-limit model (Composer 1.5) so 3+ concurrent agents don't throttle.
+
+Harness matters as much as the model: a vendor's model in its own harness usually spends fewer tokens than the same model through a generic harness — the same reason §4.4 of PLAN.md keeps opencode primary but flags a Phase-4 A/B of Qwen3-Coder in opencode vs Qwen Code.

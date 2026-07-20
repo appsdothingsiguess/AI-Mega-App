@@ -1,0 +1,32 @@
+---
+description: "TypeScript frontend conventions (tsc-only, claude.ai parity)"
+globs: ["web/src/**/*.ts", "web/**/*.css"]
+alwaysApply: false
+---
+Design target: mirror claude.ai web 1:1 (@PLAN.md §4.2) — collapsible left
+sidebar, centered chat column, right artifact panel, composer model picker,
+per-message model label. Check new UI against that layout before adding any
+of our own additions (Settings, Debug view).
+
+Each view is one TS module exporting `mount(el, state)` / `unmount()`, paired
+with one CSS file. Navigation goes through the hash-based `router.ts`; shared
+state goes through the pub/sub `store.ts`. These two hand-written modules are
+the entire "framework".
+
+`tsc` is the whole build: source in `web/src/**` compiles to `web/js/**`,
+which the browser loads as native ES modules. `web/js/**` is build output —
+change behavior by editing the `.ts` source and recompiling.
+
+Theme values live as custom properties in `theme.css`; components reference
+variables so themes are a one-file swap.
+
+SSE client: auto-reconnect, and every stream must end with a `done` or
+`error` event — if neither arrives, show "connection lost". Model swaps
+surface the `model_loading` status event as a visible "loading <model>…"
+state.
+
+Sanitize all model-generated HTML through DOMPurify before insertion.
+Artifact content renders inside a sandboxed iframe
+(`sandbox="allow-scripts"`, no same-origin).
+
+Verify with `npx tsc --noEmit` before completion.
