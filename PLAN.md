@@ -96,23 +96,30 @@ If DOM complexity grows past ~30 components, revisit with lit-html (still no bun
 
 **Hardware (confirmed):** RTX 3090 (24GB) + RTX 3070 (8GB), 64GB system RAM, Ryzen 9. Future: dual 3090 + dual 3070 split across **two computers** — llama-swap only manages processes on its own machine, so the two-box future means one llama-swap per box and a `model → endpoint` map in our config; the backend already selects by model name, so this is additive, not a redesign. [FACT re: llama-swap scope]
 
-**Placement strategy for the current pair:** the 3070 is the *residents* card — classifier, embedder, Needle live there permanently (all three fit in well under 8GB, leaving room for a light utility model). The 3090 is the *main slot* — one big model at a time (30B/32B quants), swapped by llama-swap. This means big-model swaps never evict the router/RAG path, and CPU (Ryzen 9) covers <2B fallbacks (spec §2.1).
+**Placement strategy (rev 3 — owner: old tier list was for the lone-3090/Ollama era; consolidate):**
 
-**Model roster** — carried over from the current Ollama tier system, re-expressed as GGUF entries. Tier aliases survive; only the runtime changes. Context lengths that were baked into Ollama tags (`-16k`, `-32k`) become `-c` flags:
+- **CPU (Ryzen 9):** classifier + Needle. Owner confirms the old classifier ran fine on CPU; Needle is 26M — trivial. This frees the 3070 entirely.
+- **3070 (8GB):** embedder (resident) + **`utility` small model** (Qwen3-8B-class, Q4, resident) for titles, summaries, compaction, memory review — and instant fallback replies while the 3090 swaps.
+- **3090 (24GB):** the big-model slot, one at a time, llama-swap `swap: true`.
 
-| Alias (kept) | Model (GGUF) | Card | Notes |
+**Consolidated roster** — the light/medium/heavy triads collapse to ~one model per class. Rationale: the triads existed to dodge Ollama swap costs on a shared card; with llama-swap + a dedicated utility card, fewer/better models win. Speed floor: **nothing under ~25 tok/s at its working quant** (owner: "no 10 tok/s"); Q4_K_M is the default quant, Q5/Q6 only where headroom allows. 2026 references for 24GB: Qwen3.6-27B dense ≈ 30–40 tok/s; 35B-A3B MoE ≈ 50 tok/s; Qwen3-32B Q4_K_M ≈ 20GB. [FACT — published 3090 benchmarks; exact numbers re-measured in Phase 0]
+
+| Alias | Candidate (GGUF, Q4_K_M) | Where | Role |
 |---|---|---|---|
-| `coding-light` | Qwen2.5-Coder-7B | 3070 or 3090 | Q4 fits 3070 (~4.5GB) → can stay hot beside residents [UNCERTAIN — verify headroom in Phase 0] |
-| `coding-medium` / `coding-heavy` | Qwen3-Coder-30B (A3B MoE) | 3090 | Same weights, different `-c` (16k/24k) → **one llama-swap entry per ctx, same file** — no double disk/VRAM cost at rest |
-| `reasoning-medium` | DeepSeek-R1-8B | 3090 | |
-| `reasoning-heavy` | DeepSeek-R1-32B | 3090 | Q4 ~19GB — tight with 16k ctx; Phase 0 measures |
-| `vision-light/medium/heavy` | Gemma4 12B/26B/31B + mmproj | 3090 | 31B may not fit at useful quant+ctx on 24GB [UNCERTAIN — Phase 0 decides whether heavy tier survives] |
-| `tool-calling-medium` | Qwen3-8B | 3090 (or 3070 Q4) | |
-| `classifier` | ~1.7B (Qwen3-1.7B) | 3070 resident | |
-| `embed` | nomic-embed-v2 or Qwen3-embedding | 3070 resident | |
-| `needle` | Cactus Needle 26M | 3070 resident (or CPU — it's 14MB) | |
+| `chat-default` | Qwen3.6-35B-A3B (MoE) or Qwen3.6-27B | 3090, **always loaded** | General chat + native tool calling. MoE preferred: ~50 tok/s. |
+| `coder` | Qwen3-Coder-30B-A3B (MoE) | 3090 swap | All coding tiers. Ctx variants (16k/24k) = two llama-swap entries, same weights file. |
+| `reasoner` | DeepSeek-R1-32B **or** Qwen3.6 thinking variant | 3090 swap | Owner confirms R1-32B fits. Dense 32B ≈ 25–35 tok/s — at the speed floor; Phase 0 A/Bs it against the MoE thinking variant, keep one. |
+| `vision` | Gemma4-27B-class + mmproj | 3090 swap | Owner confirms Gemma sizes fit. One vision model, not three. |
+| `utility` | Qwen3-8B Q4 | 3070 resident | Titles/summaries/compaction/memory reviewer/instant fallback. |
+| `embed` | nomic-embed-v2 / Qwen3-embedding | 3070 resident | |
+| `classifier` | Qwen3-1.7B-class | CPU resident | Router (grammar-constrained). |
+| `needle` | Cactus Needle 26M | CPU resident | Tool-call dispatcher. |
 
-The roster was tuned for a lone 3090; the 3070 residents card is the new headroom — Phase 0's job is to re-measure, not trust these notes.
+Old tier aliases (`coding-light/medium/heavy`, `reasoning-*`, `vision-*`) remain as **routing labels in config that point at this roster** — the router/Settings vocabulary survives, the model count drops from ~12 to ~8 (4 big, 4 small). Users can still add models per class in Settings.
+
+**Default model / always-loaded (owner §4):** `chat-default` has no TTL and the backend re-warms it whenever the 3090 has been idle on another model for N minutes (config, default ~10) — a ~20-line deterministic policy, so a fresh chat almost always gets an instant first token. `utility` on the 3070 answers trivial/background tasks with zero swap wait regardless.
+
+**Per-chat model switching (owner §5) — this is already solved by the architecture, no new machinery:** each chat row stores `model_override` (null = router decides). The composer's model picker writes it; every turn resolves `override ?? router(intent)` and passes that name in the OpenAI request's `model` field; **llama-swap does the actual load/swap transparently**. The only UX work: an SSE `model_loading` status event so the UI shows "loading <model>…" during a 3090 swap (3–10s typical reload [FACT — llama.cpp reload benchmarks]), and the per-message model label. Mid-chat switches are just the next turn's field value.
 
 **GPU delegation (spec §14):** at backend startup, run `nvidia-smi --query-gpu=index,name,memory.total,memory.free --format=csv` → GPU inventory endpoint → Settings UI lets the user assign each model to a GPU (or CPU for <2B models, spec §2.1). A deterministic Python module (`gpu/swapgen.py`) renders `llama-swap.yaml` from `config.yaml` model entries + GPU assignments:
 
