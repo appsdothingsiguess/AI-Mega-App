@@ -92,7 +92,10 @@ On the Ubuntu 26.04 box (RTX 3090 + RTX 3070, 64GB RAM, Ryzen 9):
 ## 0.2 — Build llama.cpp (operator checklist)
 
 ```
-1. Clone llama.cpp to /opt/llama.cpp; build with CUDA:
+1. Clone llama.cpp to /opt/llama.cpp — use a RECENT master (it must include
+   the Qwen3-Coder tool-call parser; the model emits an XML-ish format with
+   Python-literal args that older builds mangle — harness research
+   2026-07-20). Build with CUDA:
      cmake -B build -DGGML_CUDA=ON && cmake --build build -j
 2. Verify /opt/llama.cpp/build/bin/llama-server --help runs.
 3. Resolve PLAN.md §7 unknown: record the EXACT flag spelling this build uses
@@ -213,7 +216,12 @@ files created, how the operator runs each script.
 ```
 
 **Phase 0 exit:** `docs/phase0-measurements.md` fully filled in; reasoner A/B
-decided; sqlite-vec verdict recorded. No app code exists. Merge `p0/measure`.
+decided; sqlite-vec verdict recorded; **streaming tool calls verified from the
+coder model through llama-swap** (curl the OpenAI /v1/chat/completions with a
+tools array + stream:true against `coder`; confirm well-formed
+tool_call deltas — this is the highest-leverage check per the harness
+research: tool-call reliability lives in llama.cpp's template/parser, not in
+any coding harness). No app code exists. Merge `p0/measure`.
 
 ---
 
@@ -2086,15 +2094,21 @@ opencode.json (generator, not hand/AI-written). Source of truth: PLAN.md
 §4.4; docs/FEATURES.md §opencode.
 
 GOAL
-1. app/opencode/client.py — thin httpx client for the pinned OpenAPI
-   surface: list_sessions, create_session(directory), send_prompt,
-   stream_events(session_id) -> AsyncIterator[dict]. Base URLs from
-   config.opencode.endpoints (list of {name, base_url}; key arrives via
-   wave-2 wiring — read defensively).
+1. app/opencode/client.py — session-lifecycle client for the pinned
+   opencode version: list_sessions, create_session(directory), send_prompt,
+   stream_events(session_id) -> AsyncIterator[dict]. First evaluate the
+   official `opencode-ai` PyPI package (alpha, generated from the OpenAPI
+   3.1 spec at /doc) against the recorded shapes; adopt it if stable, else
+   thin httpx against the same spec — same public surface either way. Base
+   URLs from config.opencode.endpoints (list of {name, base_url}; key
+   arrives via wave-2 wiring — read defensively).
 2. app/opencode/confgen.py — deterministic generator: render opencode.json
    with a custom OpenAI-compatible provider at llama-swap's /v1 + model
-   list from config (same pattern as swapgen; "generated — do not
-   hand-edit" header); write-to-path function the Settings API can call.
+   list from config, INCLUDING an explicit context limit per local model
+   (opencode cannot infer it for local endpoints — issue #31433; value
+   from config.opencode.confgen.context_limit) (same pattern as swapgen;
+   "generated — do not hand-edit" header); write-to-path function the
+   Settings API can call.
 3. app/opencode/api.py — APIRouter proxying to the client:
      GET /api/code/sessions · POST /api/code/sessions {directory} ·
      POST /api/code/sessions/{id}/prompt ·
@@ -2105,7 +2119,12 @@ GOAL
    exported for the orchestrator later; wiring decides where it surfaces.
 5. docs/opencode.md — the PLAN-mandated doc: systemd unit, provider
    switching local llama-swap ↔ opencode zen (both directions, config
-   snippets), VS Code + opencode workflow.
+   snippets), the escalation rule (local coder first → zen DeepSeek V4
+   Flash on context-overflow or one failed local attempt → V4 Pro only on
+   Flash failure), zen auth-header curl verification steps
+   (https://opencode.ai/zen/v1/chat/completions — header shape unverified
+   until curled), the qwen-code revisit trigger (qwen serve Stage 2), and
+   the VS Code + opencode workflow.
 6. tests/test_opencode.py against a fake opencode server fixture.
 
 NON-GOALS

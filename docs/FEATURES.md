@@ -363,8 +363,10 @@ routing:
 
 **What.** `opencode serve` runs as a systemd unit on the Ubuntu box (optionally also user-launched on the Windows host); the backend delegates **repo/directory-scoped coding work** to it via its session API and streams session events into a "Code" area. Dividing line: no workspace → chat model + artifact sandbox (F8); real directory/repo on the box → opencode session. opencode is never called as a tool-RPC for one-off ops (its API is session-based [FACT]), and never nested silently inside the chat tool loop — the router *suggests* delegation, the user confirms. [FACT — PLAN §4.4]
 
+**Harness decision (researched 2026-07-20):** opencode confirmed over qwen-code. The "Qwen-tuned harness" claim is vendor-only with no eval behind it; both harnesses show identical local tool-call failure classes, which are fixed at the llama.cpp layer (recent build + Qwen3-Coder tool-call parser + `--jinja` — Phase 0 verifies streaming tool calls through llama-swap). qwen-code's `qwen serve` is Stage-1 alpha with no OpenAPI and a subprocess-only Python SDK; revisit when Stage 2 (OpenAPI + multi-session) ships. Guardrails from opencode's tracker: pin version (#28502 llama.cpp-breaking regression precedent), declare local model context limits explicitly in generated `opencode.json` (#31433), watch compaction with Qwen3-Coder (#22792 open). [FACT — see PLAN §4.4]
+
 **Modules & files.**
-- `app/opencode/client.py` — httpx client for the OpenAPI surface (create session, prompt, list, events); version pinned.
+- `app/opencode/client.py` — session-lifecycle client; version pinned. Prefer the official `opencode-ai` PyPI package (alpha, generated from the OpenAPI 3.1 spec at `/doc`) if the Phase 4 smoke test finds it stable, else thin httpx against the same spec; surface stays create/list session, prompt, stream events either way. [FACT re: SDK existence]
 - `app/opencode/api.py` — our REST façade + SSE relay of session events.
 - `app/opencode/confgen.py` — deterministic writer of `opencode.json` on both machines: provider = llama-swap `/v1` (custom OpenAI-compatible), models from our roster; documents-and-writes the zen (hosted) switch too. Never AI-generated. [FACT — PLAN §4.4, Future §8 rule]
 - `web/src/views/code.ts` — session list, "delegate to opencode" flow (directory picker limited to registered project/repo paths), event viewer, "Open in VS Code" deep-link.
@@ -384,14 +386,17 @@ opencode:
   hosts:
     ubuntu: {url: "http://127.0.0.1:4096", enabled: true}
     windows: {url: "http://<host-ip>:4097", enabled: false}
-  version_pin: "x.y.z"
-  confgen: {provider: local-llamaswap, zen_api_key_env: OPENCODE_ZEN_KEY}
+  version_pin: "x.y.z"          # mandatory — weekly churn has broken llama.cpp before (#28502)
+  confgen:
+    provider: local-llamaswap
+    zen_api_key_env: OPENCODE_ZEN_KEY
+    context_limit: 65536         # written into opencode.json model limit — opencode can't infer it for local models (#31433)
   allowed_roots: [/home/user/repos, /home/user/AI-Mega-App/projects]
 ```
 
 **Integration points.** Reads model roster (F2) for confgen; Code view (F4); router (F5) may set `needs_tools: ["delegate_opencode"]` as a suggestion signal [INFERENCE]. Spans: `opencode.session` (create/prompt/close with session_id), per-event relay counted in span meta. VS Code integration is docs-only (opencode's own extension) [FACT — PLAN §4.4.3].
 
-**Build steps.** 1) Phase 4: install + pin opencode on box, systemd unit; 2) confgen (llama-swap provider) + byte-diff test; 3) smoke-test session API with curl, record shapes; 4) `client.py`; 5) REST façade + SSE relay with terminal guarantee; 6) Code view; 7) delegation confirm flow in chat; 8) `docs/opencode.md` incl. zen switch both directions; 9) optional Windows host registration in Settings.
+**Build steps.** 1) Phase 4: install + pin opencode on box, systemd unit; 2) confgen (llama-swap provider, explicit context limit) + byte-diff test; 3) smoke-test session API with curl, record shapes; evaluate `opencode-ai` PyPI client vs httpx; 4) one verification curl against zen (`https://opencode.ai/zen/v1/chat/completions`, confirm auth header) before documenting the escalation profile; 5) `client.py`; 6) REST façade + SSE relay with terminal guarantee; 7) Code view; 8) delegation confirm flow in chat; 9) `docs/opencode.md` incl. zen switch both directions + the local→Flash→Pro escalation rule; 10) optional Windows host registration in Settings.
 
 **Tests.** pytest vs recorded/fake opencode server: session create/prompt/event relay; relay always terminates; disabled host rejected; confgen golden-file test (local and zen variants); `allowed_roots` enforcement (path traversal rejected). Playwright: delegate flow requires explicit confirm; session events render.
 
