@@ -1,6 +1,6 @@
 # AI Mega App — Build Plan v2
 
-**Date:** 2026-07-20 (rev 4 — corrected fleet to 1×3090 + 2×3070 across two boxes, no cross-box RPC, PC2 coder-small lane; pinned reasoner = DeepSeek-R1-Distill-Qwen-32B + DeepSeek-for-coding guidance; opencode vs Qwen Code decision. rev 2: TypeScript, hermes-style memory, claude.ai 1:1 UI, no auth, opencode/BrowserOS division of labor)
+**Date:** 2026-07-20 (rev 5 — Phase-0 box benchmarks landed: PC1's 3090+3070 tensor-split (3,1) into a ~32GB slot running 35B-A3B/coder at 130–153 tok/s; residents relocated to PC2; measured tok/s replace guesses; vision still untested. rev 4: corrected fleet to 1×3090 + 2×3070, no cross-box RPC, reasoner = DeepSeek-R1-Distill-Qwen-32B, opencode vs Qwen Code. rev 2: TypeScript, hermes-style memory, claude.ai 1:1 UI, no auth, opencode/BrowserOS division of labor)
 **Status:** Planning. Supersedes `prompter_x_complete_spec.md` (kept only as a post-mortem reference).
 **Confidence tags:** [FACT] verifiable · [INFERENCE] reasoned · [UNCERTAIN] guess, verify before building.
 
@@ -101,33 +101,44 @@ If DOM complexity grows past ~30 components, revisit with lit-html (still no bun
 
 llama-swap only manages processes on its own machine, so two boxes means **one llama-swap per box** plus a `model → endpoint` map in `config.yaml`; the backend already selects by model name, so PC2 is additive, not a redesign. [FACT re: llama-swap scope]
 
-**Do NOT pool the two boxes into one big model via llama.cpp RPC.** RPC combines VRAM across machines but is explicitly *not* a speedup — it adds per-token network overhead, both boxes must run byte-identical llama.cpp builds, and it only pays off for a model too big for a single node. Our entire roster is sized to fit 24GB, so RPC would make inference *slower* for zero gain. PC2 is therefore an independent inference node, not a VRAM extender. [FACT — llama.cpp RPC pools memory, does not parallelize compute; see `tools/rpc/README.md`]
+**Two kinds of GPU pooling — one good, one bad:**
+- **Intra-box tensor-split (PC1's own 3090+3070 over PCIe) — YES, this is now the design.** Phase-0 benchmarks on the box (2026-07-20) confirm a `--tensor-split 3,1` (matching the 24GB:8GB ratio) gives a **~32GB combined pool** with excellent throughput — MoE models at 130–153 tok/s, dense 32B at ~44 tok/s. This is what lets the preferred `chat-default` (Qwen3.6-35B-A3B, Q4 = 22.1GB) run at all — on the 3090 alone it left no room for KV cache and only Q3 fit. [FACT — measured, see `serving/llama-swap/config.yaml`]
+- **Cross-box RPC (PC1 ↔ PC2 over LAN) — NO.** RPC pools VRAM across machines but is *not* a speedup: per-token network overhead, byte-identical llama.cpp builds required, only worth it for a model too big for one node. PC2 stays an independent inference node reached by `model → endpoint` map, never a VRAM extender. [FACT — llama.cpp RPC pools memory, does not parallelize compute; `tools/rpc/README.md`]
 
-**Placement strategy (rev 4 — hot path stays on PC1; PC2's 3070 breaks the single-3090 serialization bottleneck):**
+**Placement strategy (rev 5 — PC1's two cards combine into one 32GB big-model node; residents move off PC1's GPUs to PC2 + CPU):**
 
 | Box | Device | Residents (always loaded) | Swap slot |
 |---|---|---|---|
 | **PC1** | Ryzen 9 CPU | `classifier` (1.7B) + `needle` (26M) | — |
-| **PC1** | RTX 3070 (8GB) | `embed` + `utility` (Qwen3-8B, Q4) | — |
-| **PC1** | RTX 3090 (24GB) | `chat-default` (kept warm) | `coder` / `reasoner` / `vision` (`swap: true`) |
-| **PC2** | RTX 3070 (8GB) | `coder-small` (Qwen3-Coder-7B, Q4) — warm coding + instant-fallback lane | (optional 1–2 small `swap` models) |
+| **PC1** | RTX 3090 + RTX 3070, **tensor-split 3:1 (~32GB)** | `chat-default` (kept warm) | `coder` / `reasoner` / `vision` (`swap: true`) |
+| **PC2** | RTX 3070 (8GB) | `embed` + `utility` (Qwen3-8B, Q4) ≈ 6GB | `coder-small` if it still fits (VRAM-budget task) |
 
-- **CPU (Ryzen 9):** classifier + Needle. They run on *every* turn, so they must stay local to the backend — never behind a LAN hop. Owner confirms the classifier ran fine on CPU; Needle is 26M — trivial. This keeps the 3070 free for model work.
-- **PC1 3070 (8GB):** embedder (resident) + **`utility` small model** (Qwen3-8B, Q4, resident) for titles, summaries, compaction, memory review — and instant fallback replies while the 3090 swaps. These are hot per-turn tasks, co-located with the backend for zero LAN latency.
-- **PC1 3090 (24GB):** the big-model slot, one at a time, llama-swap `swap: true`.
-- **PC2 3070 (8GB):** a **second, independent llama-swap node** hosting a warm `coder-small` (Qwen3-Coder-7B). Its job is *concurrency*: today a coding request and a chat request serialize on the lone 3090; a dedicated warm coder on PC2 gives (a) instant first-token fallback during a 3090 swap and (b) a parallel lane so opencode delegation, quick code artifacts, and background jobs never contend with the big card. Things tolerant of one LAN hop go here; the hot path (router, embeddings) stays on PC1.
+- **CPU (Ryzen 9):** classifier + Needle. They run on *every* turn but are tiny; keeping them off the GPUs frees all VRAM for models, and the classifier ran fine on CPU in the old build. These stay local to the backend (no LAN hop on the hot routing path).
+- **PC1 (3090 + 3070 tensor-split):** the single big-model slot, one model at a time across ~32GB, llama-swap `swap: true` — `chat-default` warm, swapping in `coder` / `reasoner` / `vision`. The split is the whole reason Q4 of the 35B-A3B default and quant headroom (Q5/Q6) on the coder become possible.
+- **PC2 (3070, 8GB):** the small-model node — `embed` + `utility` (Qwen3-8B ≈ 5–6GB) resident. This is where the residents landed once PC1's 3070 was absorbed into the split. Embeddings and utility tasks (titles/summaries/compaction/memory review) take one LAN hop, which is fine — they batch and don't stream tokens. Whether `coder-small` also fits here resident, or becomes a `swap` entry, is a VRAM-budget check for the next benchmark pass. It still provides the instant-fallback + parallel-coding lane when it fits.
 
-**Consolidated roster** — the light/medium/heavy triads collapse to ~one model per class. Rationale: the triads existed to dodge Ollama swap costs on a shared card; with llama-swap + a dedicated utility card, fewer/better models win. Speed floor: **nothing under ~25 tok/s at its working quant** (owner: "no 10 tok/s"); Q4_K_M is the default quant, Q5/Q6 only where headroom allows. 2026 references for 24GB: Qwen3.6-27B dense ≈ 30–40 tok/s; 35B-A3B MoE ≈ 50 tok/s; Qwen3-32B Q4_K_M ≈ 20GB. [FACT — published 3090 benchmarks; exact numbers re-measured in Phase 0]
+**Trade-off owner should be aware of (default taken, easily reversed):** the split means PC1 runs **one** big model at a time across both its cards — there is no separate always-warm small model *on PC1* for instant first-token during a swap; that fallback now lives on PC2 over LAN. The alternative (3090 solo for big models, PC1 3070 kept for local residents) preserves a local fallback but caps big models near 24GB, forcing the 35B-A3B default down to Q3 or a very tight Q4. The measured box is already configured for the split, and it enables the owner's stated Q4 preference — so the split is the working default. Flip back by moving `embed`/`utility` to PC1's 3070 and dropping tensor-split if the LAN hop ever bites.
 
-| Alias | Candidate (GGUF, Q4_K_M) | Where | Role |
+**Consolidated roster** — the light/medium/heavy triads collapse to ~one model per class. Speed floor: **nothing under ~25 tok/s at its working quant** (owner: "no 10 tok/s"); Q4_K_M is the default, Q5/Q6 where the 32GB split leaves headroom. **Measured on the box (2026-07-20, `--tensor-split 3,1`, Q4_K_M)** — these replace the earlier guessed budgets:
+
+| Alias | Model (Q4_K_M) | VRAM | Measured | Where |
+|---|---|---|---|---|
+| `chat-default` | Qwen3.6-35B-A3B (MoE) | 22.1GB | **132.6 tok/s** | PC1 split, **always warm** |
+| `coder` | Qwen3-Coder-30B-A3B (MoE) | 18.6GB | **153.3 tok/s** | PC1 split (swap) |
+| `reasoner` | DeepSeek-R1-Distill-Qwen-32B (dense) | 19.8GB | **44.9 tok/s** | PC1 split (swap) |
+| — alt | Qwen3-32B (dense) | 19.8GB | 44.0 tok/s | redundant w/ MoE — **not kept** |
+
+Full roster with roles:
+
+| Alias | Candidate | Where | Role |
 |---|---|---|---|
-| `chat-default` | Qwen3.6-35B-A3B (MoE) or Qwen3.6-27B | 3090, **always loaded** | General chat + native tool calling. MoE preferred: ~50 tok/s. |
-| `coder` | Qwen3-Coder-30B-A3B (MoE) | 3090 swap | All coding tiers. Ctx variants (16k/24k) = two llama-swap entries, same weights file. |
-| `reasoner` | **DeepSeek-R1-Distill-Qwen-32B** (Q4_K_M) — A/B vs a Qwen3.6 thinking variant | 3090 swap | Best DeepSeek option that fits 24GB: Q4_K_M ≈ 18–20GB, MIT license, strong on LiveCodeBench/CodeForces, visible chain-of-thought. Dense 32B ≈ 25–35 tok/s — at the speed floor, so it's the "think hard" tool, not a snappy default. Phase 0 A/Bs it against the MoE thinking variant; keep one. |
-| `vision` | Gemma4-27B-class + mmproj | 3090 swap | Owner confirms Gemma sizes fit. One vision model, not three. |
-| `utility` | Qwen3-8B Q4 | PC1 3070 resident | Titles/summaries/compaction/memory reviewer/instant fallback. |
-| `coder-small` | Qwen3-Coder-7B Q4 | **PC2 3070 resident** | Warm coding lane on the second box: instant-fallback + parallel to the 3090 so coding never serializes behind chat. Doubles as a secondary general lane. |
-| `embed` | nomic-embed-v2 / Qwen3-embedding | PC1 3070 resident | |
+| `chat-default` | Qwen3.6-35B-A3B (MoE) | PC1 split, **always loaded** | General chat + native tool calling. 133 tok/s measured; Q4 only fits because of the split. |
+| `coder` | Qwen3-Coder-30B-A3B (MoE) | PC1 split (swap) | Most capable coder that fits. 153 tok/s at Q4 — huge headroom to try Q5/Q6 for quality. Ctx variants = two llama-swap entries, same weights. |
+| `reasoner` | **DeepSeek-R1-Distill-Qwen-32B** — A/B vs a Qwen3.6 thinking MoE | PC1 split (swap) | Fits 19.8GB, 44.9 tok/s (well above floor now, not "tight" as feared), MIT, visible CoT. Still A/B a thinking-MoE variant for speed; keep one. |
+| `vision` | Qwen3-VL-32B or Gemma3-27B + mmproj | PC1 split (swap) | **Not yet benchmarked — top Phase-0 gap.** One vision model, not three. |
+| `utility` | Qwen3-8B Q4 | PC2 3070 resident | Titles/summaries/compaction/memory reviewer/instant fallback (one LAN hop). |
+| `coder-small` | Qwen3-Coder-7B Q4 | PC2 3070 (resident if it fits, else swap) | Parallel/fallback coding lane; VRAM-budget check pending. |
+| `embed` | nomic-embed-v2 / Qwen3-embedding | PC2 3070 resident | Batched; LAN hop tolerable. |
 | `classifier` | Qwen3-1.7B-class | CPU resident | Router (grammar-constrained). |
 | `needle` | Cactus Needle 26M | CPU resident | Tool-call dispatcher. |
 
@@ -135,33 +146,32 @@ llama-swap only manages processes on its own machine, so two boxes means **one l
 
 Old tier aliases (`coding-light/medium/heavy`, `reasoning-*`, `vision-*`) remain as **routing labels in config that point at this roster** — the router/Settings vocabulary survives, the model count drops from ~12 to ~9 (4 big, 5 small). Users can still add models per class in Settings.
 
-**Default model / always-loaded (owner §4):** `chat-default` has no TTL and the backend re-warms it whenever the 3090 has been idle on another model for N minutes (config, default ~10) — a ~20-line deterministic policy, so a fresh chat almost always gets an instant first token. `utility` on the 3070 answers trivial/background tasks with zero swap wait regardless.
+**Default model / always-loaded (owner §4):** `chat-default` has no TTL and the backend re-warms it whenever the PC1 split slot has been idle on another model for N minutes (config, default ~10) — a ~20-line deterministic policy, so a fresh chat almost always gets an instant first token. `utility` on PC2's 3070 answers trivial/background tasks with zero swap wait regardless (over LAN).
 
 **Per-chat model switching (owner §5) — this is already solved by the architecture, no new machinery:** each chat row stores `model_override` (null = router decides). The composer's model picker writes it; every turn resolves `override ?? router(intent)` and passes that name in the OpenAI request's `model` field; **llama-swap does the actual load/swap transparently**. The only UX work: an SSE `model_loading` status event so the UI shows "loading <model>…" during a 3090 swap (3–10s typical reload [FACT — llama.cpp reload benchmarks]), and the per-message model label. Mid-chat switches are just the next turn's field value.
 
-**GPU delegation (spec §14):** at backend startup, run `nvidia-smi --query-gpu=index,name,memory.total,memory.free --format=csv` → GPU inventory endpoint → Settings UI lets the user assign each model to a GPU (or CPU for <2B models, spec §2.1). A deterministic Python module (`gpu/swapgen.py`) renders `llama-swap.yaml` from `config.yaml` model entries + GPU assignments:
+**GPU delegation (spec §14):** at backend startup, run `nvidia-smi --query-gpu=index,name,memory.total,memory.free --format=csv` → GPU inventory endpoint → Settings UI lets the user assign each model to a GPU, a **tensor-split across GPUs**, or CPU. A deterministic Python module (`gpu/swapgen.py`) renders `llama-swap.yaml` from `config.yaml` model entries + GPU assignments. On PC1 the big-model slot uses `--tensor-split 3,1` across the 3090+3070 (measured config); PC2 runs its own generated file for the small residents:
 
 ```yaml
-# generated — do not hand-edit
+# generated — do not hand-edit (PC1)
 macros:
   llama: /opt/llama.cpp/build/bin/llama-server --host 127.0.0.1 --port ${PORT} --jinja
 models:
-  classifier:
-    cmd: ${llama} -m /models/qwen3-1.7b-q8.gguf --device none -ngl 0 -c 4096   # CPU
-  embed:
-    cmd: ${llama} -m /models/nomic-embed-v2.gguf --embeddings --device CUDA1 -c 2048
-  needle:
+  classifier:                       # CPU
+    cmd: ${llama} -m /models/qwen3-1.7b-q8.gguf --device none -ngl 0 -c 4096
+  needle:                           # CPU
     cmd: ${llama} -m /models/needle-q8.gguf --device none -ngl 0
-  chat-large:
-    cmd: ${llama} -m /models/qwen3-32b-q4.gguf --device CUDA0 -ngl 999 -c 32768
+  chat-default:                     # 3090+3070 tensor-split, ~32GB pool
+    cmd: ${llama} -m /models/qwen3.6-35b-a3b-q4.gguf --tensor-split 3,1 -ngl 999 -c 32768
   coder:
-    cmd: ${llama} -m /models/qwen3-coder-30b-q4.gguf --device CUDA0 -ngl 999
+    cmd: ${llama} -m /models/qwen3-coder-30b-a3b-q4.gguf --tensor-split 3,1 -ngl 999
 groups:
-  resident: { swap: false, exclusive: false, members: [classifier, embed, needle] }
-  gpu0-main: { swap: true, members: [chat-large, coder, reasoner, vision] }
+  resident: { swap: false, exclusive: false, members: [classifier, needle] }   # CPU
+  pc1-main: { swap: true, members: [chat-default, coder, reasoner, vision] }     # the ~32GB split slot
+# PC2 runs its own generated file: resident group [embed, utility] on its 3070.
 ```
 
-Changing assignments → regenerate file → llama-swap config reload. **This is programmatic config writing, not AI-generated** (Key Rule 1 / Future §8 principle). [UNCERTAIN — exact `--device`/`-ts` flag spelling per llama.cpp build; verify against the installed version's `llama-server --help` in Phase 0, and llama-swap's reload endpoint name against current docs]
+Changing assignments → regenerate file → llama-swap config reload. **This is programmatic config writing, not AI-generated** (Key Rule 1 / Future §8 principle). The live PC1 config is `serving/llama-swap/config.yaml` (Phase 0 fixed `--tensor-split` from a stale `1,1` — tuned for the retired symmetric dual-3070 — to `3,1` for the 24GB:8GB ratio). [FACT re: live config; UNCERTAIN — llama-swap reload endpoint name, verify against current docs]
 
 **Model classes (spec §2):** general, coding, tool-call, reasoning, vision — all are just entries in `config.yaml` with a `class:` tag and a `gpu:` assignment; vision models add `--mmproj`. Benchmarks: `llama-bench` wrapped by a script in Phase 1 of the testing suite (spec Future §4 does the full suite; Critical only needs per-model tok/s sanity numbers shown in the debug panel).
 
@@ -301,7 +311,7 @@ Each phase ends with: features **wired end-to-end** (no "adapter exists but not 
 ## 7. Resolved decisions (owner answers, 2026-07-20) + remaining unknowns
 
 Resolved:
-1. **Hardware:** the fleet is **1×3090 + 2×3070** — PC1 (Ubuntu backend) has the 3090 + one 3070 + 64GB RAM + Ryzen 9; PC2 has the other 3070. Per-box llama-swap with a `model → endpoint` map; no cross-box RPC (§4.1). PC2's 3070 hosts a warm `coder-small` concurrency lane.
+1. **Hardware:** the fleet is **1×3090 + 2×3070** — PC1 (Ubuntu backend) has the 3090 + one 3070 + 64GB RAM + Ryzen 9; PC2 has the other 3070. Per-box llama-swap with a `model → endpoint` map; no cross-box RPC. **Phase-0 measured:** PC1's 3090+3070 tensor-split `3,1` gives a ~32GB slot (35B-A3B Q4 @ 133 tok/s, coder @ 153, R1-distill @ 45); residents (`embed`/`utility`) live on PC2's 3070, classifier/needle on CPU (§4.1).
 2. **Memory reference:** hermes-agent, including the self-improvement idea (§4.8).
 3. **Host:** Windows now, maybe Linux later — BrowserOS + optional opencode live there; backend stays on Ubuntu.
 4. **Per-task model config:** user-configurable in Settings, same pattern as the current app's tier table (§4.1 roster keeps the aliases).
