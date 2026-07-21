@@ -1,0 +1,34 @@
+---
+description: "Use when a phase/task prompt says to delegate steps to sub-agents — how an orchestrator spawns parallel sub-agents safely"
+alwaysApply: false
+---
+Phases are run by an **orchestrator agent that delegates each major step to a
+sub-agent**, not by one agent doing everything inline. `docs/PHASE_PROMPTS.md`
+tags which steps delegate; follow those tags literally.
+
+Rules for delegation:
+
+- **One sub-agent = one worktree = one FILE SCOPE = one branch = one completion
+  report.** Create the worktree from `main` (`git worktree add
+  ../AI-Mega-App-<task> -b p<phase>/<task> main`), open it as its own Cursor
+  window / Agents-Window agent.
+- **Run independent sub-agents in parallel; serialize only real dependencies.**
+  The phase table states which run at once and which wait (e.g. Phase 0: P0-A
+  tooling ∥ P0-B serving, then P0-C after both). Don't serialize work that has
+  no dependency.
+- **Non-overlapping scopes.** Two sub-agents never own the same file. When a
+  file is produced by one and consumed by another (a template then filled in),
+  that is sequential, not parallel — hand it off, don't co-edit.
+- **The orchestrator implements nothing itself** beyond creating worktrees and
+  spawning/collecting sub-agents. It gathers each completion report and holds
+  merging for the VERIFICATION + INTEGRATOR pass.
+- **sudo is permission-gated (rule `008-remote-box`).** A sub-agent that needs
+  sudo asks the orchestrator, which asks the human; never auto-approve, never
+  batch.
+- **Semantic drift is the orchestrator's job to catch.** Worktrees stop file
+  conflicts, not interface drift (one sub-agent changes a shape another
+  consumes). Decompose dependency-first and run the interface-defining step
+  before its consumers.
+
+Optionally write each sub-agent's brief to `.cursor/agent-contracts/<task>.md`
+so the verification pass audits the diff against its declared scope.

@@ -53,117 +53,110 @@ it never defines them.
 Naming: branches `p<phase>/<task>`, worktrees `../AI-Mega-App-p<phase>-<task>`.
 Backend test gate everywhere: `python -m pytest -q` from repo root. Frontend
 gate: `tsc --noEmit`. Commits: conventional messages, explicit paths only
-(`git add <files>` — rule `006-git`).
+(`git add <files>` — rule `007-git-worktrees`).
+
+### Sub-agent delegation (Cursor 3 Agents Window)
+
+Each phase is written as **one orchestrator prompt that delegates each major step to its own sub-agent** in its own worktree, run in parallel where dependencies allow — this is the Cursor 3 model (Agents Window → native worktrees), and the rule is `009-subagents`. Every phase section names, explicitly: which steps are delegated, the worktree per sub-agent, which run at the same time, and which wait. Phase 0 is the worked example (ORCHESTRATOR → P0-A tooling ∥ P0-B serving, then P0-C benchmark). Read a step's "Sub-agent" tag as "spawn a delegated agent here," not "do it inline." One sub-agent = one worktree = one FILE SCOPE = one completion report.
 
 ---
 
 # Phase 0 — Ground truth (box + inference)
 
-**Nature: operator-run checklists on the Ubuntu box, mostly sequential.** This
-phase produces measured facts, not app code (PLAN.md §5 Phase 0). Steps 0.1 →
-0.5 are sequential (each depends on the previous). Only 0.6 (benchmark
-scripts + measurements doc) is a Cursor agent task, and it can run in parallel
-with 0.4–0.5 once llama.cpp is built.
+**Nature: box work over `ssh ubuntu-ai` (rule `008-remote-box`) + a little repo tooling. Produces measured facts, not app code.** The full test spec is `docs/BENCHMARK_PLAN.md` (single box: 3090 + 3070) — this section is the *delegation*: one orchestrator, sub-agents per major step, named worktrees, run in parallel where dependencies allow.
 
-| Step | Name | Branch / where | Depends on |
+**Already done on the box — do NOT redo:** ✅ 0.1 Drivers + CUDA · ✅ 0.2 llama.cpp built (binaries at `/home/john/llm-stack/engine/llama.cpp/build/bin/`). Record their versions/flags into the measurements doc from the installed build; don't reinstall.
+
+### Sub-agent delegation (the "one major prompt → delegated sub-agents" model)
+
+Paste the **Phase 0 ORCHESTRATOR** prompt (below) into one Cursor agent. It spawns these sub-agents, each in its own worktree, and runs P0-A and P0-B **at the same time**:
+
+| Sub-agent | Worktree | Owns | Runs |
 |---|---|---|---|
-| 0.1 | Drivers + CUDA | operator, on box | — |
-| 0.2 | Build llama.cpp | operator, on box | 0.1 |
-| 0.3 | llama-swap + systemd | operator, on box | 0.2 |
-| 0.4 | Model downloads | operator, on box | 0.1 |
-| 0.5 | First llama-swap.yaml + swap verification | operator, on box | 0.3, 0.4 |
-| 0.6 | measure agent | `p0/measure` → `../AI-Mega-App-p0-measure` | 0.2 (scripts run after 0.5) |
+| **P0-A · tooling** | `../AI-Mega-App-p0-measure` (branch `p0/measure`) | repo bench scripts + measurements template (0.6) — no box dependency | immediately, parallel with P0-B |
+| **P0-B · serving** | `../AI-Mega-App-p0-serving` (branch `p0/serving`) | on box via SSH: llama-swap systemd + first config + swap/concurrency verify (0.3, 0.5) | immediately, parallel with P0-A |
+| **P0-C · benchmark** | reuses `../AI-Mega-App-p0-measure` | on box: model downloads + per-class benchmarks + **placement verdict** per BENCHMARK_PLAN (0.4 + §2–§6), fills measurements doc | **after** A's scripts and B's serving exist |
 
-## 0.1 — Drivers + CUDA (operator checklist)
+Each sub-agent gets a FILE SCOPE and starts in Plan Mode. Only P0-A and P0-C write repo files, and they own **different** files (scripts vs the measurements doc is co-owned → P0-A creates the template, P0-C fills it, sequential, no overlap). P0-B touches only the box, not the repo.
 
-```
-On the Ubuntu 26.04 box (RTX 3090 + RTX 3070, 64GB RAM, Ryzen 9):
-
-1. Install NVIDIA driver + CUDA toolkit from the Ubuntu repos or NVIDIA apt repo.
-2. Verify both GPUs enumerate:
-     nvidia-smi --query-gpu=index,name,memory.total --format=csv
-   Expected: index 0 = 3090 24GB, index 1 = 3070 8GB (record actual index
-   mapping — swapgen in Phase 2 consumes these indices).
-3. Verify nvcc --version matches the toolkit llama.cpp will build against.
-4. Record in docs/phase0-measurements.md: driver version, CUDA version,
-   GPU index→card mapping.
-```
-
-## 0.2 — Build llama.cpp (operator checklist)
+### Phase 0 ORCHESTRATOR (paste this one)
 
 ```
-1. Clone llama.cpp to /opt/llama.cpp; build with CUDA:
-     cmake -B build -DGGML_CUDA=ON && cmake --build build -j
-2. Verify /opt/llama.cpp/build/bin/llama-server --help runs.
-3. Resolve PLAN.md §7 unknown: record the EXACT flag spelling this build uses
-   for device selection (--device / CUDA0 naming, -ngl, -ts) and for
-   --jinja, --mmproj, --embeddings. Paste the relevant --help lines into
-   docs/phase0-measurements.md — swapgen (Phase 2) is written against these,
-   not against guesses.
-4. Pin the commit hash in docs/phase0-measurements.md.
+You are the Phase 0 orchestrator for the AI Mega App rebuild. Source of truth:
+PLAN.md §4.1/§5; the test spec is docs/BENCHMARK_PLAN.md; box access + paths are
+in .cursor/rules/008-remote-box (ssh ubuntu-ai; llama.cpp at
+/home/john/llm-stack/engine/llama.cpp/build/bin; models at
+/home/john/llm-stack/models). Drivers/CUDA and llama.cpp are ALREADY DONE.
+
+Delegate, do not implement yourself:
+1. Create two worktrees from main:
+     git worktree add ../AI-Mega-App-p0-measure  -b p0/measure  main
+     git worktree add ../AI-Mega-App-p0-serving  -b p0/serving  main
+2. Spawn sub-agent P0-A (tooling) in ../AI-Mega-App-p0-measure with the "0.6
+   p0/measure" prompt, and sub-agent P0-B (serving) in ../AI-Mega-App-p0-serving
+   with the "0.3+0.5 p0/serving" prompt. Run BOTH at once.
+3. When A and B report done, spawn P0-C (benchmark) in ../AI-Mega-App-p0-measure
+   with the "0.4+benchmarks p0/measure" prompt.
+4. sudo on the box is permission-gated: if any sub-agent needs sudo, it must ask
+   YOU, and you ask the human — never auto-approve (rule 008).
+Collect each sub-agent's completion report; do not merge until VERIFICATION.
 ```
 
-## 0.3 — llama-swap + systemd (operator checklist)
+## 0.3 — Sub-agent P0-B (serving): llama-swap + systemd
+
+Worktree `../AI-Mega-App-p0-serving`. Box work over `ssh ubuntu-ai` (rule 008); touches the box, not repo files.
 
 ```
-1. Install llama-swap (latest release binary) to /opt/llama-swap.
-2. Create systemd unit llama-swap.service: runs as non-root, listens on
-   0.0.0.0:8080 (trusted LAN, no auth — PLAN.md §7), config at
-   /opt/llama-swap/llama-swap.yaml, Restart=on-failure.
+On the box (ssh ubuntu-ai; llama.cpp already built at
+/home/john/llm-stack/engine/llama.cpp/build/bin):
+1. Install llama-swap (latest release binary) under /home/john/llm-stack/serving.
+2. Create systemd unit llama-swap.service: runs as the john user (non-root),
+   listens on 0.0.0.0:8080 (trusted LAN, no auth — PLAN.md §7), config at
+   serving/llama-swap/config.yaml, Restart=on-failure. (systemd install needs
+   sudo — ASK the orchestrator first, rule 008.)
 3. systemctl enable --now llama-swap; verify the web UI answers on :8080.
-4. Resolve PLAN.md §7 unknown: record the config-reload endpoint name/method
-   for the installed version in docs/phase0-measurements.md.
-5. Pin the llama-swap version in the same doc.
+4. Record the config-reload endpoint name/method for the installed version, and
+   pin the llama-swap version, in docs/phase0-measurements.md (hand to P0-C).
 ```
 
-## 0.4 — Model downloads (operator checklist)
+## 0.4 — Sub-agent P0-C (downloads): candidate GGUFs
+
+Box work. Pull the candidate set defined in **docs/BENCHMARK_PLAN.md §2** (per-class candidates incl. the quant/vision/reasoner A/Bs) into `/home/john/llm-stack/models/blobs`. Check `df -h` before large pulls; delete superseded blobs (rule 008). Record exact filename, SHA/source URL, size in `docs/phase0-measurements.md`. Do not download the full matrix blindly — pull per class as you benchmark so the 363G mount doesn't fill.
+
+## 0.5 — Sub-agent P0-B (serving): first llama-swap config + swap verification
+
+Box work, same worktree as 0.3.
 
 ```
-Download GGUFs to /models (one per class + residents — PLAN.md §4.1 roster):
-  chat-default : Qwen3.6-35B-A3B MoE (or 27B dense) Q4_K_M
-  coder        : Qwen3-Coder-30B-A3B Q4_K_M
-  reasoner     : DeepSeek-R1-32B Q4_K_M AND the Qwen3.6 thinking variant
-                 (Phase 0 A/Bs them; keep one)
-  vision       : Gemma4-27B-class Q4_K_M + its mmproj file
-  utility      : Qwen3-8B Q4
-  embed        : nomic-embed-v2 (or Qwen3-embedding)
-  classifier   : Qwen3-1.7B-class Q8
-  needle       : Cactus Needle 26M Q8
-Record in docs/phase0-measurements.md: exact filename, SHA/source URL, size.
-```
-
-## 0.5 — First llama-swap.yaml + swap verification (operator checklist)
-
-```
-1. Hand-write /opt/llama-swap/llama-swap.yaml (this is the ONLY hand-written
+1. Hand-write serving/llama-swap/config.yaml on the box (the ONLY hand-written
    copy ever — Phase 2 swapgen takes over): macros block with the llama-server
-   path from 0.2; groups:
-     resident (swap:false, exclusive:false): classifier, embed, needle
-       — classifier + needle on CPU (--device none -ngl 0),
-         embed + utility on the 3070 (CUDA index from 0.1)
-     gpu0-main (swap:true): chat-default, coder, reasoner, vision on the 3090
-   Model layout per PLAN.md §4.1 placement strategy.
+   path (/home/john/llm-stack/engine/llama.cpp/build/bin/llama-server); groups
+   and device assignment follow the PLACEMENT DECISION from
+   docs/BENCHMARK_PLAN.md §5 (Config A: big models --tensor-split 3,1, residents
+   embed/utility on CPU; or Config B: 3090-solo big, embed/utility on the 3070).
+   Until §5 is decided, stand up Config A (the working hypothesis).
 2. Verify with curl against :8080/v1:
    a. chat completion on chat-default answers.
-   b. While chat-default is loaded, embeddings + classifier answer
-      CONCURRENTLY (resident group is not evicted).
-   c. Request coder → measure wall-clock swap latency (expect 3–10s).
-      Repeat for reasoner and vision. Record each.
-   d. vision: send one image; confirm mmproj path works.
-3. Record all latencies + per-model VRAM (nvidia-smi during load) in
-   docs/phase0-measurements.md. These numbers replace every guessed budget.
+   b. while chat-default is loaded, classifier (and Config-A CPU residents)
+      answer CONCURRENTLY (resident group is not evicted).
+   c. request coder → measure wall-clock swap latency (expect 3–10s); repeat
+      for reasoner and vision; record each.
+   d. vision: send one image; confirm the mmproj path works.
+3. Record all swap latencies + per-model VRAM (nvidia-smi during load) into
+   docs/phase0-measurements.md.
 ```
 
-## 0.6 — Agent prompt: `p0/measure`
+## 0.6 — Sub-agent P0-A (tooling), then P0-C fills it: `p0/measure`
 
-Worktree: `../AI-Mega-App-p0-measure`. The only Cursor task in Phase 0.
+Worktree: `../AI-Mega-App-p0-measure`. **P0-A** writes the scripts + measurements template (below); **P0-C** later runs them on the box and fills the results + placement verdict per `docs/BENCHMARK_PLAN.md`.
 
 ```
 CONTEXT
 This is a fresh rebuild of AI-Mega-App; the repo currently contains planning
 docs only. Phase 0 measures ground truth on the Ubuntu GPU box before any app
-code exists. Operators are installing llama.cpp + llama-swap by hand.
-Source of truth: PLAN.md §4.1, §5 (Phase 0), §7; docs/FEATURES.md §inference.
+code exists. Drivers/CUDA + llama.cpp are already installed (rule 008 paths).
+The test spec you implement tooling for is docs/BENCHMARK_PLAN.md (single box:
+3090+3070). Source of truth: PLAN.md §4.1, §5; docs/BENCHMARK_PLAN.md.
 
 GOAL
 Write the measurement tooling and the results document skeleton:
@@ -212,8 +205,7 @@ Commit as `feat(phase0): benchmark scripts + measurements template`. Report:
 files created, how the operator runs each script.
 ```
 
-**Phase 0 exit:** `docs/phase0-measurements.md` fully filled in; reasoner A/B
-decided; sqlite-vec verdict recorded. No app code exists. Merge `p0/measure`.
+**Phase 0 exit:** `docs/phase0-measurements.md` fully filled in; roster chosen; **placement config (A/B) decided from measured CPU-resident latency** (BENCHMARK_PLAN §5); reasoner + vision A/Bs decided; sqlite-vec verdict recorded; llama-swap live on :8080 with the kept set. No app code exists. Merge `p0/serving` then `p0/measure`.
 
 ---
 

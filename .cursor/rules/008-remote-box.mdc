@@ -1,0 +1,44 @@
+---
+description: "Use whenever a task runs on the GPU box — SSH access, model/llama.cpp paths, and the sudo permission gate"
+alwaysApply: false
+---
+The Ubuntu GPU box (RTX 3090 + RTX 3070, Ryzen 9, 64GB RAM) is reached over the
+LAN by SSH:
+
+```bash
+ssh ubuntu-ai        # host alias is preconfigured in ~/.ssh/config
+```
+
+All inference work — model downloads, llama.cpp / llama-bench runs, llama-swap
+config, benchmarks — happens **on the box over this connection**, not in the
+repo checkout. The repo holds the scripts and docs; the box holds the models
+and binaries.
+
+**Installed locations (do not re-install or re-build — already present):**
+
+| What | Path |
+|---|---|
+| Models mount | `/home/john/llm-stack/models` (device `/dev/nvme0n1p6`, label `llm-models`, ext4, 500G — ~363G free) |
+| GGUF blobs | `/home/john/llm-stack/models/blobs` |
+| llama.cpp (built, CUDA) | `/home/john/llm-stack/engine/llama.cpp/` |
+| llama.cpp binaries | `/home/john/llm-stack/engine/llama.cpp/build/bin/` (`llama-cli`, `llama-server`, `llama-bench`, …) |
+| llama-swap config | `serving/llama-swap/config.yaml` (on the box) |
+
+Drivers + CUDA are installed and llama.cpp is built — **skip those steps**; start
+from model downloads / serving.
+
+**sudo — permission-gated (hard rule):**
+The sudo password for the box is `john`. You may know it, but you **must request
+explicit approval from the human (main AI) before running any single `sudo`
+command**, and state exactly what the command will do and why. Run non-sudo work
+freely; pause and ask for each sudo action. Never run `sudo` autonomously, never
+batch-approve, never put the password in a committed file other than this rule
+or in command output/logs.
+
+Prefer commands that need no sudo (user owns `/home/john/llm-stack`). systemd
+unit changes, package installs, and driver actions are the typical cases that do
+need it — ask first.
+
+Disk is finite (~363G free on the models mount): before downloading a large
+GGUF, check `df -h /home/john/llm-stack/models` and remove superseded blobs
+rather than filling the mount.

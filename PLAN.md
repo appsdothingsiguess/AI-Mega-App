@@ -144,7 +144,9 @@ Full roster with roles:
 
 **On DeepSeek for coding (owner Q):** DeepSeek's runnable-on-24GB options are the `reasoner` slot above and **DeepSeek-Coder-V2-Lite** (16B MoE, ~81% HumanEval, ~9–10GB at Q4). We *skip* Coder-V2-Lite as a primary — Qwen3-Coder-30B beats it for day-to-day agentic coding and Qwen3-Coder-7B already fills the fast-small niche on PC2. DeepSeek's real role here is the **reasoner** (hard, deliberate coding/logic), not the daily driver. DeepSeek-V3.2 / V4 / R2 are 600B-class MoE — not local on a 3090; they belong in the Future remote-provider registry only. [FACT — 2026 3090 benchmarks; DeepSeek-Coder-V2 now trails Qwen2.5/3-Coder]
 
-**Placement confirmed (owner, 2026-07-21):** PC1 uses **tensor-split where needed** — the big-slot models (`chat-default`, `coder`, `reasoner`, `vision`) split 3:1 across the 3090+3070; anything that fits one card (PC2 residents, CPU models) runs unsplit. This is the locked design.
+**Placement confirmed (owner, 2026-07-21):** PC1 uses **tensor-split where needed** — the big-slot models (`chat-default`, `coder`, `reasoner`, `vision`) split 3:1 across the 3090+3070; anything that fits one card runs unsplit. This is the locked design.
+
+**Near-term is a SINGLE box (owner, 2026-07-21).** PC2 is future; build and benchmark against PC1's 3090+3070 alone. On one box a tensor-split big model consumes the 3070, so the residents that the two-box table puts on PC2 (`embed`, `utility`) must live on **CPU** (Config A) or the roster reverts to **3090-solo big + 3070 residents** (Config B) — this is the single most important Phase-0 decision and is made from measured CPU-resident latency in `docs/BENCHMARK_PLAN.md` §5. The PC2 rows below are the *future* home for those residents; until PC2 exists, read them as "CPU (Config A) unless §5 picks Config B." All model testing is Phase 0 and lives in `docs/BENCHMARK_PLAN.md`.
 
 **Next benchmark pass — "test all" (owner-approved, 2026-07-21).** Run these on PC1's `--tensor-split 3,1` slot and fold the results (VRAM, tok/s, ctx fit) back into the roster, same as the first pass:
 
@@ -281,17 +283,36 @@ Upload endpoint → type sniff → extractor registry: text/code (direct), pdf (
 
 `search/` provider chain: **DDG primary** (`ddgs` lib, no key) → on rate-limit/empty → **Tavily** (key in `.env`). Old build's DDG-resilience doc showed DDG throttling is real — the fallback is automatic per-query, with the provider used shown in citations + debug panel. (Spec's "taily" read as Tavily.)
 
-### 4.14 Custom prompts / preferences / project memories (spec §17) — see §4.8 memory tiers; prompt templates (system prompt per model class, per project) live in `config.yaml` + Settings UI.
+### 4.14 Settings + custom prompts / preferences (spec §17) — the control surface
+
+**One coherent Settings area, not a file-vs-menu split (owner directive).** The old build's "edit a JSON file *and* use a menu" confusion is designed out by a strict rule: **`config.yaml` holds checked-in *defaults* only; the Settings UI is the authoritative surface for every user change and writes a `settings.local.yaml` overlay** (loader deep-merges overlay over defaults, then env-substitutes secrets from `.env`). You never *have* to hand-edit a file — anything editable in the file is editable in the UI, and the UI wins. Hand-editing `config.yaml` stays possible for power users, but it sets defaults, not live state.
+
+Design target: mirror **Claude Code's settings + Odysseus's model "cookbook"** — a left-nav Settings page (its own route, `#/settings`) with tabs, each a small TS module (`web/src/views/settings/<tab>.ts`), all backed by `GET/PATCH /api/settings` with in-process hot-reload (no restart):
+
+| Tab | Controls |
+|---|---|
+| **Models** | add/remove/enable a model per class; set alias → GGUF path → **device assignment (GPU / tensor-split ratio / CPU)** and context length; per-model quant; A/B notes. Writing here regenerates `llama-swap.yaml` via swapgen (§4.1) and reloads. Mirrors the roster table. |
+| **Providers / endpoints** | **API keys** for remote providers (Anthropic, opencode zen, Kimi, Tavily) written to `.env` through the settings writer, never to `config.yaml`; **per-box endpoints** — the `model → endpoint` map so a model can live on this box or (future) a second box; llama-swap base URLs. |
+| **Routing** | keyword rules, classifier on/off + confidence threshold, per-class default alias. |
+| **Tools** | per-tool enable toggles (search, fetch, file_ops, run_code, browser, memory), BrowserOS MCP URL, search provider order + keys. |
+| **Memory / prompts** | custom system prompts (per model class, per project), user preferences (always-injected), memory tiers view/edit, review-queue auto-accept per scope. |
+| **Debug** | the master toggle for the Debug window + what it captures (store full prompts, GPU poll interval, trace retention) — see §4.16. |
+| **Appearance** | theme (`theme.css` token set), show-thinking default. |
+
+Prompt templates and preferences (spec §17) live under Memory/prompts; project memories are the per-project scope (§4.8). Secrets are the one thing the UI writes to `.env` (redacted on read-back); everything else is the `settings.local.yaml` overlay. This is the surface that must "account for different models and configurations" (multi-box, BrowserOS, remote providers) — each is just a tab-driven overlay edit, no code change.
 
 ### 4.15 Chat summaries, auto-title, compaction (spec §18)
 
 A designated **utility model** (small resident or the classifier model) handles: title after first exchange; rolling summary stored per chat; compaction when context exceeds threshold (summarize oldest turns, keep recent verbatim + summary block — Claude Code's own pattern). All background tasks; failures never block chat.
 
-### 4.16 Debug panel (spec §19 — critical, built FIRST not last)
+### 4.16 Debug window (spec §19 — critical, built FIRST not last)
 
-- Every turn gets a `trace_id`; every stage (route, rag, llm request/response, tool dispatch, swap wait, SSE emit) writes a span row to SQLite: timestamps, model, full prompt (toggle), token counts (from llama.cpp `usage` + `timings`), latency, GPU snapshot.
-- `/api/debug/stream` SSE feeds a live Debug view: per-turn waterfall, route decision + why, raw prompts/responses, tok/s, llama-swap state (proxied from its API), nvidia-smi poll.
-- This is infrastructure other features must call — building it in Phase 1 forces every later feature to be observable (the old build proved retrofitting this is painful).
+**A separate window, not an embedded panel (owner directive).** Debug is its own route — **`#/debug`, opened in a standalone browser window/tab** (`web/src/views/debug.ts`), toggled on in Settings → Debug (§4.14). You run the app in one window and watch everything happen in the other, live. This keeps the chat UI clean (claude.ai parity) while giving a full instrument panel when you want it.
+
+- **Backend (built first, Phase 1):** every turn gets a `trace_id`; every stage (route, rag, llm request/response, tool dispatch, swap wait, SSE emit) writes a span row to SQLite — timestamps, model, full prompt/response (toggle), token counts, latency, GPU snapshot. This is infrastructure every later feature must call (rule `003`/observability), so retrofitting is designed out.
+- **Token count + latency come from llama.cpp, not our estimates (owner directive):** the `llm_client` reads llama.cpp's response `usage` (prompt/completion/total tokens) and `timings` (prompt_ms, predicted_ms, tokens-per-second) and stamps them on the `llm.request` span. The Debug window shows real prompt-eval vs generation tok/s and real token counts per turn — never a client-side guess.
+- **What the window shows** (`/api/debug/stream` SSE + trace REST): a per-turn **waterfall** of spans; the **route decision + why** (override / rule / classifier, with the classifier's raw JSON and confidence); **exactly what each model was sent and returned** (raw prompt + completion, incl. reasoning/thinking tokens); **every tool call** — name, arguments, result, who emitted it (main model vs Needle); **token counts + latency per stage** (from llama.cpp); **llama-swap state** (loaded/loading model, proxied from its API); and an **nvidia-smi poll** (per-GPU VRAM + util). Filter by chat or trace_id.
+- Failures never block chat: trace-write errors are caught and logged; the window degrades gracefully (e.g. "no GPU telemetry" if nvidia-smi is absent).
 
 ---
 
@@ -299,7 +320,7 @@ A designated **utility model** (small resident or the classifier model) handles:
 
 Each phase ends with: features **wired end-to-end** (no "adapter exists but not injected"), tests green, docs page written, demo checklist run on real hardware. No phase starts on top of an unintegrated one.
 
-**Phase 0 — Ground truth (box + inference).** Ubuntu box: drivers/CUDA, build llama.cpp, install llama-swap as systemd unit, download initial model set (one per class + classifier + embedder + Needle), hand-write first `llama-swap.yaml`, verify swap latency and concurrent resident group with `curl`. Benchmark sqlite-vec at 100k chunks. Deliverable: a doc of measured facts (VRAM per model, load times, tok/s) replacing all guessed budgets. *No app code.*
+**Phase 0 — Ground truth (box + inference).** **All model testing/benchmarking is Phase 0** — the full plan lives in `docs/BENCHMARK_PLAN.md` (single box: 3090+3070). Drivers/CUDA and llama.cpp are already done on the box; remaining: install llama-swap as systemd unit, download the candidate set, benchmark every class (roster), **decide the placement config — tensor-split + CPU residents vs 3090-solo + 3070 residents — from measured CPU-resident latency**, verify swap latency + concurrent resident group with `curl`, and benchmark sqlite-vec at 100k chunks. Deliverable: `docs/phase0-measurements.md` filled with measured facts (VRAM per model @ real ctx, load times, tok/s from llama.cpp) replacing all guessed budgets; llama-swap live on :8080 with the kept set. *No app code.*
 
 **Phase 1 — Skeleton with eyes.** FastAPI app: config load/validate, `/health`, `llm_client`, SQLite schema, SSE chat endpoint against a fixed model, minimal chat UI (send/stream/history), **debug trace store + Debug panel**, error-path contract (`done`/`error` always). Testing harness + CI from day one. Exit: chat with any manually-picked model, every turn fully traced.
 

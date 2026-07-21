@@ -21,7 +21,7 @@ Section map: **Part A** = cross-cutting infrastructure PLAN.md defines (config, 
 
 ## A1. Configuration system
 
-**What.** One hand-edited `config.yaml` (checked in with defaults) + `.env` (secrets only) + a machine-written `settings.local.yaml` overlay that the Settings UI edits. Replaces the old three-file mess (`settings.json`, `litellm_config.yaml`, `.env`) that blocked simple fixes. [FACT — PLAN §1.6, §3.1]
+**What.** `config.yaml` (checked-in **defaults** only) + `.env` (secrets only) + a machine-written `settings.local.yaml` overlay. **The Settings UI is the authoritative surface for every user change and writes the overlay (and secrets to `.env`); you never have to hand-edit a file — anything in the file is editable in the UI, and the UI wins.** This designs out the old "edit-a-file-and-a-menu" split. The one thing the UI writes to `.env` (not the overlay) is **API keys** for remote providers (Anthropic, opencode zen, Kimi, Tavily), redacted on read-back. Settings must "account for different models and configurations" — model roster + per-model device/tensor-split assignment (Models tab → swapgen), per-box `model → endpoint` map (multi-computer, future), BrowserOS MCP URL, tool toggles — each a tab-driven overlay edit, no code change. [FACT — PLAN §3.1, §4.14]
 
 **Modules & files.**
 - `app/config/loader.py` — load `config.yaml`, deep-merge `settings.local.yaml`, env-substitute from `.env`; expose typed `Config` object.
@@ -755,7 +755,7 @@ summaries:
 
 ## F19. Debug panel — the Debug view (spec §19, frontend half; backend in A3)
 
-**What.** A live Debug view fed by `/api/debug/stream` + trace REST: per-turn waterfall, route decision + why, raw prompts/responses (toggle), tok/s, llama-swap state, nvidia-smi telemetry, Needle-assist markers. Critical infrastructure, shipped in Phase 1 alongside the first chat path. [FACT — PLAN §4.16]
+**What.** A **standalone Debug window** (its own route `#/debug`, meant to be opened in a separate browser window/tab so you watch it live beside the app — not an embedded panel), toggled on in Settings → Debug. Fed by `/api/debug/stream` + trace REST: per-turn waterfall, route decision + why, **exactly what each model was sent and returned** (raw prompts/responses incl. thinking tokens, toggle), **token counts + latency/tok-s derived from llama.cpp** (`usage` + `timings`, never client estimates), every tool call (name/args/result/emitter), llama-swap state, nvidia-smi telemetry, Needle-assist markers. Critical infrastructure, shipped in Phase 1 alongside the first chat path. [FACT — PLAN §4.16]
 
 **Modules & files.**
 - `web/src/views/debug.ts` — layout: trace list (left), waterfall + span detail (center), live tails (right); `web/src/debug/waterfall.ts` — span rows → CSS-grid timeline (no chart lib); `web/src/debug/live.ts` — tap subscription: GPU bars, swap state, rolling log; `web/src/debug/span_detail.ts` — prompt/response viewer (monospace, copy button), token/latency stats.

@@ -1,6 +1,6 @@
 # Cursor Ruleset — AI Mega App Rebuild
 
-Complete `.cursor/rules/` content for the rebuild. **These blocks are already live** in `.cursor/rules/` (synced 2026-07-20, rev 4). Editing a rule means editing both the live `.mdc` and its block here — they must stay identical. Sections 8–11 below cover the rest of the Cursor 3 system (Skills, hooks, parallel-agent files, Plan Mode, model selection) that live *outside* `.cursor/rules/`.
+Complete `.cursor/rules/` content for the rebuild. **These blocks are already live** in `.cursor/rules/` — `001-stack`, `002-boundaries` (always-apply) · `003-python-backend`, `004-frontend`, `005-config`, `006-testing` (glob) · `007-git-worktrees`, `008-remote-box`, `009-subagents` (agent-requested). Editing a rule means editing both the live `.mdc` and its block here — they must stay identical. Sections 8–11 below cover the rest of the Cursor 3 system (Skills, hooks, parallel-agent files, Plan Mode, model selection) that live *outside* `.cursor/rules/`.
 
 Design constraints applied (from the Cursor 3 research):
 
@@ -288,6 +288,61 @@ in-scope work before reporting.
 
 Merge, rebase, cherry-pick, and push are integrator actions performed only on
 explicit user request; builders end at the completion report.
+```
+
+---
+
+## `.cursor/rules/008-remote-box.mdc` — agent-requested (box work)
+
+```markdown
+---
+description: "Use whenever a task runs on the GPU box — SSH access, model/llama.cpp paths, and the sudo permission gate"
+alwaysApply: false
+---
+The Ubuntu GPU box (RTX 3090 + RTX 3070, Ryzen 9, 64GB RAM) is reached by SSH:
+`ssh ubuntu-ai` (host alias preconfigured). All inference work happens ON the box,
+not in the repo checkout.
+
+Installed (do not reinstall/rebuild):
+- Models mount: /home/john/llm-stack/models (device /dev/nvme0n1p6, label
+  llm-models, ext4, 500G — ~363G free); GGUF blobs in .../models/blobs
+- llama.cpp built (CUDA) at /home/john/llm-stack/engine/llama.cpp/; binaries in
+  build/bin/ (llama-cli, llama-server, llama-bench)
+- Drivers + CUDA installed — skip those steps.
+
+sudo (permission-gated): the box sudo password is `john`, but you MUST get
+explicit human/orchestrator approval before EACH sudo command, stating what and
+why. Never run sudo autonomously or batch-approve. Prefer non-sudo commands
+(the john user owns /home/john/llm-stack). Check `df -h` before large model
+pulls; delete superseded blobs rather than filling the mount.
+```
+
+*(Full copy lives in the live `.mdc`; keep both identical. The sudo password is here by owner request for a personal trusted-LAN box — consider moving it to `.env` and rotating if the repo ever leaves that trust boundary.)*
+
+---
+
+## `.cursor/rules/009-subagents.mdc` — agent-requested (delegated waves)
+
+```markdown
+---
+description: "Use when a phase/task prompt says to delegate steps to sub-agents — how an orchestrator spawns parallel sub-agents safely"
+alwaysApply: false
+---
+Phases are run by an orchestrator that delegates each major step to a sub-agent.
+docs/PHASE_PROMPTS.md tags which steps delegate; follow the tags.
+
+- One sub-agent = one worktree = one FILE SCOPE = one branch = one completion
+  report. Worktree from main: git worktree add ../AI-Mega-App-<task> -b
+  p<phase>/<task> main.
+- Run independent sub-agents in parallel; serialize only real dependencies (the
+  phase table says which run at once). Non-overlapping scopes — never co-edit a
+  file; produce-then-consume is sequential.
+- The orchestrator implements nothing itself; it spawns, collects reports, holds
+  merging for VERIFICATION + INTEGRATOR.
+- sudo is permission-gated (rule 008): a sub-agent asks the orchestrator, which
+  asks the human.
+- Worktrees stop file conflicts, not interface drift — decompose dependency-first
+  and run interface-defining steps before consumers.
 ```
 
 ---

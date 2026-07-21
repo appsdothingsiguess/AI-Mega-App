@@ -18,8 +18,9 @@ Personal AI platform: a claude.ai-parity web UI backed by local models on a dedi
 
 1. `PLAN.md` — architecture source of truth. Adhere to it; flag conflicts, never improvise around it.
 2. `docs/FEATURES.md` — per-feature specs (interfaces, config keys, debug spans, toggles).
-3. `docs/PHASE_PROMPTS.md` — task prompts per phase.
-4. `docs/CURSOR_RULES.md` — the full `.cursor/rules/` ruleset, hooks, and `.cursorignore`.
+3. `docs/BENCHMARK_PLAN.md` — Phase-0 model testing/benchmarks (single box: 3090+3070); decides the roster and the tensor-split-vs-residents placement config.
+4. `docs/PHASE_PROMPTS.md` — task prompts per phase (orchestrator → delegated sub-agents in worktrees).
+5. `docs/CURSOR_RULES.md` — the full `.cursor/rules/` ruleset (001–009), hooks, and `.cursorignore`.
 
 ## Frozen contracts (once they exist)
 
@@ -67,4 +68,4 @@ When blocked by scope or constraints: stop and report. A described blocker is su
 
 ## Current phase
 
-**Phase 0 — Ground truth.** Box setup: llama.cpp build, llama-swap systemd unit, initial model downloads, hand-written first `llama-swap.yaml`, swap-latency and sqlite-vec benchmarks. Deliverable is a doc of measured facts. **No app code in Phase 0.** See `PLAN.md` §5.
+**Phase 0 — Ground truth** (single box: 3090+3070). Drivers/CUDA + llama.cpp are **already built on the box** (`ssh ubuntu-ai`, rule `008-remote-box`). Remaining: llama-swap systemd, candidate model downloads, per-class benchmarks, the **placement decision** (tensor-split + CPU residents vs 3090-solo + 3070 residents — from measured CPU-resident latency), swap + sqlite-vec benchmarks. Run as an orchestrator delegating sub-agents (rule `009-subagents`). Full spec: `docs/BENCHMARK_PLAN.md`. Deliverable: `docs/phase0-measurements.md` + llama-swap live on :8080. **No app code in Phase 0.**
