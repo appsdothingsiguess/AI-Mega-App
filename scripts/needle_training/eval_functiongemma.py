@@ -84,14 +84,21 @@ def main():
     ap.add_argument("--label", required=True)
     ap.add_argument("--n-test", type=int, default=N_TEST)
     ap.add_argument("--max-new-tokens", type=int, default=150)
+    ap.add_argument("--data", default=None,
+                     help="eval file to use in full (e.g. a freshly-generated holdout set); "
+                          "overrides the default last-N-of-data.jsonl slice")
     args = ap.parse_args()
 
     tokenizer = AutoTokenizer.from_pretrained(args.model)
     model = AutoModelForCausalLM.from_pretrained(args.model, dtype=torch.bfloat16).to("cuda:0")
     model.eval()
 
-    lines = DATA.read_text().splitlines()
-    test = [json.loads(l) for l in lines[-args.n_test:]]
+    if args.data:
+        lines = Path(args.data).read_text().splitlines()
+        test = [json.loads(l) for l in lines]
+    else:
+        lines = DATA.read_text().splitlines()
+        test = [json.loads(l) for l in lines[-args.n_test:]]
 
     out_path = REPO / "logs" / "benchmarks" / "server" / f"tool-eval-functiongemma-{args.label}.jsonl"
     out_path.parent.mkdir(parents=True, exist_ok=True)

@@ -1,0 +1,109 @@
+{
+  "reasoner": [
+    {
+      "id": "r1_sheep",
+      "prompt": "A farmer has 17 sheep. All but 9 die. How many are left? Show your reasoning briefly, then give the final answer.",
+      "ground_truth": "9"
+    },
+    {
+      "id": "r2_multistep_travel",
+      "prompt": "A train leaves City A at 2:00 PM traveling at 60 mph toward City B, 270 miles away. At 2:30 PM, a second train leaves City B traveling toward City A at 90 mph. At what time do the trains meet? Show your work.",
+      "ground_truth": "Trains meet at 4:00 PM (first train travels 30 miles in the first 30 min, leaving 240 miles closing at 150mph combined = 1.6h = 96min from 2:30, i.e. ~4:06PM -- accept reasoning in the 4:00-4:10PM range as correct if the arithmetic shown is internally consistent)"
+    },
+    {
+      "id": "r3_coding_logic_puzzle",
+      "prompt": "Three functions f, g, h each take an integer and return an integer. You know: f(g(x)) = x for all x, g(h(x)) = x for all x, and h is not the identity function. Is f necessarily the identity function? Explain your reasoning.",
+      "ground_truth": "No -- f(g(x))=x only shows f is a left-inverse of g (g is injective, f surjective onto g's range), not that f is identity everywhere; a correct answer explains why global identity doesn't follow from a single-sided inverse relation."
+    },
+    {
+      "id": "r4_ambiguous_question",
+      "prompt": "\"Can you tell me if the meeting is at 3?\" -- What are the possible ambiguities in this question that would affect how you should answer it? List at least three.",
+      "ground_truth": "Open-ended: correct answers should identify ambiguities like (a) which meeting is being referenced, (b) 3 AM vs PM, (c) timezone, (d) whether 3 refers to a date/day instead of time, (e) whose calendar/schedule is authoritative."
+    },
+    {
+      "id": "r5_probability",
+      "prompt": "You roll two fair six-sided dice. What is the probability that the sum is 7, given that at least one die shows a 4? Show your reasoning.",
+      "ground_truth": "P(sum=7 AND at least one 4) = 2/36 (4,3 and 3,4... wait also (4,3)); P(at least one 4)=11/36. Correct answer = 2/11."
+    },
+    {
+      "id": "r6_self_consistency",
+      "prompt": "A store increases a $50 item's price by 20%, then later decreases the new price by 20%. Is the final price back to $50? Show the calculation and explain why or why not.",
+      "ground_truth": "No -- $50 -> $60 -> $48. Percentage decrease off a higher base doesn't cancel the increase."
+    },
+    {
+      "id": "r7_multistep_word",
+      "prompt": "A tank is filled by pipe A in 6 hours and by pipe B in 4 hours. If both pipes are opened together but pipe A is shut off after 1 hour, how long in total does it take to fill the tank?",
+      "ground_truth": "In 1 hour together: 1/6+1/4=5/12 filled. Remaining 7/12 filled by B alone at 1/4 per hour: (7/12)/(1/4)=7/3 hours = 2h20min. Total = 1h + 2h20min = 3h20min."
+    }
+  ],
+  "vision": [
+    {
+      "id": "v1_count_shapes",
+      "image": "/home/john/AI-Mega-App/scripts/eval_data/images/count_shapes.png",
+      "prompt": "How many red circles and how many blue squares are in this image? Give exact counts.",
+      "ground_truth": "7 red circles, 3 blue squares"
+    },
+    {
+      "id": "v2_count_cluster",
+      "image": "/home/john/AI-Mega-App/scripts/eval_data/images/count_cluster.png",
+      "prompt": "How many black dots are in this image?",
+      "ground_truth": "9"
+    },
+    {
+      "id": "v3_spatial",
+      "image": "/home/john/AI-Mega-App/scripts/eval_data/images/spatial_row.png",
+      "prompt": "What shape is immediately to the left of the yellow circle, and what shape is to the right of it?",
+      "ground_truth": "Green triangle is to the left, purple square is to the right"
+    },
+    {
+      "id": "v4_text_read",
+      "image": "/home/john/AI-Mega-App/scripts/eval_data/images/text_read.png",
+      "prompt": "What text is written in this image? Read it exactly.",
+      "ground_truth": "SHIPMENT CODE: QX-4471-B"
+    },
+    {
+      "id": "v5_chart_read",
+      "image": "/home/john/AI-Mega-App/scripts/eval_data/images/chart_bars.png",
+      "prompt": "According to this bar chart, which quarter had the highest sales, and what was the value? Which had the lowest?",
+      "ground_truth": "Highest: Q4 at 25 (thousand). Lowest: Q3 at 8 (thousand)."
+    },
+    {
+      "id": "v6_chart_math",
+      "image": "/home/john/AI-Mega-App/scripts/eval_data/images/chart_bars.png",
+      "prompt": "What is the total of Q1 and Q2 sales combined, according to the chart?",
+      "ground_truth": "12 + 19 = 31 (thousand)"
+    }
+  ],
+  "coder_debug": [
+    {
+      "id": "d1_missing_library",
+      "prompt": "I ran this Python script and got this error. What's wrong and how do I fix it?\n\n```python\nimport pandas as pd\ndf = pd.read_csv('data.csv')\nprint(df.head())\n```\n\nError:\n```\nModuleNotFoundError: No module named 'pandas'\n```",
+      "expected_diagnosis": "pandas is not installed in the current environment; fix is `pip install pandas` (or add to requirements.txt / use the right venv), NOT a code logic fix."
+    },
+    {
+      "id": "d2_off_by_one",
+      "prompt": "This function is supposed to return the last 3 elements of a list, but it's returning the wrong number of elements sometimes. Find and explain the bug.\n\n```python\ndef last_three(lst):\n    return lst[len(lst) - 4:len(lst) - 1]\n```",
+      "expected_diagnosis": "Off-by-one: should be lst[-3:] or lst[len(lst)-3:len(lst)], the given slice drops the actual last element and includes one element too early."
+    },
+    {
+      "id": "d3_dependency_version_mismatch",
+      "prompt": "This code worked last month but now throws this error after a `pip install -U` on the box. What's the likely cause and how would you investigate?\n\n```python\nimport numpy as np\nresult = np.float_(3.14)\n```\n\nError:\n```\nAttributeError: module 'numpy' has no attribute 'float_'\n```",
+      "expected_diagnosis": "numpy 2.0 removed the deprecated np.float_ alias; likely cause is a numpy version upgrade. Fix is to use np.float64 directly, or pin numpy<2.0 if other deps require the old API. A good answer mentions checking `pip show numpy` / CHANGELOG, not just guessing at a code typo."
+    },
+    {
+      "id": "d4_race_condition",
+      "prompt": "Two threads increment a shared counter using this function, and the final count is consistently lower than expected after many increments. Why, and how would you fix it?\n\n```python\ncounter = 0\ndef increment():\n    global counter\n    counter = counter + 1\n```",
+      "expected_diagnosis": "Race condition: counter += 1 is not atomic (read-modify-write across threads), causing lost updates. Fix: use a threading.Lock around the increment, or use a thread-safe primitive (e.g. itertools/atomic counter, multiprocessing.Value, or a Queue-based design)."
+    },
+    {
+      "id": "d5_wrong_api_usage_silent",
+      "prompt": "This code runs without errors but always returns an empty list. Why?\n\n```python\ndef get_even_numbers(nums):\n    result = []\n    for n in nums:\n        if n % 2 = 0:\n            result.append(n)\n    return result\n```",
+      "expected_diagnosis": "This is actually a syntax error (`=` instead of `==` in the if condition) -- it would raise a SyntaxError, not run silently. A correct answer should catch that the premise is off and point out it can't run at all as written, rather than inventing a plausible-sounding runtime explanation."
+    },
+    {
+      "id": "d6_stack_trace_dependency",
+      "prompt": "A user reports this stack trace after upgrading Flask. Diagnose the likely cause.\n\n```\nTraceback (most recent call last):\n  File \"app.py\", line 3, in <module>\n    from flask import Markup\nImportError: cannot import name 'Markup' from 'flask'\n```",
+      "expected_diagnosis": "Flask removed the re-exported `Markup` (moved to markupsafe) in Flask 2.3+; fix is `from markupsafe import Markup` instead of importing it from flask, or pin an older Flask version if other code relies on the old import path."
+    }
+  ]
+}

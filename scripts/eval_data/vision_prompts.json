@@ -1,0 +1,38 @@
+[
+  {
+    "id": "v1_count_shapes",
+    "image": "images/count_shapes.png",
+    "prompt": "How many red circles and how many blue squares are in this image? Give exact counts.",
+    "ground_truth": "7 red circles, 3 blue squares"
+  },
+  {
+    "id": "v2_count_cluster",
+    "image": "images/count_cluster.png",
+    "prompt": "How many black dots are in this image?",
+    "ground_truth": "9"
+  },
+  {
+    "id": "v3_spatial",
+    "image": "images/spatial_row.png",
+    "prompt": "What shape is immediately to the left of the yellow circle, and what shape is to the right of it?",
+    "ground_truth": "Green triangle is to the left, purple square is to the right"
+  },
+  {
+    "id": "v4_text_read",
+    "image": "images/text_read.png",
+    "prompt": "What text is written in this image? Read it exactly.",
+    "ground_truth": "SHIPMENT CODE: QX-4471-B"
+  },
+  {
+    "id": "v5_chart_read",
+    "image": "images/chart_bars.png",
+    "prompt": "According to this bar chart, which quarter had the highest sales, and what was the value? Which had the lowest?",
+    "ground_truth": "Highest: Q4 at 25 (thousand). Lowest: Q3 at 8 (thousand)."
+  },
+  {
+    "id": "v6_chart_math",
+    "image": "images/chart_bars.png",
+    "prompt": "What is the total of Q1 and Q2 sales combined, according to the chart?",
+    "ground_truth": "12 + 19 = 31 (thousand)"
+  }
+]

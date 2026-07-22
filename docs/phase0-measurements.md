@@ -460,6 +460,299 @@ Config A would give), 3070 holds `embed`+`utility` resident. This changes
 swapgen's device map and the roster's "Where" column — big models lose
 the 32GB pool.
 
+## 8. Concurrent-loading tests (Phase-0.5, this session)
+
+Per `docs/PHASE0.5_TEST_PLAN.md` Tests 1-3: §5's Config B verdict was decided
+from **isolated** single-model numbers; this section actually boots multiple
+`llama-server` processes concurrently (new harness: `scripts/bench_concurrent.py`,
+reusing `bench_server.py`'s request/logging code as a library) and fires real
+concurrent request traffic, with `nvidia-smi` VRAM snapshots taken
+before/during/after each scenario. Raw logs:
+`logs/benchmarks/concurrent/*.jsonl`.
+
+**Methodology correction found along the way**: a degenerate `--tensor-split
+1,0` (or `0,1`) combined with `-sm tensor`, used to try to pin a model to a
+single physical GPU, is **not** equivalent to actually restricting the
+process to one GPU — measured at ~40 tok/s on chat-default vs. 126-131 tok/s
+for the same model via a clean `CUDA_VISIBLE_DEVICES` restriction (~3x
+slower). `-sm tensor`'s cross-GPU sync machinery apparently doesn't degrade
+gracefully to a real single-device case. `bench_concurrent.py` was patched to
+support a `cuda-devices=N` spec key that sets `CUDA_VISIBLE_DEVICES` per
+subprocess instead of relying on tensor-split tricks — use this, not a
+degenerate tensor-split, for any future single-GPU-pin test.
+
+### Test 1 — big model + `embed` concurrent (GPU0 solo + `embed` on 3070)
+
+| Big model | VRAM (GPU0+GPU1) | Big-model tok/s (concurrent) | `embed` latency | Verdict |
+|---|---|---|---|---|
+| Qwen3.6-35B-A3B (chat-default), embed on **CPU** | 16.5+5.9=22.4GB | 103-115 tok/s | 11.5-15.8ms | matches isolated ~120 tok/s baseline, no contention |
+| Qwen3.6-35B-A3B (chat-default), embed on **GPU1** | 16.8+6.0=22.8GB | 107-115 tok/s | 2.4-24.7ms (2.4-2.5ms after warmup) | **GPU embed ~5x faster than CPU (2.5ms vs 12ms) for only ~70MB extra VRAM — clear win** |
+| Qwen3-Coder-30B-A3B Q5_K_M, embed on GPU1 | 18.5+4.3=22.8GB | 99-143 tok/s | 2.5ms (after warmup) | matches isolated ~140 tok/s real-gen baseline |
+| DeepSeek-R1-Distill-Qwen-32B, embed on GPU1 | 16.5+5.8=22.3GB | 43.2-44.0 tok/s | 2.3-13.7ms | matches isolated ~44 tok/s exactly |
+
+**Verdict: PASS for all three big-model classes.** Concurrent embed traffic
+(CPU or GPU) causes no measurable throughput penalty to the big model in any
+case tested. **GPU-resident embed is the recommended default** over
+CPU-resident — ~5x lower latency for negligible VRAM cost, whenever the big
+model isn't using tensor-split to span both GPUs (see Test 2's finding below
+for why that matters).
+
+### Test 2 — big model + `embed` + `utility` concurrent
+
+First attempt used Phase-0's own originally-measured `--tensor-split 3,1`
+for the big model (which spans **both** GPUs, putting ~5.9GB of the 35B-A3B
+MoE onto the 3070) plus un-pinned `utility` — `utility` auto-split itself
+across both GPUs (no device pinning specified), causing real contention:
+chat-default dropped to 49-76 tok/s (from ~120 isolated) and utility to
+59-64 tok/s (from ~111 isolated). Explicitly pinning `utility`+`embed` to
+GPU1 alongside that same tensor-split big model **failed to boot at all**
+(OOM — only ~2.2GB free on the 3070 once the tensor-split big model claims
+its 5.9GB share, and `utility` alone needs ~6.6GB).
+
+**This means Phase-0's own adopted chat-default/coder/reasoner benchmarks
+used a tensor-split shape that is incompatible with true Config B** (which
+assumes the 3070 is fully free for small models) — a real inconsistency
+between what was measured and what Config B's narrative describes. Re-ran
+with the big model **pinned solely to GPU0** (`cuda-devices=0`, no
+tensor-split) — the actual Config B shape:
+
+| Scenario | VRAM (GPU0 / GPU1) | chat-default tok/s | utility tok/s | embed latency | Verdict |
+|---|---|---|---|---|---|
+| chat-default GPU0-solo + embed+utility GPU1 | 21.4GB / 6.5GB | 127-132 (≥ isolated 120) | 70-74 (down from isolated 111) | 2.4-11.6ms | **PASS, real headroom** — 2.6GB free on GPU0, 1.7GB free on GPU1 |
+
+Big model pinned solo to GPU0 is not just VRAM-safe, it's **faster** than
+the tensor-split-shared version (127-132 vs 103-115 tok/s) — real single-GPU
+execution beats a degenerate/shared split. `utility`'s tok/s drop under
+concurrent GPU1 load (111→70-74) is real but not severe; no VRAM contention
+was involved (both models fit with headroom), so this is likely
+thread-scheduling/compute-queue overhead rather than a hard resource limit.
+
+**Verdict: Config B's real shape is "big model solo on GPU0 (no
+tensor-split spanning), `embed`+`utility` GPU-resident on GPU1"** — this
+fits with real headroom on both cards and is faster than the tensor-split
+variant Phase-0 originally benchmarked. **Action item**: Phase-0's adopted
+chat-default/coder/reasoner numbers in §2 should be re-benched with this
+solo-GPU0 pinning before final roster lock, since it changes both the
+measured tok/s (higher) and the true GPU1 headroom available for resident
+small models.
+
+### Test 3 — real-world Config C (`chat-default` + `Hammer` GPU-resident, `utility`+`embed` background)
+
+Reframed per the updated context: Hammer2.1-1.5b (GPU-resident) is now the
+fast tool-router, so `utility` only needs to be tolerable for **background,
+non-blocking** jobs (chat summaries, possibly auto-titles) — not fast.
+Real transcripts (~150-300 word chat exchanges, not the synthetic
+128-token bench) used for summary prompts; a real short exchange used for
+title prompts. Prompt files: `scripts/needle_training/../` — see
+`logs/benchmarks/concurrent/test3-*.jsonl` for full transcripts/outputs.
+
+| Scenario | chat-default tok/s | Hammer latency | embed latency | utility (100-tok summary) | VRAM (GPU0/GPU1) |
+|---|---|---|---|---|---|
+| `utility`+`embed` on **CPU** | 123-136 (no degradation) | 0.13-0.39s/call (148-239 tok/s) | 17.5-34.0ms | **17.6-21.8s wall (4.6-5.7 tok/s)** | 21.9GB / 1.6GB |
+| `utility`+`embed` on **GPU1** (with Hammer) | 138-143 (no degradation) | 0.24-0.73s/call (53-65 tok/s) — **5-7x slower than CPU-utility arm** | 5.5-11.9ms | **1.3-1.9s wall (53-74 tok/s)** — ~13x faster than CPU | 21.4GB / **7.83GB (~370MB headroom, tight)** |
+
+**Verdict: keep `utility`+`embed` CPU-resident (confirms Config B), now with
+real concurrent numbers instead of an isolated synthetic bench.** The
+original Phase-0 §5 verdict ("utility CPU fails hard, 42s/128-tok") was
+measured in isolation and doesn't hold under real concurrent conditions with
+other processes sharing the CPU — this session's real-transcript summary
+took 17.6-21.8s for 100 tokens (extrapolated to 128 tokens, meaningfully
+faster than the original 42s figure), which is clearly acceptable for an
+async background job nobody is waiting on synchronously. Moving `utility`
+to GPU1 does make it ~13x faster, but at real cost that matters more:
+**Hammer's own dispatcher latency degrades 5-7x** (0.10s baseline → 0.24-
+0.73s) from real GPU compute contention on the shared 3070, undermining the
+one role (fast tool routing) that actually needs to be fast — and VRAM
+headroom shrinks to a risky ~370MB. Since the background job already
+clears an acceptable bar on CPU, there's no reason to take on that risk.
+
+**Bonus check — Hammer2.1-1.5b as a title generator** (5-request spot
+check, not a full eval): fast (0.02-0.07s/call) and semantically correct
+5-tests-5 (`"Reset Migrations"`, `"Reset SQLite Migration State"`, etc.),
+though title length varies (2-4 words vs the requested 5-8) and about half
+the outputs wrap the title in quotes (a prompt/formatting fix, not a
+capability gap). Promising as a cheap secondary use for the same
+GPU-resident model, not adopted as a final decision this session.
+
+## 9. Quality eval — reasoner A/B, vision A/B, coder (Phase-0.5, Test 4)
+
+Claude-judged transcript review against fixed prompt sets (`scripts/eval_data/
+reasoner_prompts.json`, `vision_prompts.json`, `coder_debug_prompts.json`,
+combined into `quality_prompts.json`; vision images synthetically generated
+via `scripts/eval_data/gen_vision_images.py` with known ground truth baked
+into filenames, not derivable from pixels alone). Raw transcripts logged to
+`logs/benchmarks/quality/{reasoner,vision,coder_debug,coder_compile}.jsonl`.
+Coder quality eval ran only against the already-adopted Q5_K_M quant (Phase-0
+§2 picked the quant on tok/s; correctness doesn't meaningfully shift by quant,
+so re-running Q4/Q6 head-to-head wasn't worth the GPU time this round).
+
+**Reasoner A (DeepSeek-R1-Distill-Qwen-32B) vs B (Qwen3.6-35B-A3B, thinking
+mode)** — 7 multi-step/logic prompts, `max_tokens=1024`:
+
+| | A: DeepSeek-R1-32B | B: Qwen3.6-35B-A3B thinking |
+|---|---|---|
+| Correct final answers | 7/7 | 2/7 (r1, r6) |
+| Truncated before answer (thinking ate the budget) | 1/7 (r3) | 5/7 |
+| Latency when it does finish | 7-24s | 6-13s |
+| Answer quality when present | All correct, well-explained (r5 probability, r7 multi-rate work problem both right) | Correct and crisper prose when present (r1, r6) |
+
+**Finding: this is the single most important result of Test 4.** Reasoner B's
+thinking traces are markedly more verbose per problem and, at a normal
+1024-token budget, blow through it and emit **zero final answer** on 5 of 7
+prompts (r2, r3, r4, r5, r7) — the harness even has a `truncated_before_answer`
+flag for exactly this failure mode. Reasoner A finishes reliably at the same
+budget (misses only the hardest logic-puzzle prompt, r3). **Verdict: Reasoner
+A (DeepSeek-R1-Distill-Qwen-32B) is the safer pick for any interactive or
+tool-mediated path** — it needs a much smaller `max_tokens` safety margin.
+If Reasoner B is kept for any use case, it needs a materially larger
+`max_tokens` (2048+) budgeted in, not the same allowance as A.
+
+**Vision A (Qwen3-VL-32B) vs B (Gemma-3-27b-it)** — 6 prompts (shape
+counting, spatial relation, OCR text-read, chart read x2):
+
+| | A: Qwen3-VL-32B | B: Gemma-3-27b-it |
+|---|---|---|
+| Correct | 6/6 | 5/6 |
+| Miss | — | v2 (dot-cluster count): said 10, actual 9 (off by one) |
+| Latency | 0.6-4.5s | 1.2-2.5s |
+
+**Verdict: Vision A (Qwen3-VL-32B) is the more accurate pick**, especially on
+harder object-counting (the one case it beat B on); B is comparable on
+everything else and slightly faster on average, so B remains a reasonable
+fallback if Qwen3-VL's extra VRAM/latency cost matters elsewhere.
+
+**Coder (Qwen3-Coder-30B-A3B, Q5_K_M — the adopted quant)** — two-part eval:
+
+1. *Compile/run check*, 10 prompts across installed toolchains (python3,
+   node, bash, gcc; go/rustc not installed on this box, skipped cleanly by
+   `eval_coder_compile.py` rather than failing the run): **9/9 pass** on
+   every language actually available, 2 skipped (go, rust).
+2. *Debug-diagnosis prompts* (missing library, off-by-one, dependency
+   version mismatch, race condition, a trick "silent bug" prompt that's
+   actually a SyntaxError, a real Flask 2.0 API-removal stack trace) — run
+   against the coder model **and** both reasoners for comparison:
+
+| | Coder Q5 (30B-A3B) | Reasoner A | Reasoner B |
+|---|---|---|---|
+| Correct diagnosis | 6/6 | 2/6 (d1, d4) | 1/6 (d1) |
+| Truncated before answer | 0/6 | 4/6 | 5/6 |
+
+The coder model correctly diagnosed all six, including catching that d5's
+premise was actually impossible (`n % 2 = 0` is a `SyntaxError`, not a
+silent-bug scenario) rather than inventing a plausible-sounding runtime
+explanation — the one prompt specifically designed to catch hallucinated
+diagnoses. **Verdict: Qwen3-Coder-30B-A3B Q5_K_M is confirmed for both
+codegen and debug-diagnosis duty**; reasoners are not a good substitute for
+debugging tasks at a normal token budget — same thinking-budget-truncation
+issue as above, compounding the case for keeping reasoner and coder as
+separate routed roles rather than merging them.
+
+**Cross-cutting finding:** both thinking-mode models (Reasoner B always,
+Reasoner A sometimes on harder prompts) are at real risk of silently
+returning an empty final answer under a "normal" 512-1024 token budget once
+a task pushes past simple arithmetic into multi-step or open-ended
+reasoning. Any production routing to a thinking-mode model should either
+budget 2048+ `max_tokens` or detect-and-retry on `truncated_before_answer`.
+
+## 10. FunctionGemma-270M full finetune + GGUF (Phase-0.5, Test 5)
+
+Full-250-example finetune (`scripts/needle_training/finetune_functiongemma.py
+--full-data`, same 6-epoch/lr-1e-4 recipe, no internal holdout carve-out this
+time), evaluated against a **freshly-generated, non-overlapping** 60-example
+holdout (`scripts/needle_training/data_holdout_v2.jsonl`, different seed +
+broadened phrasing, verified zero overlap with training data) — this
+replaces the earlier same-pool 100% number, which measured memorization of
+data the model had already partially seen, not generalization.
+
+**Real generalization result: call_f1 88.3%, exact_match 88.3%, JSON parse
+rate 100%.** A meaningfully more honest number than the earlier 100% — most
+misses were argument-formatting nits (e.g. `'a: 1}))'` vs `'a': 1}))'` typos
+in generated code strings, a dropped/garbled word inside a `pattern` or
+`content` argument) rather than wrong tool selection; tool-name selection
+was correct in all 60 cases.
+
+**Bug found + fixed during finetuning**: the training script originally OOM'd
+on the second GPU (3070) — `transformers`' `Trainer` auto-detects both
+visible CUDA devices and wraps the tiny 270M model in `DataParallel`, which
+tried to shard onto the 3070 and blew its 8GB `capabity` on the backward
+pass, unrelated to the model's actual size. Fixed by pinning
+`CUDA_VISIBLE_DEVICES=0` for the training process — the fix is in how the
+job is launched, not the script itself, since the model trivially fits on
+either GPU alone (271-300MB quantized).
+
+**Bug found + fixed during GGUF conversion**: `convert_hf_to_gguf.py` failed
+with `AssertionError` in `get_vocab_base` — the saved tokenizer has 262146
+entries (2 reserved-but-untrained tokens beyond the base checkpoint's
+`vocab_size: 262144`), a pre-existing quirk of the upstream
+`unsloth/functiongemma-270m-it` checkpoint itself (confirmed present in the
+original cached tokenizer files too, not introduced by finetuning) that
+this llama.cpp version's converter enforces strictly with no bypass flag.
+Fixed by `resize_token_embeddings(262146)` + updating `config.json`'s
+`vocab_size` to match before conversion, so the embedding matrix and
+tokenizer agree. Converted to f16 GGUF, then quantized to Q8_0 (300MB) and
+Q4_K_M (261MB).
+
+**Real llama.cpp tok/s/VRAM, head-to-head with Hammer2.1-1.5b** (same
+harness, same box, `bench_server.py`, `--ctx 4096 --n-predict 150`):
+
+| | FunctionGemma-270M Q8_0 (finetuned) | FunctionGemma-270M Q4_K_M (finetuned) | Hammer2.1-1.5b Q4_K_M |
+|---|---|---|---|
+| gen tok/s | 461-519 | 443-518 | 260-306 |
+| latency/call | 0.29-0.33s | 0.29-0.34s | 0.07-0.21s |
+| VRAM | ~486MB (gpu0) | ~454MB | ~1074MB |
+| call_f1 (fresh holdout) | 88.3%* | not separately re-evaled (same weights, quant-only) | 79.0% (Phase-0, prompt-tuned) |
+| JSON/native parse rate | 100% | — | 100% |
+
+*call_f1 measured via HF/transformers (pre-GGUF); the GGUF quants are the
+same finetuned weights and should track closely, but weren't re-run through
+the native-format eval harness against llama-server this round — flagged as
+a follow-up if FunctionGemma is seriously considered for adoption.
+
+**Verdict:** FunctionGemma-270M (finetuned, either quant) is ~1.8-2x
+raw tok/s of Hammer2.1-1.5b and 5-6x lower VRAM (270M vs 1.5B params), and
+now scores higher call_f1 on a real held-out set (88.3% vs Hammer's 79.0%)
+using its native function-call token format. However, **per-call latency is
+still higher** (0.29-0.34s vs Hammer's 0.07-0.21s) despite the higher raw
+tok/s — likely fixed per-request overhead (template/prompt processing)
+dominating at this short a completion length, not a throughput problem.
+Given the plan's framing that router latency is the one thing that must
+stay fast, **Hammer2.1-1.5b's proven, larger-scale prompt-tuning track record
+and lower absolute latency still make it the safer primary pick**, but
+FunctionGemma is now a credible, much cheaper (VRAM/CPU-fallback-friendly)
+secondary candidate worth a real side-by-side in production traffic rather
+than a synthetic bench, especially given its higher call_f1 and 100% parse
+rate on this fresh holdout.
+
+## 11. Context/token budget re-check under concurrent load (Phase-0.5, Test 6)
+
+Re-verified the chat-default model (Qwen3.6-35B-A3B UD-Q4_K_M) at the plan's
+target 32k context, under the real Config B concurrent shape (big model
+solo-pinned to GPU0 + Hammer2.1-1.5b on GPU1, both generating simultaneously
+— same `cuda-devices` pinning validated correct in §8), not in isolation.
+Also added KV-cache quantization (`--cache-type-k`/`--cache-type-v`) as a
+variable per KV-cache-quant discussion, comparing default (f16) vs Q8_0.
+
+| | Default KV (f16) | KV quantized (Q8_0 K+V) |
+|---|---|---|
+| GPU0 VRAM (24576MB card) | 21910MB | 21658MB (−252MB) |
+| GPU0 headroom remaining | ~2.6GB | ~2.9GB |
+| Big-model gen tok/s (concurrent) | 127.4-133.3 | 123.1-128.7 |
+| Hammer gen tok/s (concurrent, GPU1) | 197.4-250.8 | 192.4-250.8 |
+| Errors | 0/100 requests | 0/99 requests |
+
+**Findings:** at 32k context, this MoE model's actual KV-cache footprint is
+small relative to its ~22GB of dense weights (GQA keeps KV heads low), so
+Q8_0 KV quantization only recovers ~250MB — a real but modest gain, not the
+near-2x reduction KV quantization gives on architectures with larger KV
+caches. Throughput cost is within noise (~4 tok/s, ~3%). **Verdict: KV-cache
+quantization is a low-priority lever for this specific model/context
+combination** — worth enabling as free headroom insurance (it costs
+nothing meaningful and buys ~300MB), but not something to rely on if more
+than that is needed; the ~2.6-2.9GB headroom at 32k context concurrent with
+Hammer is comfortable but not enormous, and should be re-checked before
+adding anything else GPU-resident on GPU0 (e.g. if any future coder/reasoner
+context target increases past 32k).
+
 ## 7. Deliverable checklist
 
 - [x] sqlite-vec verdict recorded (§6)
@@ -474,6 +767,11 @@ the 32GB pool.
 - [x] New dispatcher candidates (Hammer2.1-1.5b, FunctionGemma-270M) — **Hammer2.1-1.5b PASS zero-shot** (76.3% call_f1, 100% parse rate, 0.10s/call, beats Qwen3-4B and Qwen2.5-3B on every metric, no finetuning needed); **FunctionGemma-270M initially scored 0% zero-shot** due to a harness prompt-format mismatch (fixed: true zero-shot is 22.2%, matching Google's published range), then **100% after a 46s finetune** on the existing `data.jsonl` — strong result but with a training-data-diversity caveat (see §3 verdict), and not yet GGUF-converted/benchmarked for real tok/s
 - [ ] Swap latencies (§4) — not yet scripted, needs llama-swap regenerated + running, follow-up after roster locked
 - [x] Needle — benchmarked via own runtime; correctness good (schema-format bug fixed), latency far over plan's 50ms bar but not comparable to Cactus's actual production runtime (different implementation entirely); external research (2 rounds) folded in, verdict unchanged
+- [x] Concurrent-loading VRAM/throughput tests (§8, Phase-0.5 Tests 1-3) — big model + embed, + utility, and real-world CPU-vs-GPU utility placement all measured under genuine concurrent load; methodology bug found and fixed (tensor-split-vs-CUDA_VISIBLE_DEVICES)
+- [x] Reasoner A/B and Vision A/B quality eval (§9, Phase-0.5 Test 4) — **locked: Reasoner A, Vision A** (see §1 table); coder Q5_K_M debug-diagnosis and compile/run confirmed
+- [x] FunctionGemma-270M full-250 finetune + GGUF conversion (§10, Phase-0.5 Test 5) — 88.3% call_f1 on a fresh holdout, real llama.cpp tok/s/VRAM numbers now exist for head-to-head comparison with Hammer; not adopted as primary this round
+- [x] Context/KV-cache budget re-check under concurrent load (§11, Phase-0.5 Test 6) — KV quantization is a low-priority lever for this model at 32k ctx (~250MB gain only); real headroom under Config B confirmed comfortable (~2.6-2.9GB)
+- [x] `docs/PHASE0_FINDINGS_SUMMARY.md` updated with all newly-locked verdicts and closed action items
 
 **Note on §4 (swap latency):** not covered by `run_benchmark_suite.sh` (it
 tests each model in isolation for clean throughput/analytics numbers, one at

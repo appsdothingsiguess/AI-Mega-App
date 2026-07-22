@@ -115,6 +115,9 @@ def main():
     ap.add_argument("--batch-size", type=int, default=4)
     ap.add_argument("--out-dir", default=str(REPO / "logs" / "benchmarks" / "functiongemma-finetuned"))
     ap.add_argument("--seed", type=int, default=0)
+    ap.add_argument("--full-data", action="store_true",
+                     help="train on all examples in data.jsonl with no internal holdout carve-out "
+                          "(use when evaluating against an external freshly-generated holdout set instead)")
     args = ap.parse_args()
 
     random.seed(args.seed)
@@ -122,8 +125,12 @@ def main():
 
     lines = DATA.read_text().splitlines()
     all_examples = [json.loads(l) for l in lines]
-    train_examples = all_examples[:-N_TEST]
-    print(f"Loaded {len(all_examples)} examples: {len(train_examples)} train, {N_TEST} held-out (untouched)")
+    if args.full_data:
+        train_examples = all_examples
+        print(f"Loaded {len(all_examples)} examples: training on all {len(train_examples)} (full-data mode, no internal holdout)")
+    else:
+        train_examples = all_examples[:-N_TEST]
+        print(f"Loaded {len(all_examples)} examples: {len(train_examples)} train, {N_TEST} held-out (untouched)")
 
     tokenizer = AutoTokenizer.from_pretrained(BASE_MODEL)
     model = AutoModelForCausalLM.from_pretrained(BASE_MODEL, dtype=torch.bfloat16).to("cuda:0")

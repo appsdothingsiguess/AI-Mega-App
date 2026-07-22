@@ -1,0 +1,32 @@
+[
+  {
+    "id": "d1_missing_library",
+    "prompt": "I ran this Python script and got this error. What's wrong and how do I fix it?\n\n```python\nimport pandas as pd\ndf = pd.read_csv('data.csv')\nprint(df.head())\n```\n\nError:\n```\nModuleNotFoundError: No module named 'pandas'\n```",
+    "expected_diagnosis": "pandas is not installed in the current environment; fix is `pip install pandas` (or add to requirements.txt / use the right venv), NOT a code logic fix."
+  },
+  {
+    "id": "d2_off_by_one",
+    "prompt": "This function is supposed to return the last 3 elements of a list, but it's returning the wrong number of elements sometimes. Find and explain the bug.\n\n```python\ndef last_three(lst):\n    return lst[len(lst) - 4:len(lst) - 1]\n```",
+    "expected_diagnosis": "Off-by-one: should be lst[-3:] or lst[len(lst)-3:len(lst)], the given slice drops the actual last element and includes one element too early."
+  },
+  {
+    "id": "d3_dependency_version_mismatch",
+    "prompt": "This code worked last month but now throws this error after a `pip install -U` on the box. What's the likely cause and how would you investigate?\n\n```python\nimport numpy as np\nresult = np.float_(3.14)\n```\n\nError:\n```\nAttributeError: module 'numpy' has no attribute 'float_'\n```",
+    "expected_diagnosis": "numpy 2.0 removed the deprecated np.float_ alias; likely cause is a numpy version upgrade. Fix is to use np.float64 directly, or pin numpy<2.0 if other deps require the old API. A good answer mentions checking `pip show numpy` / CHANGELOG, not just guessing at a code typo."
+  },
+  {
+    "id": "d4_race_condition",
+    "prompt": "Two threads increment a shared counter using this function, and the final count is consistently lower than expected after many increments. Why, and how would you fix it?\n\n```python\ncounter = 0\ndef increment():\n    global counter\n    counter = counter + 1\n```",
+    "expected_diagnosis": "Race condition: counter += 1 is not atomic (read-modify-write across threads), causing lost updates. Fix: use a threading.Lock around the increment, or use a thread-safe primitive (e.g. itertools/atomic counter, multiprocessing.Value, or a Queue-based design)."
+  },
+  {
+    "id": "d5_wrong_api_usage_silent",
+    "prompt": "This code runs without errors but always returns an empty list. Why?\n\n```python\ndef get_even_numbers(nums):\n    result = []\n    for n in nums:\n        if n % 2 = 0:\n            result.append(n)\n    return result\n```",
+    "expected_diagnosis": "This is actually a syntax error (`=` instead of `==` in the if condition) -- it would raise a SyntaxError, not run silently. A correct answer should catch that the premise is off and point out it can't run at all as written, rather than inventing a plausible-sounding runtime explanation."
+  },
+  {
+    "id": "d6_stack_trace_dependency",
+    "prompt": "A user reports this stack trace after upgrading Flask. Diagnose the likely cause.\n\n```\nTraceback (most recent call last):\n  File \"app.py\", line 3, in <module>\n    from flask import Markup\nImportError: cannot import name 'Markup' from 'flask'\n```",
+    "expected_diagnosis": "Flask removed the re-exported `Markup` (moved to markupsafe) in Flask 2.3+; fix is `from markupsafe import Markup` instead of importing it from flask, or pin an older Flask version if other code relies on the old import path."
+  }
+]

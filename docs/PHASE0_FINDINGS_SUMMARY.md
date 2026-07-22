@@ -15,11 +15,11 @@ All benchmark downloads finished and all queued jobs completed this session
 
 | Decision | Answer | Evidence |
 |---|---|---|
-| §5 placement | **Config B** (solo 3090 for big models, 3070-resident small models) | `utility` (Qwen3-8B) on CPU: 3.3 tok/s, 42s for a 128-token summary — fails even the plan's "background only" bar |
+| §5 placement | **Config B** (solo 3090 for big models, 3070-resident small models) — **confirmed under real concurrent load, Phase-0.5 Tests 1-3**: big model must be pinned solo to GPU0 via `CUDA_VISIBLE_DEVICES` (not the tensor-split-3,1 shape Phase-0 originally benched — that shape OOMs `utility` on the 3070 and is itself ~3x slower, see `docs/phase0-measurements.md` §8); `utility`+`embed` on CPU is the right call once framed as background-only work (18-22s real summary latency, not the original synthetic 42s) — keeping them off GPU1 avoids a 5-7x Hammer dispatcher slowdown from contention for only ~370MB of headroom | `utility` (Qwen3-8B) on CPU: 3.3 tok/s, 42s for a 128-token summary — fails even the plan's "background only" bar (superseded framing in §8) |
 | §6 vector store | **Qdrant**, not sqlite-vec | 100k-vector KNN p95 = 105ms vs. the 50ms interactive-fast bar |
-| coder quant | **Q5_K_M** (not Q6_K, not Q4) | Q4 PASS (211 tok/s bench/136 real); **Q5_K_M PASS (197 tok/s bench/~140 real)**; **Q6_K FAILS to load — corrupted/incomplete file** (`llama_model_load: error loading model: tensor 'blk.41.ffn_up_exps.weight' data is not within the file bounds`), re-download needed if Q6 is ever wanted again, but Q5 already clears the plan's "≥100 tok/s" bar with better quality than Q4 — **adopt Q5_K_M** |
-| reasoner A vs B | Both pass; **A (DeepSeek-R1-Distill-Qwen-32B) confirmed on re-fetch**: 38.45 tok/s bench, ~44 tok/s real-gen — matches original measurement exactly. B (Qwen3.6-35B-A3B thinking) still faster real-gen (126 vs 44 tok/s) via MoE efficiency. **Quality eval (not just speed) still needed before final pick** — not resolved this session |
-| vision A vs B | **Both PASS correctness** (3/3 and 3/3 correct object-count on the same test image, both now fully benchmarked); **A (Qwen3-VL-32B) has the latency edge**: real-gen 21-43 tok/s vs B (Gemma-3-27b-it)'s 11.3-27.1 tok/s. Root cause: gemma's mmproj tokenizes the test image into far more prompt tokens (276 vs 54 for Qwen3-VL) even though raw bench tok/s is similar (43.0 vs 38.4 — B is actually slightly higher on raw throughput) — the extra image-token overhead costs gemma real-world latency. **Recommend adopting Qwen3-VL-32B** as vision, pending a broader accuracy test (only one image/prompt was tried, not a rigorous eval) |
+| coder quant | **Q5_K_M** (not Q6_K, not Q4) — **quality-confirmed, Phase-0.5 Test 4**: 9/9 compile-pass across every installed language toolchain, 6/6 correct debug-diagnosis (including catching a trick "impossible premise" prompt rather than hallucinating a plausible-sounding fix) | Q4 PASS (211 tok/s bench/136 real); **Q5_K_M PASS (197 tok/s bench/~140 real)**; **Q6_K FAILS to load — corrupted/incomplete file** (`llama_model_load: error loading model: tensor 'blk.41.ffn_up_exps.weight' data is not within the file bounds`), re-download needed if Q6 is ever wanted again, but Q5 already clears the plan's "≥100 tok/s" bar with better quality than Q4 — **adopt Q5_K_M** |
+| reasoner A vs B | **LOCKED: A (DeepSeek-R1-Distill-Qwen-32B)** — Phase-0.5 Test 4 quality eval found Reasoner B (Qwen3.6-35B-A3B thinking mode) **fails to produce a final answer 5/7 times on multi-step reasoning prompts and 5/6 times on debug-diagnosis prompts** at a normal 1024-token budget — its thinking traces consistently blow the budget before reaching an answer (`truncated_before_answer`). Reasoner A finishes reliably (7/7 and 2/6 — the only class A also struggled on was debug-diagnosis, but still far ahead of B's 1/6). B remains faster real-gen (126 vs 44 tok/s) when it *does* finish, so it's not ruled out entirely, but needs 2048+ `max_tokens` budgeted if used at all | See `docs/phase0-measurements.md` §9 for full per-prompt breakdown |
+| vision A vs B | **LOCKED: A (Qwen3-VL-32B)** — Phase-0.5 Test 4 broader accuracy eval (6 prompts: counting, spatial relation, OCR, chart-reading) found **A: 6/6 correct, B: 5/6** (B miscounted a 9-dot cluster as 10) — confirms the latency-based recommendation from Phase-0 and adds a real accuracy edge case B misses that A doesn't | See `docs/phase0-measurements.md` §9 |
 | classifier candidate | **Qwen3-1.7B-Q8_0 on CPU has a thinking-mode problem — FAIL, confirmed on all 5 test calls** — burned its entire 32-token completion budget on internal reasoning (`"Okay, let's see. The user wants me to classify..."`) and **never produced an answer** (`output: ""`, `truncated_before_answer: true`), at only 14.9-15.3 tok/s CPU. This is the same "can't suppress thinking" failure flagged for Qwen3-4B in the dispatcher eval — **not usable as-is for a fast classifier role**; needs either a chat-template/`enable_thinking=false` fix or a different (non-thinking) small model before this slot is usable |
 | embed-B | nomic-embed-text-v2-moe on CPU: **PASS**, 11.7-23.5ms/call — fine for the embed-CPU slot |
 | Needle vs. small-Qwen dispatcher | **Small Qwen wins today**: Qwen2.5-3B 51.4% call_f1 @ 0.12s/call (best latency, ~7-9x faster than needle's own reference runtime) vs needle untuned 25.2% call_f1 @ ~0.9-1.1s/call. Qwen3-4B scored higher (63.4%) but its thinking mode can't be suppressed in llama.cpp, adding 150-300 reasoning tokens/call — **not viable as a low-latency dispatcher despite best raw accuracy**. **Not the final Phase-3 decision** — re-run both once the tool registry stabilizes, per plan |
@@ -56,26 +56,48 @@ All benchmark downloads finished and all queued jobs completed this session
    Also fix the same default in `app/config.py` (~line 163) so a fresh
    install doesn't regenerate the bug. **No code was changed for this —
    still an open fix**, confirmed root cause only.
-3. **Unexplained `Qwen3-32B-Q4_K_M.gguf` blob** (19.7GB, still present as of
-   this session, mtime `2026-07-22 02:27:58 UTC`) — PLAN.md explicitly says
-   not to re-download this model (strictly dominated by the 35B-A3B MoE)
-   and `download_models.sh` has no fetch line for it. Never explained; still
-   on disk taking ~20GB. Recommend deleting it to reclaim space unless
-   someone confirms a reason it's there (currently 207G free of 492G, so not
-   urgent, but it's dead weight against the plan's own skip-list).
-4. **Reasoner A/B and Vision A/B final picks are not locked** — both fully
-   benchmarked now (Vision B/Gemma-3-27b-it landed and passed this session),
-   PLAN.md has a recommendation for each (reasoner: still needs quality
-   eval, not just speed, before picking A vs B; vision: recommend
-   Qwen3-VL-32B over Gemma-3-27b-it on real-gen latency) but neither is a
-   **locked** final pick — a real quality eval (not just tok/s and one
-   correctness spot-check per model) is still needed before PLAN.md's
-   roster table is finalized.
+3. **`Qwen3-32B-Q4_K_M.gguf` blob — DELETED this session (Phase-0.5 cleanup).**
+   Was 19.7GB dead weight (PLAN.md explicitly marks it not-kept, strictly
+   dominated by the 35B-A3B MoE); removed along with its `llama-swap`
+   config entry. Also cleaned up ~58GB of unreferenced Ollama blobs from the
+   pre-restart old-version-1 era (gemma/granite/deepseek-r1-8b/qwen2.5-1.5b
+   variants not used by any kept model) — ~72GB reclaimed total, 206G→278G
+   free. The `granite4:3b`/`granite4-3b-longctx` llama-swap entries still
+   point at a missing blob (`sha256-6c02683...`) — flagged but not fixed,
+   out of scope for this cleanup pass.
+4. **Reasoner A/B and Vision A/B — RESOLVED, Phase-0.5 Test 4.** Reasoner A
+   (DeepSeek-R1-Distill-Qwen-32B) and Vision A (Qwen3-VL-32B) are now
+   **locked** (see §1 table above and `docs/phase0-measurements.md` §9 for
+   the full Claude-judged transcripts). PLAN.md's roster table should be
+   updated to reflect these as final, not "recommended."
+4b. **FunctionGemma-270M — full-250 finetune + GGUF done, Phase-0.5 Test 5.**
+   Real generalization number on a freshly-generated (non-overlapping)
+   holdout: **88.3% call_f1, 100% parse rate** — beats Hammer2.1-1.5b's
+   79.0% on the same metric, at ~1.8-2x the raw tok/s and 5-6x less VRAM.
+   However per-call latency is still higher than Hammer (0.29-0.34s vs
+   0.07-0.21s), likely fixed per-request overhead at this short completion
+   length. **Not adopted as the primary dispatcher this round** — Hammer's
+   proven track record and lower absolute latency keep it the safer
+   primary pick, but FunctionGemma is now a credible cheap secondary
+   candidate worth a real production-traffic side-by-side. Two real bugs
+   were found and fixed getting here (see `docs/phase0-measurements.md`
+   §10): a `DataParallel` auto-wrap OOM on the 3070 during training (fixed
+   via `CUDA_VISIBLE_DEVICES=0`), and a vocab-size assertion in
+   `convert_hf_to_gguf.py` caused by a pre-existing quirk in the upstream
+   base checkpoint's tokenizer (fixed via `resize_token_embeddings`).
+4c. **Context/KV-cache budget re-check — done, Phase-0.5 Test 6.** At 32k
+   context under real Config B concurrent load, KV-cache quantization
+   (Q8_0) only recovers ~250MB on this model (GQA keeps its KV cache small
+   relative to its ~22GB dense weights) — a real but modest gain, not a
+   game-changer. Headroom on GPU0 at 32k ctx concurrent with Hammer is
+   ~2.6-2.9GB — comfortable but should be re-checked if any future
+   coder/reasoner context target grows past 32k.
 5. **§4 swap latency** — never scripted. Needs `llama-swap` actually running
    with `serving/llama-swap/config.yaml` regenerated to point at the
    re-fetched blob paths (several entries in the current config are stale —
-   4 named GGUFs were deleted from disk without the config being updated).
-   Do this only after the roster above is locked.
+   4 named GGUFs were deleted from disk without the config being updated;
+   the dead `Qwen3-32B-Q4_K_M.gguf` entry was already removed this session,
+   see item 3). Do this now that the roster above is locked.
 6. **`llama-server.service`** (systemd) was found auto-respawning a leftover
    qwen3-8b test server on :8080, stealing ~10GB VRAM. User ran
    `sudo systemctl stop llama-server.service` — **confirmed currently

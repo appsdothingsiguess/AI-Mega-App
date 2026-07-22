@@ -1,0 +1,37 @@
+[
+  {
+    "id": "r1_sheep",
+    "prompt": "A farmer has 17 sheep. All but 9 die. How many are left? Show your reasoning briefly, then give the final answer.",
+    "ground_truth": "9"
+  },
+  {
+    "id": "r2_multistep_travel",
+    "prompt": "A train leaves City A at 2:00 PM traveling at 60 mph toward City B, 270 miles away. At 2:30 PM, a second train leaves City B traveling toward City A at 90 mph. At what time do the trains meet? Show your work.",
+    "ground_truth": "Trains meet at 4:00 PM (first train travels 30 miles in the first 30 min, leaving 240 miles closing at 150mph combined = 1.6h = 96min from 2:30, i.e. ~4:06PM -- accept reasoning in the 4:00-4:10PM range as correct if the arithmetic shown is internally consistent)"
+  },
+  {
+    "id": "r3_coding_logic_puzzle",
+    "prompt": "Three functions f, g, h each take an integer and return an integer. You know: f(g(x)) = x for all x, g(h(x)) = x for all x, and h is not the identity function. Is f necessarily the identity function? Explain your reasoning.",
+    "ground_truth": "No -- f(g(x))=x only shows f is a left-inverse of g (g is injective, f surjective onto g's range), not that f is identity everywhere; a correct answer explains why global identity doesn't follow from a single-sided inverse relation."
+  },
+  {
+    "id": "r4_ambiguous_question",
+    "prompt": "\"Can you tell me if the meeting is at 3?\" -- What are the possible ambiguities in this question that would affect how you should answer it? List at least three.",
+    "ground_truth": "Open-ended: correct answers should identify ambiguities like (a) which meeting is being referenced, (b) 3 AM vs PM, (c) timezone, (d) whether 3 refers to a date/day instead of time, (e) whose calendar/schedule is authoritative."
+  },
+  {
+    "id": "r5_probability",
+    "prompt": "You roll two fair six-sided dice. What is the probability that the sum is 7, given that at least one die shows a 4? Show your reasoning.",
+    "ground_truth": "P(sum=7 AND at least one 4) = 2/36 (4,3 and 3,4... wait also (4,3)); P(at least one 4)=11/36. Correct answer = 2/11."
+  },
+  {
+    "id": "r6_self_consistency",
+    "prompt": "A store increases a $50 item's price by 20%, then later decreases the new price by 20%. Is the final price back to $50? Show the calculation and explain why or why not.",
+    "ground_truth": "No -- $50 -> $60 -> $48. Percentage decrease off a higher base doesn't cancel the increase."
+  },
+  {
+    "id": "r7_multistep_word",
+    "prompt": "A tank is filled by pipe A in 6 hours and by pipe B in 4 hours. If both pipes are opened together but pipe A is shut off after 1 hour, how long in total does it take to fill the tank?",
+    "ground_truth": "In 1 hour together: 1/6+1/4=5/12 filled. Remaining 7/12 filled by B alone at 1/4 per hour: (7/12)/(1/4)=7/3 hours = 2h20min. Total = 1h + 2h20min = 3h20min."
+  }
+]
