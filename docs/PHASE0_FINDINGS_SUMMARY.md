@@ -19,23 +19,20 @@ All benchmark downloads finished and all queued jobs completed this session
 | §6 vector store | **Qdrant**, not sqlite-vec | 100k-vector KNN p95 = 105ms vs. the 50ms interactive-fast bar |
 | coder quant | **Q5_K_M** (not Q6_K, not Q4) | Q4 PASS (211 tok/s bench/136 real); **Q5_K_M PASS (197 tok/s bench/~140 real)**; **Q6_K FAILS to load — corrupted/incomplete file** (`llama_model_load: error loading model: tensor 'blk.41.ffn_up_exps.weight' data is not within the file bounds`), re-download needed if Q6 is ever wanted again, but Q5 already clears the plan's "≥100 tok/s" bar with better quality than Q4 — **adopt Q5_K_M** |
 | reasoner A vs B | Both pass; **A (DeepSeek-R1-Distill-Qwen-32B) confirmed on re-fetch**: 38.45 tok/s bench, ~44 tok/s real-gen — matches original measurement exactly. B (Qwen3.6-35B-A3B thinking) still faster real-gen (126 vs 44 tok/s) via MoE efficiency. **Quality eval (not just speed) still needed before final pick** — not resolved this session |
-| vision A vs B | **Both PASS correctness** (3/3 and 2/2 correct object-count on the same test image); **A (Qwen3-VL-32B) has the latency edge**: real-gen 21-43 tok/s vs B (gemma-3-27b-it)'s 11-27 tok/s. Root cause: gemma's mmproj tokenizes the test image into far more prompt tokens (276 vs 54 for Qwen3-VL) even though raw bench tok/s is similar (38.4 vs 43.0) — the extra image-token overhead costs gemma real-world latency. **Recommend adopting Qwen3-VL-32B** as vision, pending a broader accuracy test (only one image/prompt was tried, not a rigorous eval) |
-| classifier candidate | **Qwen3-1.7B-Q8_0 on CPU has a thinking-mode problem** — burned its entire 32-token completion budget on internal reasoning (`"Okay, let's see. The user wants me to classify..."`) and **never produced an answer** (`output: ""`, `truncated_before_answer: true`), at only 14-15 tok/s CPU. This is the same "can't suppress thinking" failure flagged for Qwen3-4B in the dispatcher eval — **not usable as-is for a fast classifier role**; needs either a chat-template/`enable_thinking=false` fix or a different (non-thinking) small model before this slot is usable |
-| embed-B | Qwen3.6/nomic-embed-text-v2-moe on CPU: **PASS**, 11-23ms/call — fine for the embed-CPU slot |
+| vision A vs B | **Both PASS correctness** (3/3 and 3/3 correct object-count on the same test image, both now fully benchmarked); **A (Qwen3-VL-32B) has the latency edge**: real-gen 21-43 tok/s vs B (Gemma-3-27b-it)'s 11.3-27.1 tok/s. Root cause: gemma's mmproj tokenizes the test image into far more prompt tokens (276 vs 54 for Qwen3-VL) even though raw bench tok/s is similar (43.0 vs 38.4 — B is actually slightly higher on raw throughput) — the extra image-token overhead costs gemma real-world latency. **Recommend adopting Qwen3-VL-32B** as vision, pending a broader accuracy test (only one image/prompt was tried, not a rigorous eval) |
+| classifier candidate | **Qwen3-1.7B-Q8_0 on CPU has a thinking-mode problem — FAIL, confirmed on all 5 test calls** — burned its entire 32-token completion budget on internal reasoning (`"Okay, let's see. The user wants me to classify..."`) and **never produced an answer** (`output: ""`, `truncated_before_answer: true`), at only 14.9-15.3 tok/s CPU. This is the same "can't suppress thinking" failure flagged for Qwen3-4B in the dispatcher eval — **not usable as-is for a fast classifier role**; needs either a chat-template/`enable_thinking=false` fix or a different (non-thinking) small model before this slot is usable |
+| embed-B | nomic-embed-text-v2-moe on CPU: **PASS**, 11.7-23.5ms/call — fine for the embed-CPU slot |
 | Needle vs. small-Qwen dispatcher | **Small Qwen wins today**: Qwen2.5-3B 51.4% call_f1 @ 0.12s/call (best latency, ~7-9x faster than needle's own reference runtime) vs needle untuned 25.2% call_f1 @ ~0.9-1.1s/call. Qwen3-4B scored higher (63.4%) but its thinking mode can't be suppressed in llama.cpp, adding 150-300 reasoning tokens/call — **not viable as a low-latency dispatcher despite best raw accuracy**. **Not the final Phase-3 decision** — re-run both once the tool registry stabilizes, per plan |
+| Needle vs. alternatives, research round 2 | External research (Perplexity, 2026-07-22) surfaced named tool-calling-model alternatives with real documentation Needle lacks: **FunctionGemma 270M** (Google) has a published finetune case study (10-39% base → 90-97% after Distil Labs knowledge-distillation from a 120B teacher); **Hammer** (MadeAgents, ICLR 2025 Spotlight) is peer-reviewed with a dedicated eval suite (HammerBench) for the ambiguous/overlapping-tool-name failures we hit. Two community benchmarks rank `Qwen3-0.6B`/`LFM2.5-1.2B`/`Qwen3.5-4B` well above Needle-class accuracy generally — **but** a direct Reddit head-to-head (Needle vs Qwen3-0.6B, 50 queries/5 tiers) found **Needle still wins on narrow, low-ambiguity, fixed-toolset dispatch** (both accuracy and 4.4x speed), consistent with our own findings that Needle's edge shrinks as schema complexity rises. **No change to the Phase-3 decision** — full detail in `docs/phase0-measurements.md` |
 
 ## 2. Open items that need action (not just observation)
 
-1. **`coder-small` naming bug in PLAN.md** (§4.1 roster table, also line ~140
-   and ~114/118/145/160). PLAN.md names **"Qwen3-Coder-7B"** — this model
-   **does not exist** (Qwen3-Coder only ships as 30B-A3B and a 3B-active
-   "Next" MoE; confirmed via web search, nothing on unsloth's HF org).
-   **Fix:** replace every `coder-small` / "Qwen3-Coder-7B" reference in
-   PLAN.md with **`Qwen2.5-Coder-7B`** (already on disk at
-   `gguf/qwen2.5-coder-7b.gguf`, already benchmarked: **PASS**, 124.8 tok/s
-   bench / 114-121 tok/s real, only 6GB VRAM — fits the PC2 3070 budget
-   resident, per PLAN.md's own §"PC2 budget" open question, now answered:
-   **yes, it fits resident**, no swap entry needed).
+1. **`coder-small` naming bug in PLAN.md — FIXED.** PLAN.md's §4.1 roster
+   table named "Qwen3-Coder-7B", which **doesn't exist** (Qwen3-Coder only
+   ships as 30B-A3B and a 3B-active "Next" MoE). Updated to
+   **`Qwen2.5-Coder-7B`** (already on disk at `gguf/qwen2.5-coder-7b.gguf`,
+   benchmarked: **PASS**, 124.8 tok/s bench / 113.8-120.8 tok/s real, 6.0GB
+   VRAM, confirmed resident-fit on the PC2 3070, no swap entry needed).
 2. **`settings.json` / `app/config.py` — empty `ollama_model_names` entries
    (confirmed live bug, causes the 10s+ tool-calling latency).** These keys
    are currently `""`:
@@ -66,10 +63,14 @@ All benchmark downloads finished and all queued jobs completed this session
    on disk taking ~20GB. Recommend deleting it to reclaim space unless
    someone confirms a reason it's there (currently 207G free of 492G, so not
    urgent, but it's dead weight against the plan's own skip-list).
-4. **Reasoner A/B and Vision A/B final picks are not locked** — need a real
-   quality eval (not just tok/s and a single-image smoke test) before
-   PLAN.md's roster table is finalized. This session only measured
-   speed + one correctness spot-check for each.
+4. **Reasoner A/B and Vision A/B final picks are not locked** — both fully
+   benchmarked now (Vision B/Gemma-3-27b-it landed and passed this session),
+   PLAN.md has a recommendation for each (reasoner: still needs quality
+   eval, not just speed, before picking A vs B; vision: recommend
+   Qwen3-VL-32B over Gemma-3-27b-it on real-gen latency) but neither is a
+   **locked** final pick — a real quality eval (not just tok/s and one
+   correctness spot-check per model) is still needed before PLAN.md's
+   roster table is finalized.
 5. **§4 swap latency** — never scripted. Needs `llama-swap` actually running
    with `serving/llama-swap/config.yaml` regenerated to point at the
    re-fetched blob paths (several entries in the current config are stale —

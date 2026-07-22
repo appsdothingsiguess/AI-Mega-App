@@ -31,7 +31,7 @@ DEFAULT_PROMPTS = {
     "vision": None,  # handled specially with an image
     "utility": "Summarize this in one line: 'The quarterly report shows revenue up 12% driven by the new EU rollout, offset by higher cloud spend.'",
     "embed": None,  # handled by /v1/embeddings
-    "classifier": "Classify the intent of this message as one of [question, command, chit-chat]: 'turn off the lights in the kitchen'",
+    "classifier": "Classify the intent of this message as one of [question, command, chit-chat]: 'turn off the lights in the kitchen'\n/no_think",
     "needle": "Call the function to set a timer for 10 minutes.",
 }
 

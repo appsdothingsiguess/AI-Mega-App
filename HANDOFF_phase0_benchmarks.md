@@ -26,31 +26,33 @@ Two decisions are already made with real numbers behind them:
 
 ## What's still open (pick up here)
 
-1. **Downloads still running** (as of 2026-07-22 ~02:45 UTC, 213G free on
-   `/home/john/llm-stack/models`, 254G/492G used). **Done and PASS this
-   session:** coder Q4/Q5/Q6, DeepSeek-R1-32B re-fetch, coder-small
-   (Qwen2.5-Coder-7B, substituted for a nonexistent "Qwen3-Coder-7B" — see
-   item 2b), vision A (Qwen3-VL-32B). **Still downloading/queued, in this
-   order:** `gemma-3-27b-it` + mmproj (downloading now, ~13.5/~18GB),
-   `Qwen3-1.7B-Q8_0` (classifier), `nomic-embed-text-v2-moe` (embed-B).
-   **`scripts/auto_bench_watcher.sh` is running unattended in the
-   background** (started this session — check `pgrep -af
-   "auto_bench_watcher.sh$"`) and benches each file the moment it lands, one
-   at a time, no GPU overlap. Check progress:
-   ```bash
-   tail -30 /tmp/auto_bench_watcher.log     # per-job RUN/START/HEALTHY/DONE
-   pgrep -af "auto_bench_watcher.sh$"       # still alive?
-   ps aux | grep wget                       # still downloading, which file?
-   ls -la /home/john/llm-stack/models/blobs/*.gguf
-   ```
-   If the watcher died, just re-launch it — it's idempotent, `wait_for()`
-   re-checks disk state each time: `cd /home/john/AI-Mega-App && nohup bash
-   scripts/auto_bench_watcher.sh > /tmp/auto_bench_watcher_stdout.log 2>&1 &
-   disown`. A persistent `Monitor` was also armed this session watching
-   `/tmp/auto_bench_watcher.log` for RUN/DONE/FAIL lines — if you're
-   resuming in the same Claude Code session it may still be live; if this is
-   a fresh chat it won't be, re-arm one if you want push-style notifications
-   instead of polling.
+1. **All downloads and queued benchmark jobs are done** (confirmed
+   2026-07-22 ~02:46 UTC, `auto_bench_watcher.log` ends `ALL PENDING
+   BENCHMARKS COMPLETE`). Final tally: coder Q4/Q5 PASS, **Q6_K fails to
+   load** (corrupted/incomplete file, confirmed on two separate re-runs —
+   see item 2), DeepSeek-R1-32B re-fetch PASS, coder-small (Qwen2.5-Coder-7B)
+   PASS, vision A (Qwen3-VL-32B) PASS, vision B (Gemma-3-27b-it) PASS,
+   classifier (Qwen3-1.7B-Q8_0) **FAIL** (thinking-mode budget burn, same
+   class of bug as Qwen3-4B in the dispatcher eval), embed-B
+   (nomic-embed-text-v2-moe) PASS. `auto_bench_watcher.sh` no longer needs
+   to be running — nothing left to wait on.
+   **UPDATE (next session, 2026-07-22 ~03:00 UTC):** classifier fixed —
+   appending a literal `/no_think` line to the prompt suppresses thinking
+   mode (5/5 correct, 0.11-0.14s/call, now **PASS**); Q6_K root-caused as
+   genuine mid-stream bit corruption (remote/local byte sizes matched
+   exactly, so `wget -c` couldn't fix it — deleted and did a full re-fetch,
+   see item 2 update below). Also ran two new dispatcher candidates from
+   the external research round: **Hammer2.1-1.5b PASSes zero-shot and is
+   the new best dispatcher candidate** (76.3% call_f1, 100% parse rate,
+   0.10s/call — beats every Qwen candidate on every axis);
+   **FunctionGemma-270M** initially scored 0% due to a harness
+   prompt-format bug (its chat template needs its own
+   `<start_function_call>` tokens, not a JSON array — fixed, true
+   zero-shot is 22.2%), then **100% on the held-out set after a 46-second
+   finetune** using data we already had (`scripts/needle_training/data.jsonl`)
+   — see `docs/phase0-measurements.md` §3 for full results and caveats
+   (training-data phrasing diversity is limited, so 100% held-out may not
+   fully predict real-world generalization; not yet GGUF-converted).
    **Open question, not investigated:** a `Qwen3-32B-Q4_K_M.gguf` blob
    (19.7GB) appeared in `models/blobs/` this session even though
    `BENCHMARK_PLAN.md` explicitly says not to re-download it (strictly
@@ -58,13 +60,34 @@ Two decisions are already made with real numbers behind them:
    for it. Still unexplained — check `ls -la --time-style=full-iso
    models/blobs/Qwen3-32B-Q4_K_M.gguf` and whatever process's history might
    explain it before deciding whether to delete it to reclaim ~20GB.
-2. **Coder Q4/Q5/Q6 adoption decision** — all three now measured and PASS
-   (Q4: 211/136 tok/s bench/real; Q5: 197/~140; Q6: real-server 104-136,
-   its `bench_models.sh`/llama-bench throughput step logged no OK/FAIL line
-   this run, worth a quick standalone re-run to fill that cell). Per the
-   plan ("adopt highest quant that clears ≥100 tok/s"), Q6_K is the
-   strongest candidate on paper — needs the throughput number confirmed and
-   a VRAM-headroom-at-64k check (§3) before calling it final.
+2. **Coder Q4/Q5/Q6 adoption decision — resolved: adopt Q5_K_M.** Q4 and Q5
+   both PASS (Q4: 211/136 tok/s bench/real; Q5: 197/~140). **Q6_K fails to
+   load** on two separate re-runs (`Qwen3-Coder-30B-A3B-Instruct-Q6_K.gguf`
+   — `llama_model_load: error loading model: tensor 'blk.41.ffn_up_exps.weight'
+   data is not within the file bounds`, i.e. a corrupted/incomplete
+   download, not a config/flag issue). Since Q5_K_M already clears the
+   plan's "≥100 tok/s" bar with better quality than Q4 and Q6 can't even
+   load, **adopt Q5_K_M**; re-download the Q6 blob first if it's ever wanted
+   again.
+   **UPDATE (next session, 2026-07-22 ~03:00 UTC):** root-caused —
+   HEAD-checked the remote file, its `content-length` matched the local
+   file's byte count exactly, so the earlier failure was genuine mid-stream
+   bit corruption, not truncation (`wget -c` can't fix that, it trusts
+   existing bytes). Deleted the corrupted blob and did a full re-fetch
+   (models mount has 230GB free, not the tight 36GB the root `/` df showed —
+   `/home/john/llm-stack/models` is its own 492GB filesystem). **Re-bench
+   done: real PASS.** `llama-server` loads the re-fetched file cleanly
+   (6.6s boot), produces correct code on 3/3 real requests, 103-138 tok/s
+   real-gen, 27.7GB VRAM (22.45+5.2). `llama-bench` still crashes on this
+   file (`GGML_ASSERT(bufs.back() != nullptr)`, a VRAM compute-buffer
+   reservation failure at `llama-bench`'s default `-p 512` batch size for
+   this quant+tensor-split) — confirmed as a `llama-bench`-specific
+   limitation unrelated to file integrity, since the actual serving path
+   (`llama-server`) works fine. Full writeup in
+   `docs/phase0-measurements.md` §2 ("coder Q6_K — corruption saga,
+   resolved"). Still adopting **Q5_K_M** as the default (clears the bar
+   with headroom; Q6 costs +3GB VRAM for marginal gain and an unusable
+   `llama-bench` number) — this item is now fully closed.
 2b. **`coder-small` gap found and closed.** PLAN.md's roster names
    "Qwen3-Coder-7B" for this slot — **that model doesn't exist** (Qwen3-Coder
    only ships as 30B-A3B and a 3B-active "Next" MoE, confirmed via web
@@ -74,12 +97,16 @@ Two decisions are already made with real numbers behind them:
    (4.15+1.87 split automatically, no `--tensor-split` needed). **PLAN.md's
    roster table needs a naming fix** (§4.1, the `coder-small` row) — not
    done yet, flagging for whoever locks the final roster.
-3. **Vision A/B** (Qwen3-VL-32B vs Gemma-3-27b-it) — **A is done and PASSES**
-   (38.4 tok/s bench, 21-43 tok/s real, 25.1GB VRAM, correctly answered a
-   real "how many objects" image test 3/3). B (Gemma-3-27b-it) still
-   downloading, watcher will bench it automatically (same test image:
-   `/home/john/llm-stack/ollama/test_files/vision_count.png`, prompt "How
-   many objects are in this image?"). Compare and pick one once B lands.
+3. **Vision A/B** (Qwen3-VL-32B vs Gemma-3-27b-it) — **both done, both PASS
+   correctness** (3/3 correct "how many objects" answers on the same test
+   image). **A (Qwen3-VL-32B) has the latency edge**: 38.4 tok/s bench,
+   21-43 tok/s real, 25.1GB VRAM. B (Gemma-3-27b-it): 43.0 tok/s bench (raw
+   throughput actually higher than A) but only 11.3-27.1 tok/s real, 22.05GB
+   VRAM — root cause is Gemma's mmproj tokenizing the test image into 276
+   prompt tokens vs A's 54, so the extra image-token overhead costs real-world
+   latency despite similar bench numbers. **Recommend adopting Qwen3-VL-32B**,
+   pending a broader accuracy test (only one image/prompt tried so far, not
+   a rigorous eval).
 4. **§4 swap latency** — not scripted at all yet. Needs `llama-swap`
    actually routing between models; do this once the roster above is
    locked and `serving/llama-swap/config.yaml` is regenerated to point at
@@ -115,14 +142,27 @@ produce for needle. Full trace in `docs/phase0-measurements.md`. **Cactus
 was removed from disk** (`rm -rf engine/cactus`, reclaimed 6.9GB) — don't
 re-clone it here.
 
-**Follow-up queued, not run yet:** a Perplexity research prompt was written
-and handed to the user (`docs/perplexity_needle_research_prompt.txt`) asking
-about real-world Needle finetuning recipes/gotchas beyond Cactus's own docs,
-schema-shape-specific accuracy gaps, whether anyone has a working x86
-workaround for Cactus, and published Needle-vs-small-model comparisons. If
-the user shares results from that research, fold them into
-`docs/phase0-measurements.md`'s needle section and reconsider the "small
-Qwen wins" verdict above if it changes the picture.
+**Follow-up queued, now done (2 rounds):** a Perplexity research prompt was
+written and handed to the user (`docs/perplexity_needle_research_prompt.txt`,
+since deleted — content preserved via `git show`) asking about real-world
+Needle finetuning recipes/gotchas, schema-shape-specific accuracy gaps,
+x86 workarounds for Cactus, and published Needle-vs-small-model comparisons.
+Round 1 came back and was folded into `docs/phase0-measurements.md`'s
+"Needle finetuning/schema-gap external research" section — verdict
+unchanged (small Qwen still wins on this app's schemas). **Round 2 came back
+2026-07-22** with a differently-scoped ask (documented *alternatives* to
+Needle generally, not just more Needle detail) and was folded into a new
+`docs/phase0-measurements.md` subsection right after round 1: two community
+benchmarks rank small instruct models (`Qwen3-0.6B`, `LFM2.5-1.2B`,
+`Qwen3.5-4B`) well above Needle-class accuracy in general, **but** a direct
+Needle-vs-Qwen3-0.6B head-to-head (Reddit) found Needle still wins on
+narrow/fixed-toolset single-shot dispatch — consistent with our own
+findings that Needle's edge shrinks as schema complexity rises. Two named
+candidates worth trying if the small-Qwen fallback is ever chosen over
+Needle: **FunctionGemma 270M** (has a published finetune recipe, unlike
+Needle) and **Hammer** (MadeAgents, ICLR 2025, built for the exact
+ambiguous/overlapping-tool-name failures we hit). Net effect: still no
+change to the Phase-3 gate decision — see phase0-measurements.md for detail.
 
 Original open-question text below, superseded by the above but kept for
 context on what was uncertain when this doc was first written:
