@@ -58,11 +58,17 @@ Q4_K_M unless noted. "Fits" = weights + KV cache for the target context, headroo
 | `utility` | Qwen3-8B Q4 | 8k | see §5 (placement decides CPU vs GPU) |
 | `embed` | nomic-embed-v2 (**vs** Qwen3-embedding) | — | see §5 (embed latency, not tok/s) |
 | `classifier` | Qwen3-1.7B Q8 | 4k | CPU; classify latency < ~300ms/turn |
-| `needle` | Cactus Needle 26M Q8 | — | CPU; one-call emit < ~50ms |
+| `needle` | Cactus Needle 26M — own runtime, not llama.cpp | — | CPU; one-call emit < ~50ms |
+
+**`needle` is the one exception to "only use llama.cpp":** [cactus-compute/needle](https://github.com/cactus-compute/needle) ships no GGUF — weights are a `.pkl` checkpoint (26,315,421 params, confirmed) on a custom "Simple Attention Network" architecture (`ZCRMSNorm`, gated-residual layers) with no llama.cpp op support. By explicit sign-off (2026-07-21): acceptable to run it under its own runtime (JAX, CPU-only) instead of llama.cpp, as long as it's exercised through an HTTP API like every other model here — not called in-process. `engine/needle/serve.py` (a thin wrapper around the upstream `needle.ui.server`, needed because the upstream `needle.cli` launcher silently dies in this environment — its stderr-fd log filter kills the process before it binds the port) exposes the same `/generate` endpoint the project's own playground UI uses. `scripts/bench_needle.py` benchmarks it with the same JSONL analytics schema as `bench_server.py`, with a JIT-warmup call excluded from timing (JAX compiles the forward pass on first call; skipping this the first time inflated every measurement by seconds and made the results look ~1000x slower than reality).
+
+**Important:** this benchmarks the `needle` repo's own reference JAX "playground" server (a Python eval/training tool), not Cactus's optimized production runtime (`cactus benchmark`, C++/ONNX/CoreML, NPU-tuned, the ~500-3000 tok/s numbers in [cactus-compute/cactus](https://github.com/cactus-compute/cactus)'s README). Those are different code paths on different hardware (mobile NPU/GPU vs this box's CPU via an unoptimized reference implementation) — not comparable numbers. CPU, warmup-excluded result on this box: **avg 1.1s/call, p50 0.9s** (10 calls, function-calling prompts, 128 max_gen_len) — real, reproducible, but not representative of Cactus's actual production performance.
 
 Per candidate record: **file + source URL + SHA, size on disk, VRAM at target ctx, prompt tok/s, gen tok/s, load time, and (big models) swap-in time.**
 
-Skip / do not keep: Qwen3-32B dense (already measured 44 tok/s — strictly dominated by the 35B-A3B MoE at 133); DeepSeek-Coder-V2-Lite (trailed by Qwen3-Coder); any 600B-class DeepSeek (V3.2/V4/R2 — not local, remote-provider only).
+Skip / do not keep: Qwen3-32B dense (already measured 44 tok/s — strictly dominated by the 35B-A3B MoE at 133; **do not re-download it as a reasoner candidate either** — reasoner-B is the same Qwen3.6-35B-A3B weights fetched for `chat-default`, tested in thinking mode, since Qwen3.6 natively supports think/no-think switching); DeepSeek-Coder-V2-Lite (trailed by Qwen3-Coder); any 600B-class DeepSeek (V3.2/V4/R2 — not local, remote-provider only).
+
+**Model-mount note (2026-07-21):** the four named GGUFs this plan and `serving/llama-swap/config.yaml` depend on (`Qwen3.6-35B-A3B`, `Qwen3-Coder-30B-A3B-Instruct`, `DeepSeek-R1-Distill-Qwen-32B`, `Qwen3-32B`) had been downloaded once but were later deleted from `models/blobs/` without the config being reconciled — `llama-swap` would have failed to boot those entries. Vision models were similarly "retired" (blobs removed, entries commented out) and never re-fetched. `scripts/download_models.sh` now re-fetches everything the test matrix above needs (skipping `Qwen3-32B` per the line above, and `needle` per the blocked note). See `docs/phase0-measurements.md` §0 for the full reconciliation record.
 
 ---
 
