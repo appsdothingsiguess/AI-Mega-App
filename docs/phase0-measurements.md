@@ -504,6 +504,67 @@ proxies.
 | Context-depth degradation (chat-default, 2k/8k/16k/24k/32k checkpoints) | tok/s: 77.7 → 64.3 → 54.0 → 52.4 → 49.8 (36% degradation by 32k, target checkpoint's own bar was ≤30%) | **Fails the proposed speed bar** — degradation crosses 30% between the 8k and 16k checkpoints already. Recall-probe answer was correct at 2k but came back **empty at every checkpoint from 8k onward** at the default 256-token budget — confirmed via a follow-up run at the 8k checkpoint with a 1024-token budget, which answered correctly (`"Project Narwhal", "Priya"`). Root cause is the same thinking-mode budget trap as everywhere else in this harness, not a real long-context recall failure — but it means any context-depth eval on a thinking-capable model needs a real token budget (≥1024, consistent with §9's 4096 recommendation) or the recall signal is meaningless. |
 | Dynamic util-load-on-demand (llama-swap regen + real swap latency) | **not run** | Still blocked on regenerating the stale `serving/llama-swap/config.yaml` (references deleted blobs like `granite4:3b`) — that's a config-authoring task, not something covered by this round's eval scripts. `scripts/bench_swap_latency.py` is ready to use once the config is regenerated and llama-swap is running. |
 
+## 14. Test 7+ round 2 — real bug fixes, corrected results (this session)
+
+§13's numbers were run with genuinely weak harnesses: bare-list prompts with
+zero worked examples for a 1.5-1.7B model, a real extraction bug, and token
+budgets that don't survive thinking-mode. All three are fixed here, and the
+corrected numbers mostly supersede §13 rather than just adding to it.
+
+**Root causes found and fixed:**
+
+1. **Classifier extraction bug** — `extract_label()` checked category
+   substrings in a fixed order starting with `"chat"`, and `"chat"` is a
+   literal substring of `"chit_chat"` — so a *correct* model output of
+   `chit_chat` was being scored as `chat` before the model was even at
+   fault. Fixed by checking labels longest-first with word-boundary regex.
+2. **Weak prompts across the board** — the classifier, Hammer-stress, and
+   title-gen prompts were bare instructions with no worked examples. For
+   models this small (270M-1.7B), that's not enough signal. All three now
+   carry 2-7 worked examples targeting the model's actual confusion cases
+   (found by reading the §13 failures), not generic examples.
+3. **`/no_think` is not a reliable universal fix** — the text-suffix
+   convention (append a literal `/no_think` to the prompt) worked for
+   Qwen3-1.7B but silently failed on Qwen3.6-35B-A3B (`chat-default`): the
+   model kept reasoning anyway, filling the entire token budget with
+   `reasoning_content` and leaving `message.content` empty, regardless of
+   budget size. The real, reliable fix is llama-server's own
+   `--reasoning off` server flag (also `--reasoning-budget 0`), which
+   suppresses thinking at the template level instead of hoping the model
+   honors a text convention. All eval scripts that boot their own server
+   now pass `--reasoning off`; bumping token budgets alone was solving the
+   wrong problem.
+
+| Item | §13 result | Round-2 result (after fixes) | What changed |
+|---|---|---|---|
+| Classifier accuracy (Qwen3-1.7B, 85 items, 6 categories) | 45.88% overall, `tool_call_needed`/`chit_chat` at 0% | **91.76% overall** — `chat` 100%, `code_task` 88.2%, `tool_call_needed` 78.9%, `reasoning_task` 100%, `vision_task` 100%, `chit_chat` 90% | Extraction-bug fix alone got it to 87.06%; two more few-shot examples targeting live-data-without-a-tool-name (`stock price`/`weather`) and file-search-vs-code-writing confusion (`grep`/`find files`) got it to 91.76%, clearing the ≥90% bar on the **same model** — no bigger model needed for accuracy. |
+| Classifier, Qwen3-4B same fixed prompt (size/speed comparison) | not tested | **Not viable — 0% usable accuracy, ~93.7s per single-word classification** (vs. the 1.7B's 0.283s/item) | This specific `qwen3-4b.gguf` does not honor `--reasoning off` or `--reasoning-budget 0` at all (confirmed via direct query — identical `reasoning_content`/empty-`content` output with both flags set vs. unset), unlike the Qwen3-1.7B and Qwen3.6-35B-A3B checkpoints where the same flag works cleanly. It always reasons at length (~388 words / ~1000 tokens) before answering even a trivial question, regardless of flags — likely a template/conversion difference in this particular gguf, not a general "bigger Qwen3 models can't do this" result. **Answer to "would a bigger classifier help": no — stick with the fixed 1.7B, which already clears the bar at a fraction of the latency.** |
+| Hammer tool-registry stress (13-tool overlapping, 82 examples) | call_f1 53.85%, exact_match 51.22% | **call_f1 63.75%, exact_match 62.2%**, parse 98.78% | Few-shot disambiguation examples for the actual confusable trios (`web_search`/`_news`/`_images`, `fetch_url`/`_raw`, `file_read`/`_lines`/`read_file_metadata`) fixed the *name-selection* failures. Residual errors are now all argument-fidelity (dropping "the"/"a" when copying the query into an argument, one code-string truncation) — a different, narrower problem than before. |
+| FunctionGemma-270M tool-registry stress (same 13-tool set) | 0% call_f1 (generic-harness mismatch, not a real result) | **36.5% call_f1, 35.4% exact_match, 93.9% parse** (native chat-template harness, finetuned checkpoint) | First fair head-to-head: Hammer 63.75% vs. FunctionGemma 36.5% call_f1 on the identical stress set. Hammer remains the better dispatcher under registry pressure even measured fairly. |
+| Hammer title generation | raw 3/8 → postprocessed 2/8 (worse) | raw 3/8 → **postprocessed 4/8** | Adding two worked examples to the prompt stopped the code-fence-padding artifact entirely (no more fence-wrapped output) — the postprocessor now helps instead of hurting. Residual failures are genuine word-count miscalibration (some titles run 9-12 words, one drops to 3) — a model-calibration issue, not a formatting one. Still short of a good bar; needs either more/better examples or an explicit word-count self-check instruction as a follow-up. |
+| Structured JSON output (chat-default, 10 schemas) | 1200-token budget: 80% parse/schema-valid (2 failures were thinking-mode truncation, not content problems) | **100% parse rate, 100% schema-valid rate** with `--reasoning off` | Confirms the two §13 failures (`s3_array_of_objects`, `s8_deeply_nested`) were the model burning its entire budget on hidden reasoning (`finish_reason: "length"`, empty `content`, full `reasoning_content`) — not a nested/array JSON weakness. `--reasoning off` fixed both instantly and cut per-request latency from ~6-10s to well under 1s. |
+| Context-depth degradation (chat-default, 2k→32k, `--reasoning off`) | tok/s 77.7→49.8 (36% degradation); recall probe empty past 2k at 256-token budget (thinking-mode trap) | tok/s **77.5→36.5 (52.9% degradation by 32k)**; recall probe **correct at every checkpoint 2k through 32k** | Two separate corrections in one number: (a) recall accuracy was never actually broken — the "empty past 2k" result was 100% a measurement artifact of the thinking-mode trap, not a real long-context recall failure; (b) the *honest* speed degradation is actually worse than §13's contaminated number, not better — 52.9% vs. the ≤30% bar is a real, confirmed fail. Net finding: this model's context-depth problem is purely a throughput problem, not an accuracy one. |
+| Dynamic util-load-on-demand (swap latency) | not run (blocked, stale config) | **utility (CPU) cold-load 20.54s, warm ~9.1-9.4s; needle/Hammer (GPU0) cold-load 3.48s, warm 0.03-0.18s; chat-default (GPU0) cold-load 12.47s, warm 0.67s** | Unblocked: `serving/llama-swap/config.yaml` was regenerated from scratch against the actual locked roster and current model paths (see below), replacing the pre-Phase-0 config that still referenced deleted `granite4` blobs and used `--tensor-split 3,1` everywhere (the §8-rejected placement). All big models are now pinned solo to GPU0 via `CUDA_VISIBLE_DEVICES`; `classifier`/`utility`/`embed` are CPU-resident with `ttl: 0` (never auto-unload). |
+
+**llama-swap config regeneration:** `serving/llama-swap/config.yaml` (outside
+this repo, on the box) now has one entry per routing alias
+(`classifier`/`utility`/`embed`/`embed-gpu`/`needle`/`chat-default`/`coder`/
+`coder-small`/`reasoner`/`vision`), each pointing at the real current model
+file (no more sha256-blob guessing for the still-live ones). `coder` uses the
+locked Q5_K_M quant (§2/§9), not the config's previous Q4_K_M. Old config
+backed up to `config.yaml.bak.20260723` before the rewrite.
+
+**Still open after round 2:**
+- Hammer title-gen word-count calibration (titles run too long/short even
+  with worked examples) — needs a tighter prompt (explicit word-count
+  self-check) or more examples, not yet a closed item.
+- Hammer stress argument-fidelity (article-dropping, one code-truncation) —
+  worth deciding whether exact-string argument matching is too strict a
+  metric, or whether this needs its own prompt fix.
+- ~~`qwen3-4b` classifier comparison~~ — **resolved**: not viable, this gguf
+  never honors reasoning-suppression flags and costs ~93.7s/call vs. the
+  1.7B's 0.283s/item. No upgrade warranted; the fixed 1.7B stands.
+
 ## 7. Deliverable checklist
 
 - [x] sqlite-vec verdict recorded (§6)

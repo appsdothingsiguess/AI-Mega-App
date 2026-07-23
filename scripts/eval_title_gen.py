@@ -32,8 +32,18 @@ REPO = Path("/home/john/AI-Mega-App")
 OUTDIR = REPO / "logs" / "benchmarks" / "quality"
 
 PROMPT_TEMPLATE = (
-    "Generate a short 5-8 word title for this chat exchange "
-    "(title only, no punctuation at the end, no quotes):\n\n{exchange}"
+    "Generate a short 5-8 word title summarizing this chat exchange. "
+    "Output ONLY the title text -- no quotes, no code fences, no trailing "
+    "period or punctuation, no preamble like \"Title:\".\n\n"
+    "Example 1:\n"
+    "User: How do I undo my last git commit but keep the changes?\n"
+    "Assistant: Use git reset --soft HEAD~1, it undoes the commit but keeps your changes staged.\n"
+    "Title: Undoing a Git Commit While Keeping Changes\n\n"
+    "Example 2:\n"
+    "User: What's the fastest way to check if a Python list has duplicates?\n"
+    "Assistant: Compare len(lst) to len(set(lst)) -- if they differ, there are duplicates.\n"
+    "Title: Checking for Duplicates in a Python List\n\n"
+    "Now generate a title for this exchange:\n{exchange}\nTitle:"
 )
 
 

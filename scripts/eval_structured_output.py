@@ -83,8 +83,12 @@ def main():
     ap.add_argument("--label", required=True)
     ap.add_argument("--model-path", default=None)
     ap.add_argument("--port", type=int, required=True)
-    ap.add_argument("--n-predict", type=int, default=300)
+    ap.add_argument("--n-predict", type=int, default=1200)
     ap.add_argument("--request-timeout", type=int, default=120)
+    ap.add_argument("--no-think", action="store_true",
+                     help="append a literal /no_think line to suppress hidden reasoning "
+                          "before the JSON (thinking-capable models otherwise burn the "
+                          "token budget on <think> and truncate the actual output)")
     args = ap.parse_args()
 
     OUTDIR.mkdir(parents=True, exist_ok=True)
@@ -96,10 +100,11 @@ def main():
 
     for item in items:
         t0 = time.perf_counter()
+        prompt = item["prompt"] + ("\n/no_think" if args.no_think else "")
         try:
             body, wall = http_json(
                 f"http://127.0.0.1:{args.port}/v1/chat/completions",
-                {"messages": [{"role": "user", "content": item["prompt"]}],
+                {"messages": [{"role": "user", "content": prompt}],
                  "max_tokens": args.n_predict, "temperature": 0, "stream": False},
                 args.request_timeout,
             )

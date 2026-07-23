@@ -88,7 +88,7 @@ def main():
     ap.add_argument("--port", type=int, default=8899)
     ap.add_argument("--boot-timeout", type=int, default=180)
     ap.add_argument("--request-timeout", type=int, default=300)
-    ap.add_argument("--n-predict", type=int, default=128)
+    ap.add_argument("--n-predict", type=int, default=1024)
     args = ap.parse_args()
 
     OUTDIR.mkdir(parents=True, exist_ok=True)
@@ -102,7 +102,8 @@ def main():
         sys.exit(2)
 
     cmd = [BIN, "--port", str(args.port), "-m", args.model, "--ctx-size", str(args.ctx),
-           "-ngl", "999", "--flash-attn", "on", "--jinja", "--host", "127.0.0.1"]
+           "-ngl", "999", "--flash-attn", "on", "--jinja", "--host", "127.0.0.1",
+           "--reasoning", "off"]
     if args.tensor_split:
         cmd += ["--tensor-split", args.tensor_split, "-sm", "tensor"]
 

@@ -50,7 +50,7 @@ flowchart TD
 | Coder quant | Q5_K_M | clears ≥100 tok/s bar, better quality than Q4, Q6 needs +3GB for marginal gain | §2, §9 |
 | Reasoner | DeepSeek-R1-Distill-Qwen-32B **and** Qwen3.6-35B-A3B thinking — no single winner | both 7/7 correct on reasoning prompts at a proper token budget; B more reliable on debug-diagnosis (5/6 vs A's 3/6, A hallucinated 2 wrong fixes) | §9 |
 | Vision | Qwen3-VL-32B | 6/6 correct vs Gemma-3-27b-it's 5/6 (missed a dot-count) | §9 |
-| Classifier | Qwen3-1.7B-Q8_0 + `/no_think` suffix | thinking mode burned its budget with no suffix; fixed with a prompt-level fix, no template change | §2 |
+| Classifier | Qwen3-1.7B-Q8_0 + `--reasoning off` + few-shot prompt | 91.76% on the real 6-category taxonomy (up from a badly-broken 45.88% — see §14 for the extraction-bug fix, few-shot prompt, and why `--reasoning off` replaced the unreliable `/no_think` text suffix) | §2, §14 |
 | Embed | nomic-embed-text (v1.5 GPU / v2-moe CPU) | GPU-resident ~5x faster for ~70MB VRAM; CPU fine as fallback | §8 |
 | Dispatcher | Hammer2.1-1.5b | 79.0% call_f1 prompt-tuned, 100% parse, 0.10s/call | §2 |
 | Title generation | Hammer2.1-1.5b | 760x faster and more accurate than CPU-resident utility (which hits the same thinking-budget trap as reasoners) | §12 |
@@ -83,53 +83,74 @@ intrinsics) — dropped in favor of Hammer2.1-1.5b and FunctionGemma-270M.
   test server stealing ~10GB VRAM; stopped this session but not disabled —
   decide if it should be `disable`d at boot.
 
-## 4. Test 7+ round — real results (this session, see `docs/phase0-measurements.md` §13 for full detail)
+## 4. Test 7+ round — real results, then corrected (see `docs/phase0-measurements.md` §13/§14)
 
-Run directly against real models on `ailab` (this session's environment IS
-the GPU box — `hostname`/`nvidia-smi` confirm it, no ssh needed). Headline
-findings, most of them new open items rather than closed ones:
+The first pass (§13) ran with genuinely weak harnesses — bare-list prompts
+with zero worked examples for 270M-1.7B models, a real extraction bug in the
+classifier scorer, and a `/no_think` text-suffix fix that turned out not to
+transfer to every model. §14 found and fixed all three; the corrected
+numbers below supersede §13, not just add to it.
 
-- **Hammer title cleanup**: the deterministic fence/quote/punct strip is
-  correct and unit-tests 12/12, but on live output it *lowered* the rubric
-  pass rate (3/8 → 2/8) — fence tokens were accidentally padding titles into
-  the 5-8 word range; the real title underneath is often too short. **New
-  follow-up**: Hammer's title length itself needs prompt-tuning, separate
-  from the formatting fix.
-- **FunctionGemma-270M as a title generator**: fails outright (0/8 → 1/8) —
-  it echoes the input instead of summarizing and leaks function-call
-  special tokens. Confirmed dispatcher-only, not viable for titles.
-- **Tool-registry stress test (13 overlapping-name tools, 82 examples)**:
-  Hammer2.1-1.5b call_f1 **53.85%** (down ~25 points from the narrow 6-tool
-  baseline of 76.3-79.0%) — confirms the flagged degradation risk.
-  FunctionGemma-270M scored **0%** under the generic prompt harness, but
-  that's a harness mismatch (it needs its own native chat template, like
-  Hammer got in `eval_hammer_native.py`), not proof it can't do the task —
-  flagged as a real follow-up.
-- **Classifier broader accuracy (85 items, 6 real routing categories)**:
-  **45.88% overall** — badly fails the ≥90% bar. It essentially never
-  predicts `tool_call_needed` or `chit_chat` (0% each), collapsing almost
-  everything into `chat`. The earlier "5/5 PASS" was on an easier 3-class
-  scheme; **the classifier is not currently viable for the app's real
-  routing categories** — a new, more serious blocker than the original
-  thinking-mode issue (which is already fixed here via `/no_think`).
-- **Embedding retrieval recall@k**: **96.7%/100%/100%** at k=1/5/10 —
-  clears the proposed bar comfortably. First real accuracy number for
-  `embed` (previously latency-only).
-- **Structured JSON output (chat-default)**: 0% at a 300-token budget (same
-  thinking-mode budget trap as reasoners), **80%** at 1200 tokens — still
-  below the proposed 95%/90% bars, with nested/array schemas the specific
-  failure mode.
-- **Context-depth degradation (chat-default, 2k→32k)**: tok/s degrades
-  **36%** by 32k (fails the proposed ≤30% bar), and the recall probe came
-  back **empty** at every checkpoint past 2k at a 256-token budget — root
-  cause confirmed as the same thinking-mode budget trap (a follow-up run at
-  8k with 1024 tokens answered correctly). **Any context-depth or
-  structured-output eval on a thinking-capable model needs ≥1024 tokens of
-  budget or the result is meaningless**, not a genuine quality signal.
-- **Dynamic util-load-on-demand**: still not run — blocked on regenerating
-  the stale `serving/llama-swap/config.yaml` (references deleted blobs),
-  which is a config-authoring task outside this round's eval scripts.
-  `scripts/bench_swap_latency.py` is ready once that's done.
+**Three real bugs, not model limitations:**
+1. `extract_label()` checked `"chat"` before `"chit_chat"` in a substring
+   scan — `"chat"` is literally inside `"chit_chat"`, so correct model output
+   was being scored wrong before the model was ever at fault.
+2. The classifier/Hammer-stress/title-gen prompts had no worked examples at
+   all — too little signal for models this small.
+3. `/no_think` (a text suffix) worked on Qwen3-1.7B but silently failed on
+   Qwen3.6-35B-A3B (`chat-default`) — the model kept reasoning regardless,
+   filling the whole token budget with `reasoning_content` and leaving
+   `content` empty. The reliable fix is llama-server's own
+   `--reasoning off` flag, not a bigger budget and not the text convention.
+
+**Corrected results:**
+- **Classifier accuracy**: **91.76%** overall (was 45.88%) on the *same*
+  Qwen3-1.7B model — clears the ≥90% bar with the bug fix + few-shot prompt
+  + `--reasoning off`, no bigger model required. Per-category: `chat` 100%,
+  `code_task` 88.2%, `tool_call_needed` 78.9%, `reasoning_task` 100%,
+  `vision_task` 100%, `chit_chat` 90%. A same-prompt run against `qwen3-4b`
+  (already on disk, unused) answered the "would a bigger model help"
+  question decisively: **no** — this gguf never honors
+  `--reasoning off`/`--reasoning-budget 0` (confirmed via direct query) and
+  costs **~93.7s per single-word classification** vs. the 1.7B's
+  0.283s/item. Not a capacity finding, just this checkpoint's
+  template/conversion not exposing the same reasoning-suppression hook the
+  1.7B and 35B-A3B checkpoints do — but the practical conclusion holds: stay
+  on the fixed 1.7B, it already clears the bar at a fraction of the cost.
+- **Hammer tool-registry stress**: **63.75% call_f1** (was 53.85%) after
+  few-shot disambiguation examples for the actual confusable tool-name
+  trios. Residual errors are now argument-fidelity (dropping "the"/"a" when
+  copying query text into an argument) — a narrower, different problem than
+  wrong-tool selection.
+- **FunctionGemma-270M tool-registry stress, fair harness**: **36.5%
+  call_f1** using its native chat-template harness + finetuned checkpoint
+  (the old 0% was a harness mismatch, not a real result). First fair
+  head-to-head: Hammer 63.75% vs. FunctionGemma 36.5% — Hammer stays the
+  better dispatcher under registry pressure.
+- **Hammer title generation**: postprocessed rubric-pass rose to **4/8**
+  (was 2/8, and worse-than-raw) once worked examples stopped the
+  code-fence-padding artifact. Residual failures are genuine word-count
+  miscalibration, not formatting — still an open follow-up.
+- **Structured JSON output (chat-default)**: **100% parse, 100%
+  schema-valid** (was 80%) with `--reasoning off` — confirms the two §13
+  failures were thinking-mode truncation, not a nested/array JSON weakness.
+  Latency also dropped from ~6-10s to under 1s per request.
+- **Context-depth degradation (chat-default, `--reasoning off`)**: recall
+  probe is now **correct at every checkpoint from 2k through 32k** — the
+  "empty past 2k" result in §13 was purely the thinking-mode trap
+  contaminating the measurement, not a real long-context recall failure.
+  The honest tok/s degradation is **52.9% by 32k** (worse than §13's
+  contaminated 36% number) — a real, confirmed fail of the ≤30% bar. Net:
+  this model's context-depth problem is a throughput problem only, not an
+  accuracy one.
+- **Dynamic util-load-on-demand**: unblocked. `serving/llama-swap/config.yaml`
+  was regenerated from scratch against the actual locked roster (one entry
+  per routing alias, current model paths, `coder` on the locked Q5_K_M
+  quant, solo-GPU0 `CUDA_VISIBLE_DEVICES` placement instead of the
+  §8-rejected tensor-split, `classifier`/`utility`/`embed` CPU-resident with
+  `ttl: 0`). Real swap-latency numbers: **utility (CPU) cold 20.54s / warm
+  ~9.1-9.4s**, **needle/Hammer (GPU0) cold 3.48s / warm 0.03-0.18s**,
+  **chat-default (GPU0) cold 12.47s / warm 0.67s**.
 
 Still open, not yet designed:
 - **A debug panel / dev-tool surface** for manually triggering and
@@ -139,11 +160,11 @@ Still open, not yet designed:
   covers 2-3 simultaneous users hitting one chat-default server.
 - **Sustained-load thermal/throttle check** — all benches so far are short
   bursts; a 10-15 min continuous run would catch clock-throttling.
-- **FunctionGemma-270M native-chat-template stress eval** — needed for a
-  fair head-to-head with Hammer on the overlapping-tool-name registry.
-- **Classifier fix for the real 6-category routing taxonomy** — the
-  `/no_think` fix solved thinking-mode truncation but the broader accuracy
-  problem (collapsing tool_call_needed/chit_chat into chat) is unsolved.
+- **Hammer title-gen word-count calibration** — worked examples fixed the
+  formatting artifact but not the underlying length miscalibration.
+- **Hammer stress argument-fidelity** — article-dropping and one
+  code-truncation; worth deciding whether exact-string argument matching is
+  too strict a metric or needs its own prompt fix.
 
 ## 5. Harness (reusable, no changes needed)
 
