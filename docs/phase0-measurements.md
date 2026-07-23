@@ -127,318 +127,9 @@ adopted default per the original quant-comparison decision (Q5 already
 clears the ≥100 tok/s bar with headroom, Q6 offers marginal quality gain
 for +3GB VRAM and an unusable `llama-bench` throughput number).
 
-### needle — local finetune experiment on this app's real tools
+### Needle / Cactus — dropped
 
-Per PLAN.md §4.7 ("once our tool registry stabilizes, fine-tune Needle on our
-exact schemas, adopt only if it beats untuned baseline"): the tool registry
-isn't stabilized yet (Phase 3 work), so this is an early/shallow rehearsal of
-that pipeline against `docs/FEATURES.md` F9's real tool set (`web_search`,
-`fetch_url`, `file_read`, `file_grep`, `run_code`, `memory_save`), not the
-real Phase-3 finetune.
-
-**Data:** `scripts/needle_training/gen_training_data.py` generated 250
-synthetic examples (~41-45/tool) programmatically — no Gemini API key needed
-(that's only needle's own `needle generate-data` auto-synthesis path; the
-`needle finetune <jsonl>` command just needs a JSONL file, no Gemini
-dependency at all — confirmed by reading `needle/training/finetune.py`,
-no `genai` import).
-
-**Base model accuracy on our real schemas** (60 held-out test examples,
-before any training): `call_f1=25.2%, exact_match=25.0%`. Per-tool: 9/10 on
-`fetch_url`, 4/10 on `memory_save`, 2/10 on `run_code`, **0/10 on
-`file_grep`, `file_read`, and `web_search`.** This is much worse than the
-15/15 correct result on the earlier 3-tool toy benchmark above — that
-benchmark used simple, single-argument tools; our 6-tool, mixed-argument-count
-registry is a harder selection problem, and validates the plan's finetune
-line directly.
-
-**Training:** ran on **GPU** (3090, free at the time) after the CPU run
-timed out — training itself compiles/steps far faster on GPU (full 3-epoch
-run incl. per-epoch eval in ~40s vs. CPU not finishing epoch 1 in 5 minutes).
-`needle.cli finetune` also silently dies in this environment (same
-stderr-fd-filter bug as the playground server) — bypassed with a direct
-launcher (`engine/needle/finetune.py`), same pattern as `serve.py`.
-
-Live validation metrics moved during training: Call F1 25.2% (base) → 35.6%
-(epoch 1) → 33.7% (epoch 2) → **42.0%** (epoch 3, best checkpoint saved).
-
-**Two more real bugs found and worked around, not by us but in `needle`'s own code:**
-1. `needle.ui.server._resolve_checkpoint()` *always* force-downloads from
-   HuggingFace regardless of a local file's existence ("to ensure
-   freshness") — breaks for any locally-finetuned checkpoint, since it was
-   never uploaded (checkpoint upload during training failed with HTTP 401,
-   no HF write credentials configured, itself expected/harmless). Patched
-   `engine/needle/serve.py` to load local files directly when they exist,
-   skip HF entirely.
-2. The finetune script's own final "test set" evaluation
-   (`FINETUNED_EVAL`) printed numbers byte-identical to `BASE_EVAL` —
-   initially looked like a checkpoint-serialization bug. Verified it
-   wasn't: the finetuned `.pkl` differs from base (different md5), and on
-   training-set queries the finetuned model gives genuinely different
-   output than base (2/5 exact-match check in
-   `scripts/needle_training/memorization_check.py`, including real deltas
-   like `"content":"my default branch name should be main"` →
-   `"content":"default branch name"`). **Root cause: not a bug** — 130
-   train examples at batch=64 packs into ~1 step/epoch, so 3 epochs is only
-   ~3 total gradient steps, nowhere near enough to shift greedy-decoded
-   behavior on *novel* phrasings (only enough to nudge outputs on
-   near-identical training-set queries). Exactly what the tool's own
-   built-in warning predicts ("need ≥120 examples/tool... too few will
-   overfit").
-
-**Verdict: inconclusive by design, not a failure.** The plan's own bar for
-adopting a finetune is "beats the untuned baseline" — we don't have a real
-verdict on that yet because 250 examples (~41/tool) is roughly a third of
-the tool's own recommended minimum (120/tool), so this run is far too small
-to draw a real "does finetuning help" conclusion — it *proves the pipeline
-end-to-end works on our real schemas* (data gen → train → eval → checkpoint
-→ serve, all bug-worked-around) but not that finetuning is worth adopting.
-Re-run for real with ≥120 examples/tool once the tool registry stabilizes
-(Phase 3), per the plan.
-
-\* Same GGUF file as chat-default-q4; throughput numbers are identical, only the real-request prompt (reasoning-style) differs.
-
-### Needle vs. small-Qwen dispatcher head-to-head (this session, the eval the earlier handoff flagged as "not yet run")
-
-`HANDOFF_phase0_benchmarks.md` flagged that needle's untuned/lightly-finetuned
-accuracy (25.2%/42.0% call_f1, above) had never been compared against a small
-Qwen model doing the same single-call-dispatch job, and that this eval should
-happen before picking one over the other. Built
-`scripts/needle_training/eval_llm_tool_calling.py`: same 60 held-out test
-examples from `scripts/needle_training/data.jsonl`, same call_f1/exact_match
-metric definition as needle's own `eval.py` (order-independent
-name+args-set comparison, normalized values), run against small Qwen models
-served over `llama-server` with a plain system-prompt-JSON-array dispatcher
-prompt (temp=0). Raw per-query results: `logs/benchmarks/server/tool-eval-*.jsonl`.
-
-| Candidate | call_f1 | exact_match | JSON parse rate | avg latency/call | Notes |
-|---|---|---|---|---|---|
-| Needle 26M, untuned (own JAX ref runtime) | 25.2% | 25.0% | n/a | ~0.9-1.1s | 0/10 on `file_grep`/`file_read`/`web_search` — see above |
-| Needle 26M, rehearsal-finetuned (250 ex, ~41/tool) | 42.0%\* | — | n/a | ~0.9-1.1s | inconclusive — ~3 total gradient steps, see above |
-| **Qwen2.5-3B** (Q4, GPU, `qwen2.5-3b.gguf`) | **51.4%** | 46.7% | 81.7% | **0.12s** | best latency by far (~7-9x faster than needle's ref server); most misses are format slips (`["tool_name", {args}]` instead of `{"name":...,"arguments":...}`) or paraphrased-but-correct query strings scored as wrong under strict string match, not wrong-tool errors |
-| **Qwen3-4B** (Q4, GPU, `qwen3-4b.gguf`) | **63.4%** | 53.3% | 68.3% | 2.53s | best accuracy, but Qwen3's "thinking" mode could **not** be suppressed in this llama.cpp/GGUF setup — neither `/no_think` in the prompt nor `chat_template_kwargs.enable_thinking:false` stopped ~150-300 reasoning tokens/call before the JSON array; without a working thinking-off switch this candidate is not viable as a low-latency dispatcher despite the best raw accuracy |
-| **Hammer2.1-1.5b** (Q4_K_M, GPU, MadeAgents, `Hammer2.1-1.5b-Q4_K_M.gguf`) | **76.3%** | **75.0%** | **100%** | **0.10s** | new candidate from external research round 2 — beats every other candidate on every metric simultaneously: best accuracy (+13pp over Qwen3-4B), best latency (tied with Qwen2.5-3B), and the only candidate with a perfect JSON parse rate. Fine-tuned specifically for function-calling on the Qwen2.5-coder base; no thinking-mode issue since it's not a "thinking" model. **Current best dispatcher candidate overall.** |
-| Hammer2.1-1.5b, **prompt-tuned** (same weights/quant, harness system prompt adds one line: "copy string argument values VERBATIM from the user query, including leading words like 'the'/'a' — do not paraphrase, reword, or shorten them") | **79.0%** | **78.3%** | 100% | 0.10s | tried after inspecting `tool-eval-hammer2.1-1.5b.jsonl`: nearly all "WRONG" rows were correct tool + correct semantic args, just reworded query strings (e.g. `"the current price of Bitcoin"` → `"current price of Bitcoin"`) scored wrong under strict string match — a harness/prompt issue, not a model capability gap. The one added instruction line recovered part of that gap (+2.7pp call_f1, +3.3pp exact_match) at zero latency cost. Remaining misses: a handful of `web_search` query-string reword cases the instruction didn't fully fix, plus 2 genuine empty-prediction misses (`fetch_url`, `memory_save` on specific phrasings) that are real (if rare) failures, not scoring artifacts. **Current recommended config.** |
-| Hammer2.1-1.5b, **native chat template** (MadeAgents/Hammer2.1-1.5b's own `tokenizer_config.json` chat_template — ChatML with `[BEGIN/END OF AVAILABLE_TOOLS]`/`[BEGIN/END OF TASK INSTRUCTION]` wrapper blocks, rendered via `transformers.apply_chat_template(tools=...)`, sent to llama-server's raw `/completion` endpoint via `scripts/needle_training/eval_hammer_native.py`) | 70.2% | 66.7% | 100%\*\* | 0.10s | **worse than the tuned generic prompt, not better** — found and fixed one real bug along the way (the template renders the `AVAILABLE_TOOLS` block via Python `str()`, i.e. single-quoted dict repr, which taught the model to emit single-quoted "JSON" that fails strict `json.loads`; patched by swapping in `json.dumps(tools)` post-render, which took json_parse_rate from 0%→100%\*\*) but even after that fix, the native template still suffers the *same* verbatim-query-string paraphrasing weakness the generic-prompt fix targeted (`"the population of Vietnam"` → `"population of Vietnam"`, etc.), and its own format instructions don't include an anti-paraphrase directive. **Verdict: keep the prompt-tuned generic-harness config (79.0%/78.3%) as the adopted default** — Hammer's native template is not a hidden accuracy unlock, and bringing over its exact wrapper text would need its own anti-paraphrase line added on top, which is just the same fix already applied elsewhere. \*\*first native-template run (no JSON-dumps fix) scored 0% parse rate for this single-quote reason, not a capability gap — see script comment in `eval_hammer_native.py`. |
-| FunctionGemma-270M, zero-shot, **wrong prompt format** (Q8_0, GPU, `functiongemma-270m-it-Q8_0.gguf`, generic JSON-array harness prompt) | 0% | 0% | 0% | 0.12s | **not a real model score** — this harness's generic system-prompt-JSON-array format doesn't match what FunctionGemma expects. Root cause found: FunctionGemma's chat template (`unsloth/functiongemma-270m-it`'s `chat_template.jinja`) requires tools declared via literal `<start_function_declaration>` tokens and calls emitted as `<start_function_call>call:name{args}<end_function_call>`, not a JSON array in free text — feeding it the wrong format gets a polite refusal every time, not a real capability signal. Superseded by the native-template eval below. |
-| FunctionGemma-270M, zero-shot, **native chat template** (HF `unsloth/functiongemma-270m-it`, bf16, GPU, via `transformers.apply_chat_template(tools=...)`) | 22.2% | 20.0% | 80.0% | 0.45s | matches Google/Distil Labs' published 10-39% *base* accuracy range — confirms the 0% above was purely a prompt-format bug, not the model being unusable |
-| **FunctionGemma-270M, finetuned** on this app's own 190-example train split (bf16, GPU, `scripts/needle_training/finetune_functiongemma.py`, 6 epochs, lr 1e-4, full finetune, ~46s wall clock on one 3090) | **100%** | **100%** | **100%** | 0.39s | evaluated on the same last-60 held-out slice as everything else (never seen in training) — matches Distil Labs' reported 90-97% post-finetune range, actually exceeds it. **Caveat**: `data.jsonl` is template-generated (`gen_training_data.py`) with a limited set of phrasing templates per tool, ~42 examples/tool; a perfect held-out score here is a strong signal the finetune recipe works, but doesn't guarantee generalization to genuinely novel phrasings/tool schemas outside those templates — same caveat that applies to needle's own rehearsal-finetune result above. Real generalization check needs ≥120 examples/tool with more phrasing diversity, same "not done yet" gap noted for needle. Not yet converted to GGUF/benchmarked for tok/s — this run used the HF/transformers checkpoint directly, not llama.cpp. |
-
-\* needle's own finetune-eval metric (`needle/training/eval.py`), same
-underlying call_f1 definition, ran on the same held-out slice at the time.
-
-**Verdict, not yet the Phase-3 gate decision:** two strong new candidates
-this round, and the ranking is no longer clear-cut. **Hammer2.1-1.5b**
-zero-shot beats every Qwen candidate on every axis (accuracy, latency,
-parse rate) with no finetuning at all — the safer near-term pick.
-**FunctionGemma-270M, after a 46-second finetune on data we already had**,
-scores 100% on the held-out slice — a 6-8x smaller model matching or
-beating Hammer's accuracy, at the cost of (a) needing the finetune step
-(not zero-shot-ready), (b) a caveat that the training data's phrasing
-diversity is limited enough that 100% held-out may not fully predict
-real-world generalization, and (c) not yet being benchmarked as a GGUF for
-real tok/s/VRAM numbers (this round only tested the HF/transformers
-checkpoint). The small-Qwen framing from the first round still holds
-directionally (small purpose-built models beat needle's measured accuracy
-by wide margins on this app's real 6-tool registry). Per PLAN §4.7 this is
-still not final: re-run the top candidates (Hammer2.1-1.5b,
-FunctionGemma-270M-finetuned, Qwen2.5-3B) once the real tool registry
-stabilizes at the end of Phase 3 with a larger/more diverse training set,
-convert FunctionGemma's finetuned checkpoint to GGUF and get real
-llama.cpp latency/VRAM numbers, and pick then. Caveat: all candidates were
-prompted directly (full chat template + system prompt or native tool
-template), not run through needle's purpose-built single-shot architecture
-or Cactus's production wrapper — this is an apples-to-oranges "which is
-more practical to deploy today" comparison, not a controlled architecture
-comparison.
-
-**Artifacts from the FunctionGemma finetune** (for the Phase-3 re-run):
-training script `scripts/needle_training/finetune_functiongemma.py`, native
-tool-call-format eval `scripts/needle_training/eval_functiongemma.py`,
-finetuned checkpoint at
-`logs/benchmarks/functiongemma-finetuned/final/` (HF format, not yet
-GGUF-converted), raw per-query results in
-`logs/benchmarks/server/tool-eval-functiongemma-{base,finetuned}.jsonl`.
-
-### Cactus (production Needle runtime) — could not be locally benchmarked, architectural blocker found
-
-The point of the exercise above is that needle's measured 0.9-1.1s/call
-came from its own **unoptimized reference JAX playground server**
-(`needle.ui.server`), not Cactus's production C++ runtime (the
-~500-3000 tok/s / NPU-tuned numbers Cactus publishes). Tried to close that
-gap by installing [cactus-compute/cactus](https://github.com/cactus-compute/cactus)
-directly and running needle through it instead:
-
-1. Cloned to `/home/john/llm-stack/engine/cactus`; `source ./setup`
-   succeeded (Python 3.12 venv + `cactus` CLI installed clean).
-2. `cactus run Cactus-Compute/needle --tools <json>` — first real finding:
-   **Cactus's tool schema is nested OpenAI function-calling JSON**
-   (`{"type":"function","function":{"name":...,"parameters":{"type":"object","properties":{...}}}}`),
-   not needle's own flat `{argname: {type, description, required}}` format
-   we'd been feeding the JAX reference server. The production wrapper and
-   the reference implementation disagree on request shape — a real
-   integration detail for whoever eventually wires this in, not a bug on
-   our end.
-3. Build failed on a missing system package (`libcurl4-openssl-dev`) — the
-   user explicitly authorized `sudo apt-get install -y
-   libcurl4-openssl-dev` this session; installed clean.
-4. Build failed again, this time architecturally:
-   `cactus-kernels/CMakeLists.txt` (line 36) applies
-   `-march=armv8.2-a+fp16+simd+dotprod+i8mm` (ARM NEON) **unconditionally,
-   with no x86_64 branch at all** — confirmed by reading the CMake source
-   directly, not just the compiler error. This box is a Ryzen 9 (x86_64).
-   **Cactus's current kernel library cannot build on x86_64 at all**, on
-   this box or any other Linux desktop/server — its own "Linux
-   (Ubuntu/Debian)" setup instructions in the README are for ARM Linux
-   targets (Android/embedded/Raspberry Pi-class hardware), not x86_64,
-   despite reading as general Linux support.
-5. **Confirmed this is not a flag/config problem — it's a hard source-level
-   lock.** Checked whether patching `-march=` alone would fix it: 13 of the
-   16 kernel source files (`cactus-kernels/src/*.cpp` — `matmul.cpp`,
-   `attention.cpp`, `attention_hybrid.cpp`, `blas.cpp`, `conv.cpp`,
-   `conv2d.cpp`, `fused.cpp`, `lstm.cpp`, `nn.cpp`, `scalar.cpp`, etc.)
-   directly `#include <arm_neon.h>` and call ARM NEON intrinsics
-   (`vld1q_*`, `vfmaq_*`, ...) in the function bodies themselves. `arm_neon.h`
-   doesn't exist on x86_64 and there is no AVX2/SSE fallback path anywhere
-   in the codebase (checked `python/cactus/cli/compile.py` and every
-   CMakeLists.txt for a `CMAKE_SYSTEM_PROCESSOR`/generic-backend branch —
-   none exists). Making this run on x86_64 would mean rewriting the SIMD
-   kernels, not passing a different compiler flag — genuinely out of scope,
-   not a "try harder" problem.
-6. **Consequence:** Cactus's production runtime cannot be benchmarked on
-   this hardware, full stop, short of an ARM device (Raspberry Pi, Apple
-   Silicon, an Android/iOS phone) or a from-scratch x86 SIMD port of the
-   kernels. Its accuracy ceiling would be identical to what we measured
-   (same `needle.pkl` weights) — only latency was ever in question, and
-   that stays permanently unverified on this box. Cactus's own published
-   numbers (Apple Silicon M3-M5, iPhone NPU) aren't a fair substitute.
-   **The 0.9-1.1s JAX-reference-runtime number is the only latency data
-   this hardware will ever produce for needle** — treat it as the real
-   number for the Phase-3 decision on this box, not as a placeholder
-   waiting to be replaced by a faster Cactus measurement.
-
-### Needle finetuning/schema-gap external research (Perplexity, follow-up to `docs/perplexity_needle_research_prompt.txt`)
-
-The queued research prompt came back. Summary of what it found, folded in
-per the earlier handoff's instruction to reconsider the "small Qwen wins"
-verdict above if new evidence changed the picture — **it doesn't change
-the verdict, it corroborates it**:
-
-- **No published, validated finetuning recipe exists anywhere** — not from
-  Cactus, not from independent testers. The only guidance is the README's
-  "≥120 examples/tool" minimum; no one has published epoch count, learning
-  rate, batch size, or a schema-shape ablation that beats those defaults.
-  Our own 250-example/~41-per-tool rehearsal (42% call_f1, inconclusive
-  per above) is consistent with under-shooting that bar, not evidence the
-  approach is broken.
-- **Independent HN testers hit the same failure classes we did**, on
-  Cactus's own demo toolset (not just our schema): argument-composition
-  errors on chained/compounding requests (two sequential timer requests
-  merged or duplicated instead of summed), hallucinated data on multi-tool
-  chains (fabricating an email body instead of inserting a real
-  tool-returned value), and semantic misrouting on ambiguous phrasing
-  ("git add commit and push" → routed to a `create_note` tool). This is
-  the same class of problem as our 0/10 on `file_grep`/`file_read`/
-  `web_search` — corroboration that these are known, unresolved gaps in
-  Needle generally, not something specific to our 6-tool registry or a
-  sign we mis-specified something.
-- **A live finetuning-tooling gap**: an open, unmerged Cactus PR
-  ("Finetune on these tools button using LoRA adapters", #22) indicates
-  the finetuning pipeline itself is still under active development
-  upstream, not a mature community-validated workflow — consistent with
-  the CLI bugs we found and worked around ourselves (force-redownloading
-  checkpoints, `needle.cli` silently dying).
-- **No independent x86 latency benchmark exists for Needle at all** —
-  every published number is Apple Silicon/mobile-NPU. One HN user reported
-  unexplained CPU errors running Needle even inside an unprivileged Linux
-  container, un-root-caused in-thread — a second independent data point
-  (beyond our own hard NEON-only build-lock finding above) that Needle's
-  production runtime is fragile or unsupported off ARM, not just slow.
-- **The one relevant rigorous academic comparison** (arXiv 2512.15943)
-  isn't Needle-specific: a finetuned OPT-350M (20x Needle's params, has
-  MLPs) hit 77.55% pass rate on ToolBench vs 26-30% for prompted
-  ChatGPT/ToolLLaMA/Claude baselines. This supports the general principle
-  "targeted finetuning beats prompting a bigger general model" — which is
-  actually a point *in favor* of eventually finetuning something for this
-  role — but it doesn't validate Needle's specific MLP-free 26M
-  architecture, and the paper's regime (187k examples, 1 epoch, a
-  20x-larger conventional transformer) is different enough from Needle's
-  design that it can't be read as "Needle would work fine with more data."
-  If anything it suggests Needle's reduced representational capacity
-  (no FFN, attention-only) may need *proportionally more* per-tool
-  examples than a normal transformer to hit comparable accuracy — an
-  ablation nobody has published.
-
-**Net effect on the Phase-3 decision:** no new evidence surfaced that
-would flip today's verdict (small Qwen candidates beat needle's measured
-accuracy by 2-2.5x at a fraction of the latency — see head-to-head above).
-The research confirms our findings are typical for Needle's current
-maturity level, not a sign we're holding it wrong. The path to actually
-resolving whether Needle could still win stays what the plan already
-says: run the real ≥120-examples/tool finetune (720 total, not our 250)
-once the tool registry stabilizes at the end of Phase 3, and re-run this
-same eval harness — nobody, including Cactus's own team, has validated
-anything beyond that minimum bar, so it's the only next step anyone has
-actually confirmed is worth trying.
-
-### Needle/Cactus alternatives — external research round 2 (Perplexity, 2026-07-22)
-
-A second, differently-scoped Perplexity query (not the same prompt as
-`docs/perplexity_needle_research_prompt.txt` above — that one was about
-Needle specifically; this one asked for documented small tool-calling-model
-*alternatives* generally) came back with named candidates and two
-methodologically-transparent community benchmarks, rather than more detail
-on Needle itself:
-
-- **Two independent community benchmarks rank small instruction-tuned
-  models well above Needle-class dispatcher accuracy**: a 21-model
-  "judgment" benchmark (measures *whether* a model correctly decides to
-  call a tool, not just call-format accuracy) found four models tied at
-  the top with a 0.880 Agent Score — `lfm2.5:1.2b` (fastest, 1.5s),
-  `qwen3:0.6b`, `qwen3:4b`, `phi4-mini:3.8b`. A separate 13-model LM Studio
-  benchmark (March 2026) found `Qwen3.5-4B` at 97.5% tool-calling accuracy,
-  beating models 5x its size.
-- **A direct Needle-vs-Qwen3-0.6B head-to-head exists** (Reddit,
-  r/LocalLLaMA): 50 queries across 5 difficulty tiers on CPU. **Needle won
-  on both accuracy and speed (4.4x faster)** for single-shot dispatch
-  against a small, fixed tool set — consistent with our own numbers. The
-  poster's framing matches what we found: "Needle functions as a
-  dispatcher, while Qwen3 operates more like a small chatbot with
-  tool-calling capabilities" — i.e. Needle's edge is real on narrow,
-  low-ambiguity toolsets and shrinks as schema complexity (multi-arg,
-  regex/pattern-string arguments, semantically overlapping tool names)
-  rises, which is exactly the shape of our own 0/10 results on
-  `file_grep`/`file_read`/`web_search`.
-- **Two named candidates worth tracking if a small-Qwen fallback is ever
-  chosen over Needle, not because they beat Needle on narrow toolsets, but
-  because they have real documented finetuning/evaluation paths that
-  Needle itself still lacks:**
-  - **FunctionGemma 270M** (Google) — closest size/purpose analog to
-    Needle, with an actual published before/after finetune case study:
-    10-39% base accuracy on multi-turn tool calling → **90-97%** after a
-    Distil Labs knowledge-distillation finetune from a 120B teacher. This
-    is the kind of reproducible recipe Needle's own docs don't have (only
-    the "≥120 examples/tool" minimum, no epoch/LR/batch-size guidance, per
-    round-1 research above).
-  - **Hammer** (MadeAgents) — ICLR 2025 Spotlight, open-source, 1.5B-7B,
-    built specifically for on-device function calling. Ships **HammerBench**,
-    a dedicated eval suite, and published techniques (function masking,
-    augmented irrelevant-function-rejection data) aimed directly at the
-    semantic-overlap/ambiguous-tool-name failure class we hit.
-  - (Not pursued: `Qwen3-0.6B`/`LFM2.5-1.2B` win mainly on ecosystem
-    maturity and native `tool_call` format support, not on hard-schema
-    accuracy — same category as the Qwen2.5-3B/Qwen3-4B candidates already
-    tested locally above, not a new signal.)
-
-**Net effect: still no change to the Phase-3 gate decision.** This
-research adds named alternatives to try *if* the small-Qwen fallback path
-is taken, and independent confirmation (via the Reddit head-to-head) that
-Needle's real strength is narrow/fixed toolsets, not this app's
-multi-arg/CLI-flavored 6-tool registry. It does not change the plan's own
-next step: re-run the real ≥120-examples/tool Needle finetune once the
-tool registry stabilizes, and compare against the small-Qwen dispatcher
-candidates (adding FunctionGemma 270M and/or Hammer to that comparison if
-Needle's real finetune still underperforms).
+Needle 26M (Cactus) failed on both latency (~0.9-1.1s/call vs. a 50ms bar, unoptimized JAX reference server) and, after finetuning, generalization (100% held-out score came from a limited-template training set, not proven novel-phrasing robustness); Cactus's production C++/ONNX runtime that would fix the latency can't even build on this x86_64 box (hard-locked to ARM NEON intrinsics). **Verdict: dropped — Hammer2.1-1.5b and FunctionGemma-270M are the adopted dispatcher candidates instead** (see §2 test matrix and §10).
 
 ## 5. CPU-resident placement decision (Config A vs B)
 
@@ -587,25 +278,22 @@ Coder quality eval ran only against the already-adopted Q5_K_M quant (Phase-0
 so re-running Q4/Q6 head-to-head wasn't worth the GPU time this round).
 
 **Reasoner A (DeepSeek-R1-Distill-Qwen-32B) vs B (Qwen3.6-35B-A3B, thinking
-mode)** — 7 multi-step/logic prompts, `max_tokens=1024`:
+mode)** — 7 multi-step/logic prompts. **Correction:** an initial pass at
+`max_tokens=1024` badly under-budgeted these two 32B-class models sitting
+mostly alone on the 3090 — B blew its budget mid-`<think>` on 5/7 prompts
+and returned nothing. Re-run at `max_tokens=4096` (the real, useful number):
 
 | | A: DeepSeek-R1-32B | B: Qwen3.6-35B-A3B thinking |
 |---|---|---|
-| Correct final answers | 7/7 | 2/7 (r1, r6) |
-| Truncated before answer (thinking ate the budget) | 1/7 (r3) | 5/7 |
-| Latency when it does finish | 7-24s | 6-13s |
-| Answer quality when present | All correct, well-explained (r5 probability, r7 multi-rate work problem both right) | Correct and crisper prose when present (r1, r6) |
+| Correct final answers | 7/7 | 7/7 |
+| Latency | 4.2-59.9s (avg ~21s) | 8.9-52.2s (avg ~27s) |
+| Tokens used | 183-2615 | 688-4096 (r3 hit the cap but still landed on the correct answer before running out) |
 
-**Finding: this is the single most important result of Test 4.** Reasoner B's
-thinking traces are markedly more verbose per problem and, at a normal
-1024-token budget, blow through it and emit **zero final answer** on 5 of 7
-prompts (r2, r3, r4, r5, r7) — the harness even has a `truncated_before_answer`
-flag for exactly this failure mode. Reasoner A finishes reliably at the same
-budget (misses only the hardest logic-puzzle prompt, r3). **Verdict: Reasoner
-A (DeepSeek-R1-Distill-Qwen-32B) is the safer pick for any interactive or
-tool-mediated path** — it needs a much smaller `max_tokens` safety margin.
-If Reasoner B is kept for any use case, it needs a materially larger
-`max_tokens` (2048+) budgeted in, not the same allowance as A.
+**Both reasoners get every reasoning prompt right once given a real token
+budget.** The earlier 1024-token result was a harness bug, not a model
+quality finding — retracted. At a proper budget the two are close on
+correctness; A is slightly more token-efficient, B is comparably fast.
+Neither is a clear reasoning-quality winner off this set alone.
 
 **Vision A (Qwen3-VL-32B) vs B (Gemma-3-27b-it)** — 6 prompts (shape
 counting, spatial relation, OCR text-read, chart read x2):
@@ -630,29 +318,33 @@ fallback if Qwen3-VL's extra VRAM/latency cost matters elsewhere.
 2. *Debug-diagnosis prompts* (missing library, off-by-one, dependency
    version mismatch, race condition, a trick "silent bug" prompt that's
    actually a SyntaxError, a real Flask 2.0 API-removal stack trace) — run
-   against the coder model **and** both reasoners for comparison:
+   against the coder model at 768 tokens (never truncated, no re-run
+   needed) and both reasoners, re-run at 4096 tokens:
 
 | | Coder Q5 (30B-A3B) | Reasoner A | Reasoner B |
 |---|---|---|---|
-| Correct diagnosis | 6/6 | 2/6 (d1, d4) | 1/6 (d1) |
-| Truncated before answer | 0/6 | 4/6 | 5/6 |
+| Correct diagnosis | 6/6 | 3/6 (d1, d2, d4) | 5/6 (d1, d2, d3, d4, d6) |
+| Wrong/hallucinated fix | 0/6 | 2/6 (d3: recommended `np.float` as a working alias, which is itself removed in modern numpy; d6: hallucinated `from flask import flask` — not valid syntax) | 0/6 |
+| Missed the "trick" (d5, an actual SyntaxError disguised as a runtime bug) | caught it correctly | ran out of budget before answering (empty) | answered fluently but didn't catch the trick — treated it as a legitimate runtime bug |
 
-The coder model correctly diagnosed all six, including catching that d5's
-premise was actually impossible (`n % 2 = 0` is a `SyntaxError`, not a
-silent-bug scenario) rather than inventing a plausible-sounding runtime
-explanation — the one prompt specifically designed to catch hallucinated
-diagnoses. **Verdict: Qwen3-Coder-30B-A3B Q5_K_M is confirmed for both
-codegen and debug-diagnosis duty**; reasoners are not a good substitute for
-debugging tasks at a normal token budget — same thinking-budget-truncation
-issue as above, compounding the case for keeping reasoner and coder as
-separate routed roles rather than merging them.
+At a real token budget, the debug-diagnosis picture **flips from the
+budget-choked first pass**: Reasoner B is now clearly more reliable than
+Reasoner A on this set (5/6 vs 3/6), with A producing two confidently wrong
+fixes rather than admitting uncertainty. Neither reasoner caught the d5
+trick prompt. **Verdict: Qwen3-Coder-30B-A3B Q5_K_M remains the right pick
+for debug-diagnosis duty** (6/6, including the one reasoner-model both
+missed) — reasoners are usable in a pinch but noticeably less reliable on
+code-specific debugging than the dedicated coder model, and given a real
+budget they no longer fail by going silent, they fail by being *confidently
+wrong*, which is arguably worse in production. This reinforces keeping
+reasoner and coder as separate routed roles.
 
-**Cross-cutting finding:** both thinking-mode models (Reasoner B always,
-Reasoner A sometimes on harder prompts) are at real risk of silently
-returning an empty final answer under a "normal" 512-1024 token budget once
-a task pushes past simple arithmetic into multi-step or open-ended
-reasoning. Any production routing to a thinking-mode model should either
-budget 2048+ `max_tokens` or detect-and-retry on `truncated_before_answer`.
+**Budget lesson (kept for the record):** the original 1024-token pass on
+this same prompt set produced misleading results (reasoner A "won" 2/6 vs
+B's 1/6) purely because of which model happened to fit its answer in the
+smaller budget — not a real quality signal. Any eval of a thinking-mode
+model must give it a token budget large enough to actually finish before
+drawing a quality conclusion; 4096 was sufficient here for both.
 
 ## 10. FunctionGemma-270M full finetune + GGUF (Phase-0.5, Test 5)
 
@@ -753,6 +445,29 @@ Hammer is comfortable but not enormous, and should be re-checked before
 adding anything else GPU-resident on GPU0 (e.g. if any future coder/reasoner
 context target increases past 32k).
 
+## 12. Title generation — Hammer2.1-1.5b (GPU) vs utility/Qwen3-8B (CPU)
+
+8-exchange fixture (`scripts/eval_data/title_gen_prompts.json`), automatic
+rubric scoring (`scripts/eval_title_gen.py`: 5-8 words, no wrapping quotes,
+no trailing punctuation — mechanically checkable, no Claude judging needed):
+
+| | Hammer2.1-1.5b (GPU) | utility/Qwen3-8B (CPU) |
+|---|---|---|
+| Rubric pass | 4/8 | 1/8 (at 256 tokens; 0/8 at 32 tokens — see below) |
+| Avg latency | 0.057s | 43.5s (256-token budget) |
+
+**Utility on CPU hits the same thinking-mode budget trap as the reasoners**:
+at a normal 32-token title budget it burned the entire allowance on
+`<think>` and returned nothing on all 8 prompts; even given 256 tokens it
+still only produced a title 5/8 times, mostly still in the thinking phase.
+**Verdict: Hammer2.1-1.5b wins decisively on both speed (~760x faster) and
+accuracy** — confirmed as the right choice for title generation, not just
+tool dispatch. (Rubric note: several Hammer misses were markdown code-fence
+wrapping — e.g. `` ```Reset SQLite Migration State``` `` — which the
+automated word-counter doesn't strip; treat those as formatting cruft
+equivalent to quote-wrapping, fixable the same cheap way as the earlier
+quote-stripping fix, not a real accuracy miss.)
+
 ## 7. Deliverable checklist
 
 - [x] sqlite-vec verdict recorded (§6)
@@ -764,9 +479,9 @@ context target increases past 32k).
 - [x] Classifier (`Qwen3-1.7B-Q8_0`) — **PASS** after fix: appending a literal `/no_think` line to the prompt suppresses thinking mode (0.11-0.14s/call, 5/5 correct); did not need a chat-template change, just the harness prompt
 - [x] Embed-B (`nomic-embed-text-v2-moe`) — **PASS**, 11.7-23.5ms/call
 - [x] Coder Q6_K re-download — corrupted blob deleted and re-fetched (remote size matched local exactly, so it was mid-stream bit corruption, not truncation); re-benched, real PASS on server numbers (see §2 note)
-- [x] New dispatcher candidates (Hammer2.1-1.5b, FunctionGemma-270M) — **Hammer2.1-1.5b PASS zero-shot** (76.3% call_f1, 100% parse rate, 0.10s/call, beats Qwen3-4B and Qwen2.5-3B on every metric, no finetuning needed); **FunctionGemma-270M initially scored 0% zero-shot** due to a harness prompt-format mismatch (fixed: true zero-shot is 22.2%, matching Google's published range), then **100% after a 46s finetune** on the existing `data.jsonl` — strong result but with a training-data-diversity caveat (see §3 verdict), and not yet GGUF-converted/benchmarked for real tok/s
+- [x] New dispatcher candidates (Hammer2.1-1.5b, FunctionGemma-270M) — **Hammer2.1-1.5b adopted** (79.0% call_f1 prompt-tuned, 100% parse rate, 0.10s/call); **FunctionGemma-270M full-250 finetune + GGUF done (§10)**: 88.3% call_f1 on a fresh holdout, real llama.cpp numbers now exist — credible cheap secondary, not adopted as primary
 - [ ] Swap latencies (§4) — not yet scripted, needs llama-swap regenerated + running, follow-up after roster locked
-- [x] Needle — benchmarked via own runtime; correctness good (schema-format bug fixed), latency far over plan's 50ms bar but not comparable to Cactus's actual production runtime (different implementation entirely); external research (2 rounds) folded in, verdict unchanged
+- [x] Needle/Cactus — dropped (§2 note, "Needle / Cactus — dropped")
 - [x] Concurrent-loading VRAM/throughput tests (§8, Phase-0.5 Tests 1-3) — big model + embed, + utility, and real-world CPU-vs-GPU utility placement all measured under genuine concurrent load; methodology bug found and fixed (tensor-split-vs-CUDA_VISIBLE_DEVICES)
 - [x] Reasoner A/B and Vision A/B quality eval (§9, Phase-0.5 Test 4) — **locked: Reasoner A, Vision A** (see §1 table); coder Q5_K_M debug-diagnosis and compile/run confirmed
 - [x] FunctionGemma-270M full-250 finetune + GGUF conversion (§10, Phase-0.5 Test 5) — 88.3% call_f1 on a fresh holdout, real llama.cpp tok/s/VRAM numbers now exist for head-to-head comparison with Hammer; not adopted as primary this round

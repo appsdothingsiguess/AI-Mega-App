@@ -1,0 +1,10 @@
+[
+  {"id": "t1", "exchange": "User: How do I reset my forgotten sqlite migration state?\nAssistant: Delete the migrations table and re-run init, or manually mark migrations as applied if you don't want to lose data."},
+  {"id": "t2", "exchange": "User: What's the difference between Qdrant and sqlite-vec?\nAssistant: Qdrant is a dedicated vector database with better scaling for large collections; sqlite-vec is an embedded extension simpler to deploy but slower at scale."},
+  {"id": "t3", "exchange": "User: My coder model timed out on a long file, what's going on?\nAssistant: Likely the context window was exceeded — try chunking the file or increasing --ctx-size on the server."},
+  {"id": "t4", "exchange": "User: Which vision model should I use for reading screenshots with dense text?\nAssistant: Qwen3-VL-32B tends to handle small text and dense layouts better than Gemma-3-27b-it in our testing."},
+  {"id": "t5", "exchange": "User: Can you help me write a Python decorator for retrying failed API calls?\nAssistant: Sure — here's a simple exponential-backoff retry decorator using functools.wraps and time.sleep."},
+  {"id": "t6", "exchange": "User: Why does my Docker container keep restarting?\nAssistant: Check `docker logs` for the exit reason — most likely an unhandled exception on startup or a missing environment variable."},
+  {"id": "t7", "exchange": "User: What's a good strategy for testing flaky async code?\nAssistant: Use deterministic fakes for time/IO instead of real sleeps, and run the suite multiple times in CI to catch intermittent failures early."},
+  {"id": "t8", "exchange": "User: Should I use JWT or session cookies for this app's auth?\nAssistant: Session cookies are simpler and safer by default for a server-rendered app; JWT makes more sense if you need stateless auth across multiple services."}
+]
