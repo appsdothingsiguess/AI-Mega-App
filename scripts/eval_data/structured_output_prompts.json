@@ -1,0 +1,124 @@
+[
+  {
+    "id": "s1_flat_object",
+    "prompt": "Return a JSON object describing a person with fields: name (string), age (integer), is_active (boolean). Use these example values: Priya, 34, true. Output only the JSON object.",
+    "json_schema": {
+      "type": "object",
+      "properties": {"name": {"type": "string"}, "age": {"type": "integer"}, "is_active": {"type": "boolean"}},
+      "required": ["name", "age", "is_active"]
+    }
+  },
+  {
+    "id": "s2_nested_object",
+    "prompt": "Return a JSON object with fields: title (string), author (object with name and email string fields). Use title 'Migration Plan', author name 'Priya', author email 'priya@example.com'. Output only the JSON object.",
+    "json_schema": {
+      "type": "object",
+      "properties": {
+        "title": {"type": "string"},
+        "author": {
+          "type": "object",
+          "properties": {"name": {"type": "string"}, "email": {"type": "string"}},
+          "required": ["name", "email"]
+        }
+      },
+      "required": ["title", "author"]
+    }
+  },
+  {
+    "id": "s3_array_of_objects",
+    "prompt": "Return a JSON object with one field `items`, an array of 3 objects each with `id` (integer) and `label` (string). Make up reasonable values. Output only the JSON object.",
+    "json_schema": {
+      "type": "object",
+      "properties": {
+        "items": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {"id": {"type": "integer"}, "label": {"type": "string"}},
+            "required": ["id", "label"]
+          }
+        }
+      },
+      "required": ["items"]
+    }
+  },
+  {
+    "id": "s4_enum_field",
+    "prompt": "Return a JSON object with a field `status` that must be exactly one of: pending, active, completed, failed. Use value 'active'. Output only the JSON object.",
+    "json_schema": {
+      "type": "object",
+      "properties": {"status": {"type": "string", "enum": ["pending", "active", "completed", "failed"]}},
+      "required": ["status"]
+    }
+  },
+  {
+    "id": "s5_optional_field",
+    "prompt": "Return a JSON object describing a task with required field `title` (string) and optional field `due_date` (string, omit if not applicable). Use title 'Regenerate llama-swap config' and no due date. Output only the JSON object.",
+    "json_schema": {
+      "type": "object",
+      "properties": {"title": {"type": "string"}, "due_date": {"type": "string"}},
+      "required": ["title"]
+    }
+  },
+  {
+    "id": "s6_numbers_and_floats",
+    "prompt": "Return a JSON object with fields: recall_at_5 (a float like 0.85), n_queries (an integer like 30). Output only the JSON object with these exact values.",
+    "json_schema": {
+      "type": "object",
+      "properties": {"recall_at_5": {"type": "number"}, "n_queries": {"type": "integer"}},
+      "required": ["recall_at_5", "n_queries"]
+    }
+  },
+  {
+    "id": "s7_schema_described_no_example",
+    "prompt": "A user says: 'set a reminder for 6pm to check the benchmark logs'. Extract this into a JSON object with fields `action` (string), `time` (string, 24h HH:MM format), and `note` (string). Output only the JSON object, no explanation.",
+    "json_schema": {
+      "type": "object",
+      "properties": {"action": {"type": "string"}, "time": {"type": "string"}, "note": {"type": "string"}},
+      "required": ["action", "time", "note"]
+    }
+  },
+  {
+    "id": "s8_deeply_nested",
+    "prompt": "Return a JSON object with field `roster` (object) containing `slot` (string, e.g. 'coder') and `candidates` (array of objects each with `name` string and `verdict` string). Use one slot 'coder' with two candidates: 'Qwen3-Coder-30B-A3B' verdict 'PASS', and 'Qwen2.5-Coder-7B' verdict 'PASS'. Output only the JSON object.",
+    "json_schema": {
+      "type": "object",
+      "properties": {
+        "roster": {
+          "type": "object",
+          "properties": {
+            "slot": {"type": "string"},
+            "candidates": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {"name": {"type": "string"}, "verdict": {"type": "string"}},
+                "required": ["name", "verdict"]
+              }
+            }
+          },
+          "required": ["slot", "candidates"]
+        }
+      },
+      "required": ["roster"]
+    }
+  },
+  {
+    "id": "s9_boolean_array",
+    "prompt": "Return a JSON object with field `checks` (array of exactly 4 booleans) representing pass/fail for 4 test cases, all true. Output only the JSON object.",
+    "json_schema": {
+      "type": "object",
+      "properties": {"checks": {"type": "array", "items": {"type": "boolean"}}},
+      "required": ["checks"]
+    }
+  },
+  {
+    "id": "s10_free_text_to_schema",
+    "prompt": "Given this sentence: 'The coder model hit 136 real-gen tok/s with 0.44s latency for 300 tokens.' Extract a JSON object with fields `model_class` (string), `tok_s` (number), `latency_s` (number). Output only the JSON object.",
+    "json_schema": {
+      "type": "object",
+      "properties": {"model_class": {"type": "string"}, "tok_s": {"type": "number"}, "latency_s": {"type": "number"}},
+      "required": ["model_class", "tok_s", "latency_s"]
+    }
+  }
+]

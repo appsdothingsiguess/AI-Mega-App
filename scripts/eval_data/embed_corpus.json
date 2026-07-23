@@ -1,0 +1,22 @@
+[
+  {"doc_id": "d1", "text": "sqlite-vec failed the Phase-0 gate at 100k vectors because brute-force KNN scan cost dominated, missing the 50ms p95 interactive-fast bar."},
+  {"doc_id": "d2", "text": "Qdrant was adopted as the vector store, reached through the VectorStore interface so it can be swapped later if needed."},
+  {"doc_id": "d3", "text": "The classifier is Qwen3-1.7B-Q8_0, running CPU-resident, and needed a literal '/no_think' suffix appended to the prompt to stop it from burning its whole token budget on internal reasoning."},
+  {"doc_id": "d4", "text": "Qwen3-Coder-30B-A3B at Q5_K_M is the adopted coder quant, clearing the >=100 tok/s bar with comfortable VRAM headroom in the 32GB pool."},
+  {"doc_id": "d5", "text": "The Q6_K coder blob was corrupted mid-download -- content-length matched but internal tensor bytes didn't -- and had to be re-fetched from scratch."},
+  {"doc_id": "d6", "text": "DeepSeek-R1-Distill-Qwen-32B and Qwen3.6-35B-A3B in thinking mode are both kept as reasoner candidates since neither is a clear overall winner."},
+  {"doc_id": "d7", "text": "Qwen3-VL-32B was chosen over Gemma-3-27b-it for the vision role after scoring 6/6 correct on object-counting versus Gemma's 5/6."},
+  {"doc_id": "d8", "text": "Hammer2.1-1.5b was adopted as the dispatcher over Cactus Needle 26M, which failed both the latency bar and, after finetuning, showed limited generalization."},
+  {"doc_id": "d9", "text": "utility (Qwen3-8B) stays CPU-resident per the Config B decision; GPU-resident placement would improve its own speed but would slow the dispatcher's tool-call latency by 5-7x due to shared GPU contention."},
+  {"doc_id": "d10", "text": "nomic-embed-text runs GPU-resident by default since it's roughly 5x faster than CPU for only about 70MB of extra VRAM, with a CPU fallback available."},
+  {"doc_id": "d11", "text": "Big models are pinned solely to GPU0 via CUDA_VISIBLE_DEVICES rather than a tensor-split spanning both GPUs, since the tensor-split form measured about 3x slower and structurally risks OOM on the second GPU."},
+  {"doc_id": "d12", "text": "FunctionGemma-270M scored 88.3% call_f1 on a fresh held-out set, beating Hammer's 79.0%, but its higher per-call latency kept Hammer as the primary dispatcher pick for now."},
+  {"doc_id": "d13", "text": "KV-cache quantization to Q8_0 only recovered about 250MB of VRAM at 32k context for the chat-default MoE model, since its GQA architecture already keeps the KV cache small."},
+  {"doc_id": "d14", "text": "The needle/Cactus dispatcher's production C++/ONNX runtime can't be built on this x86_64 box because it is hard-locked to ARM NEON intrinsics."},
+  {"doc_id": "d15", "text": "A stale llama-swap config still references granite4:3b entries pointing at a model blob that no longer exists on disk."},
+  {"doc_id": "d16", "text": "The reasoner debug-diagnosis eval found the dedicated coder model produced zero hallucinated fixes across six prompts, while both reasoner candidates produced at least one confidently wrong fix."},
+  {"doc_id": "d17", "text": "Hammer2.1-1.5b was also adopted for title generation, beating CPU-resident utility by roughly 760x on speed and by a wide margin on rubric accuracy."},
+  {"doc_id": "d18", "text": "Concurrent-loading tests found that pinning a big model solely to GPU0 is not just VRAM-safe but actually faster than the same model spread across both GPUs via tensor-split."},
+  {"doc_id": "d19", "text": "The vision quality eval used synthetically generated images with ground truth baked into filenames so answers could be checked without relying on pixel-level judgment."},
+  {"doc_id": "d20", "text": "A thinking-mode model must be given a large enough token budget, at least 4096 tokens in this harness's testing, before its answer quality can be judged fairly."}
+]

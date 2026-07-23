@@ -4,6 +4,44 @@ Full detail and raw numbers: `docs/phase0-measurements.md` (section numbers
 referenced below). This doc is the short version — one line per decision,
 no repeated reasoning.
 
+## 0. Glossary
+
+- **classifier** — Qwen3-1.7B, CPU-resident router that classifies each user turn's intent to decide downstream routing (needs the non-thinking-mode fix confirmed before use).
+- **utility** — Qwen3-8B Q4, background/non-streaming model for titles, summaries, compaction, memory review; tolerant of slow/CPU latency since nothing waits on it synchronously.
+- **embed** — nomic-embed (v1.5 GPU / v2-moe CPU), batched embedding model for retrieval/memory.
+- **dispatcher / needle** — originally scoped as Cactus-Needle-26M, in practice Hammer2.1-1.5b (with FunctionGemma-270M as a credible secondary candidate): a small, single-shot (never the full agent loop) tool-call dispatcher that picks a tool + arguments.
+- **chat-default** — Qwen3.6-35B-A3B (MoE), the always-warm general-chat model with native tool calling.
+- **coder** — Qwen3-Coder-30B-A3B (MoE); coder-small is Qwen2.5-Coder-7B, a fast fallback/parallel coding lane.
+- **reasoner** — DeepSeek-R1-Distill-Qwen-32B and/or Qwen3.6-35B-A3B-thinking (dual pick, no single winner), for deliberate multi-step reasoning with visible chain-of-thought.
+- **vision** — Qwen3-VL-32B (+ mmproj), the vision-language model for image understanding.
+
+**Clarifying note on `utility`+CPU:** the isolated Phase-0 benchmark found CPU `utility` "fails hard" (3.3 tok/s, worst-case synthetic 128-token forced generation), while the later Phase-0.5 concurrent test found it acceptable under real concurrent conditions with a real transcript (17.6-21.8s, a background job nobody waits on synchronously). Both are correct; the Config B verdict (CPU-resident `utility`+`embed`) rests on the concurrent number, not the isolated one — see `docs/phase0-measurements.md` §5/§8 for the raw numbers.
+
+## 0.1 How the locked-roster candidates interact at runtime
+
+```mermaid
+flowchart TD
+    U[User turn] --> C[classifier: Qwen3-1.7B, CPU]
+    C -->|tool-call intent| D[dispatcher/needle: Hammer2.1-1.5b, single-shot]
+    C -->|general chat| CD[chat-default: Qwen3.6-35B-A3B]
+    C -->|coding task| CO[coder: Qwen3-Coder-30B-A3B]
+    C -->|hard reasoning| R[reasoner: DeepSeek-R1-32B / Qwen3.6-thinking]
+    C -->|image input| V[vision: Qwen3-VL-32B]
+
+    D -->|selected tool + args| T[Tool execution]
+    T --> CD
+
+    CD -.async.-> UT[utility: Qwen3-8B, titles/summaries/compaction]
+    CD -.async.-> EM[embed: nomic-embed, retrieval/memory]
+    CO -.async.-> UT
+    R -.async.-> UT
+```
+
+- `classifier` is the single entry point on every turn, always on CPU.
+- `dispatcher`/`needle` only ever makes one single-shot tool-call decision — never a persistent agent loop; the tool result flows back into whichever main model is active for the actual response.
+- `chat-default`/`coder`/`reasoner`/`vision` are mutually exclusive per-turn destinations (one big model active at a time on the GPU0 slot), not concurrent.
+- `utility` and `embed` are drawn with dashed/async edges because they run in the background (titles, summaries, compaction, memory retrieval) and are never on a turn's synchronous critical path.
+
 ## 1. Locked roster
 
 | Slot | Pick | Why (one line) | Detail |
@@ -45,34 +83,55 @@ intrinsics) — dropped in favor of Hammer2.1-1.5b and FunctionGemma-270M.
   test server stealing ~10GB VRAM; stopped this session but not disabled —
   decide if it should be `disable`d at boot.
 
-## 4. Future tests / follow-ups (not yet run)
+## 4. Future tests / follow-ups (Test 7+ round — harness built, awaiting a real GPU run)
 
-- **FunctionGemma-270M real production-traffic side-by-side vs Hammer**
-  (not a synthetic bench) before considering it as a secondary/fallback
-  dispatcher.
+Scripts/eval data for all of these now exist (this round's deliverable); none
+have been run against real models/hardware yet from this session (no network
+path to the box). See the plan file for full design detail per item.
+
+- **Dynamic util-load-on-demand** (`scripts/bench_swap_latency.py`): keep
+  `utility` CPU-resident by default, hot-load it onto GPU only when a tool
+  call actually needs it. Blocked on regenerating the stale
+  `serving/llama-swap/config.yaml` on the box first (authorized, not yet
+  done).
+- **Hammer title-format cleanup** (`scripts/postprocess_title.py` +
+  `--postprocess` flag on `eval_title_gen.py`): deterministic fence/quote/
+  trailing-punct strip, unit-tested 12/12 against
+  `scripts/eval_data/title_cleanup_cases.json`; run against **both**
+  Hammer2.1-1.5b and FunctionGemma-270M.
+- **Context-depth degradation** (`scripts/bench_context_depth.py` +
+  `scripts/eval_data/context_depth_transcript.json`): does quality/speed
+  hold up as a real conversation fills toward 32k, checkpointed at
+  2k/8k/16k/24k/32k with a recall probe.
+- **Max practical context ceiling** (same script, pushed past 32k): finds
+  the real usable ceiling per big model where tok/s stays ≥15 and the
+  recall probe still passes — not chasing frontier-hosted-model context
+  sizes, just the honest max for this hardware.
+- **Embedding retrieval quality** (`scripts/eval_embed_retrieval.py` +
+  `embed_corpus.json`/`embed_retrieval_set.json`, 30 labeled queries / 20
+  docs): recall@1/5/10, proposed bar recall@5 ≥ 0.85.
+- **Classifier broader accuracy pass** (`scripts/eval_classifier_accuracy.py`
+  + `classifier_intents.json`, ~88 examples across 6 categories incl.
+  ambiguous cases): blocked on the classifier's thinking-mode fix being
+  confirmed live first.
+- **JSON/structured-output reliability** (`scripts/eval_structured_output.py`
+  + `structured_output_prompts.json`, 10 schema shapes): hand-rolled
+  validator, no new dependency added.
+- **Harder tool-registry stress test**
+  (`scripts/needle_training/gen_stress_data.py` generates
+  `data_stress.jsonl`, 82 examples across a 13-tool overlapping-name
+  registry; `scripts/needle_training/eval_tool_stress.py` scores it): run
+  against **both** Hammer2.1-1.5b and FunctionGemma-270M, reported as an F1
+  delta vs. the narrow 6-tool baseline.
+
+Still open, not yet designed:
 - **A debug panel / dev-tool surface** for manually triggering and
   comparing dispatcher candidates against live traffic — functionality gap,
   not yet built.
-- **Dynamic util-load-on-demand**: keep `utility` CPU-resident by default,
-  hot-load it onto GPU only when a tool call actually needs it — real
-  cold-load-latency number not yet measured.
-- **Hammer title-format cleanup**: strip markdown code-fence/quote wrapping
-  in code, not by re-prompting (cheap, deterministic fix).
 - **Multi-slot concurrent-user throughput** (`--parallel N`) — no test yet
   covers 2-3 simultaneous users hitting one chat-default server.
-- **Context-depth degradation** — does quality/speed hold up as a real
-  conversation fills toward 32k, vs. the short single-turn prompts used
-  everywhere so far.
 - **Sustained-load thermal/throttle check** — all benches so far are short
   bursts; a 10-15 min continuous run would catch clock-throttling.
-- **Embedding retrieval quality** (recall@k on a labeled set) — only
-  latency has been measured so far, never retrieval accuracy.
-- **Classifier broader accuracy pass** — only 5 hand-picked intents tested.
-- **JSON/structured-output reliability** beyond tool-calling, if the app
-  needs plain structured JSON anywhere.
-- **Harder tool-registry stress test** for the dispatcher (10-15 tools with
-  deliberately overlapping names) — current eval uses the real 6-tool set,
-  which is narrow/low-ambiguity by comparison to a grown registry.
 
 ## 5. Harness (reusable, no changes needed)
 

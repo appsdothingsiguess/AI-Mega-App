@@ -26,6 +26,7 @@ from datetime import datetime, timezone
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from bench_server import http_json, log  # noqa: E402
+from postprocess_title import clean_title  # noqa: E402
 
 REPO = Path("/home/john/AI-Mega-App")
 OUTDIR = REPO / "logs" / "benchmarks" / "quality"
@@ -63,6 +64,8 @@ def main():
     ap.add_argument("--port", type=int, required=True)
     ap.add_argument("--n-predict", type=int, default=32)
     ap.add_argument("--request-timeout", type=int, default=120)
+    ap.add_argument("--postprocess", action="store_true",
+                     help="run clean_title() (fence/quote/trailing-punct strip) on the raw output before scoring")
     args = ap.parse_args()
 
     items = json.loads(Path(args.prompts).read_text())
@@ -84,7 +87,8 @@ def main():
                 args.request_timeout,
             )
             msg = body.get("choices", [{}])[0].get("message", {})
-            text = msg.get("content", "")
+            raw_text = msg.get("content", "")
+            text = clean_title(raw_text) if args.postprocess else raw_text
             rubric = score_title(text)
             latencies.append(wall)
             if rubric["rubric_pass"]:
@@ -92,7 +96,8 @@ def main():
             rec = {
                 "ts": datetime.now(timezone.utc).isoformat(),
                 "model_label": args.model_label, "model_path": args.model_path,
-                "prompt_id": item["id"], "response": text, "latency_s": wall,
+                "prompt_id": item["id"], "raw_response": raw_text, "response": text,
+                "postprocessed": args.postprocess, "latency_s": wall,
                 **rubric,
             }
             log(f"{'PASS' if rubric['rubric_pass'] else 'FAIL'} {args.model_label}/{item['id']}: "

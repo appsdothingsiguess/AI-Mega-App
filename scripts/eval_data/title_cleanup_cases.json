@@ -1,0 +1,14 @@
+[
+  {"id": "c1_fence_plain", "raw": "```\nReset SQLite Migration State\n```", "expected": "Reset SQLite Migration State"},
+  {"id": "c2_fence_lang", "raw": "```text\nQdrant vs sqlite-vec Tradeoffs\n```", "expected": "Qdrant vs sqlite-vec Tradeoffs"},
+  {"id": "c3_double_quotes", "raw": "\"Debugging the Coder Timeout Issue\"", "expected": "Debugging the Coder Timeout Issue"},
+  {"id": "c4_single_quotes", "raw": "'Vision Model Screenshot Comparison'", "expected": "Vision Model Screenshot Comparison"},
+  {"id": "c5_trailing_period", "raw": "Classifier Thinking Mode Fix.", "expected": "Classifier Thinking Mode Fix"},
+  {"id": "c6_trailing_question", "raw": "Which Reasoner Wins the Debug Set?", "expected": "Which Reasoner Wins the Debug Set"},
+  {"id": "c7_fence_and_quotes", "raw": "```\n\"Config B Placement Decision\"\n```", "expected": "Config B Placement Decision"},
+  {"id": "c8_backtick_wrap", "raw": "`Embedding Retrieval Recall Test`", "expected": "Embedding Retrieval Recall Test"},
+  {"id": "c9_quotes_and_period", "raw": "\"Hammer Title Formatting Bug.\"", "expected": "Hammer Title Formatting Bug"},
+  {"id": "c10_plain_clean", "raw": "GPU Pinning Fixes Contention Bug", "expected": "GPU Pinning Fixes Contention Bug"},
+  {"id": "c11_fence_trailing_punct", "raw": "```\nContext Depth Degradation Test!\n```", "expected": "Context Depth Degradation Test"},
+  {"id": "c12_whitespace_padding", "raw": "  \n  Tool Registry Stress Test  \n", "expected": "Tool Registry Stress Test"}
+]
