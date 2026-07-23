@@ -83,46 +83,53 @@ intrinsics) — dropped in favor of Hammer2.1-1.5b and FunctionGemma-270M.
   test server stealing ~10GB VRAM; stopped this session but not disabled —
   decide if it should be `disable`d at boot.
 
-## 4. Future tests / follow-ups (Test 7+ round — harness built, awaiting a real GPU run)
+## 4. Test 7+ round — real results (this session, see `docs/phase0-measurements.md` §13 for full detail)
 
-Scripts/eval data for all of these now exist (this round's deliverable); none
-have been run against real models/hardware yet from this session (no network
-path to the box). See the plan file for full design detail per item.
+Run directly against real models on `ailab` (this session's environment IS
+the GPU box — `hostname`/`nvidia-smi` confirm it, no ssh needed). Headline
+findings, most of them new open items rather than closed ones:
 
-- **Dynamic util-load-on-demand** (`scripts/bench_swap_latency.py`): keep
-  `utility` CPU-resident by default, hot-load it onto GPU only when a tool
-  call actually needs it. Blocked on regenerating the stale
-  `serving/llama-swap/config.yaml` on the box first (authorized, not yet
-  done).
-- **Hammer title-format cleanup** (`scripts/postprocess_title.py` +
-  `--postprocess` flag on `eval_title_gen.py`): deterministic fence/quote/
-  trailing-punct strip, unit-tested 12/12 against
-  `scripts/eval_data/title_cleanup_cases.json`; run against **both**
-  Hammer2.1-1.5b and FunctionGemma-270M.
-- **Context-depth degradation** (`scripts/bench_context_depth.py` +
-  `scripts/eval_data/context_depth_transcript.json`): does quality/speed
-  hold up as a real conversation fills toward 32k, checkpointed at
-  2k/8k/16k/24k/32k with a recall probe.
-- **Max practical context ceiling** (same script, pushed past 32k): finds
-  the real usable ceiling per big model where tok/s stays ≥15 and the
-  recall probe still passes — not chasing frontier-hosted-model context
-  sizes, just the honest max for this hardware.
-- **Embedding retrieval quality** (`scripts/eval_embed_retrieval.py` +
-  `embed_corpus.json`/`embed_retrieval_set.json`, 30 labeled queries / 20
-  docs): recall@1/5/10, proposed bar recall@5 ≥ 0.85.
-- **Classifier broader accuracy pass** (`scripts/eval_classifier_accuracy.py`
-  + `classifier_intents.json`, ~88 examples across 6 categories incl.
-  ambiguous cases): blocked on the classifier's thinking-mode fix being
-  confirmed live first.
-- **JSON/structured-output reliability** (`scripts/eval_structured_output.py`
-  + `structured_output_prompts.json`, 10 schema shapes): hand-rolled
-  validator, no new dependency added.
-- **Harder tool-registry stress test**
-  (`scripts/needle_training/gen_stress_data.py` generates
-  `data_stress.jsonl`, 82 examples across a 13-tool overlapping-name
-  registry; `scripts/needle_training/eval_tool_stress.py` scores it): run
-  against **both** Hammer2.1-1.5b and FunctionGemma-270M, reported as an F1
-  delta vs. the narrow 6-tool baseline.
+- **Hammer title cleanup**: the deterministic fence/quote/punct strip is
+  correct and unit-tests 12/12, but on live output it *lowered* the rubric
+  pass rate (3/8 → 2/8) — fence tokens were accidentally padding titles into
+  the 5-8 word range; the real title underneath is often too short. **New
+  follow-up**: Hammer's title length itself needs prompt-tuning, separate
+  from the formatting fix.
+- **FunctionGemma-270M as a title generator**: fails outright (0/8 → 1/8) —
+  it echoes the input instead of summarizing and leaks function-call
+  special tokens. Confirmed dispatcher-only, not viable for titles.
+- **Tool-registry stress test (13 overlapping-name tools, 82 examples)**:
+  Hammer2.1-1.5b call_f1 **53.85%** (down ~25 points from the narrow 6-tool
+  baseline of 76.3-79.0%) — confirms the flagged degradation risk.
+  FunctionGemma-270M scored **0%** under the generic prompt harness, but
+  that's a harness mismatch (it needs its own native chat template, like
+  Hammer got in `eval_hammer_native.py`), not proof it can't do the task —
+  flagged as a real follow-up.
+- **Classifier broader accuracy (85 items, 6 real routing categories)**:
+  **45.88% overall** — badly fails the ≥90% bar. It essentially never
+  predicts `tool_call_needed` or `chit_chat` (0% each), collapsing almost
+  everything into `chat`. The earlier "5/5 PASS" was on an easier 3-class
+  scheme; **the classifier is not currently viable for the app's real
+  routing categories** — a new, more serious blocker than the original
+  thinking-mode issue (which is already fixed here via `/no_think`).
+- **Embedding retrieval recall@k**: **96.7%/100%/100%** at k=1/5/10 —
+  clears the proposed bar comfortably. First real accuracy number for
+  `embed` (previously latency-only).
+- **Structured JSON output (chat-default)**: 0% at a 300-token budget (same
+  thinking-mode budget trap as reasoners), **80%** at 1200 tokens — still
+  below the proposed 95%/90% bars, with nested/array schemas the specific
+  failure mode.
+- **Context-depth degradation (chat-default, 2k→32k)**: tok/s degrades
+  **36%** by 32k (fails the proposed ≤30% bar), and the recall probe came
+  back **empty** at every checkpoint past 2k at a 256-token budget — root
+  cause confirmed as the same thinking-mode budget trap (a follow-up run at
+  8k with 1024 tokens answered correctly). **Any context-depth or
+  structured-output eval on a thinking-capable model needs ≥1024 tokens of
+  budget or the result is meaningless**, not a genuine quality signal.
+- **Dynamic util-load-on-demand**: still not run — blocked on regenerating
+  the stale `serving/llama-swap/config.yaml` (references deleted blobs),
+  which is a config-authoring task outside this round's eval scripts.
+  `scripts/bench_swap_latency.py` is ready once that's done.
 
 Still open, not yet designed:
 - **A debug panel / dev-tool surface** for manually triggering and
@@ -132,6 +139,11 @@ Still open, not yet designed:
   covers 2-3 simultaneous users hitting one chat-default server.
 - **Sustained-load thermal/throttle check** — all benches so far are short
   bursts; a 10-15 min continuous run would catch clock-throttling.
+- **FunctionGemma-270M native-chat-template stress eval** — needed for a
+  fair head-to-head with Hammer on the overlapping-tool-name registry.
+- **Classifier fix for the real 6-category routing taxonomy** — the
+  `/no_think` fix solved thinking-mode truncation but the broader accuracy
+  problem (collapsing tool_call_needed/chit_chat into chat) is unsolved.
 
 ## 5. Harness (reusable, no changes needed)
 
