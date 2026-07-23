@@ -1,0 +1,82 @@
+---
+description: "Methodology rules for benchmarking/eval scripts against small local models — read before writing or trusting any eval in scripts/"
+globs: ["scripts/bench_*.py", "scripts/eval_*.py", "scripts/needle_training/**/*",
+        "docs/phase0-measurements.md", "docs/PHASE0_FINDINGS_SUMMARY.md"]
+alwaysApply: false
+---
+Every rule below cost real time during Phase-0/0.5 benchmarking — each one
+traces to a specific wrong number that got reported before the root cause
+was found. Full incident writeup: `docs/phase0-measurements.md` §16.
+
+**Verify the environment before declaring something blocked or unreachable.**
+`ssh <host>` failing to resolve is evidence the alias doesn't resolve from
+here — it is not evidence you aren't already on the target machine. Check
+`hostname`, `nvidia-smi`, and the expected local paths directly before
+reporting "no access."
+
+**Thinking-capable models: suppress reasoning at the server level, not with
+a prompt convention.** A `/no_think` (or similar) text suffix is not a
+reliable switch — it worked on one checkpoint (Qwen3-1.7B) and silently
+failed on two others (Qwen3.6-35B-A3B, and a specific `qwen3-4b.gguf`
+conversion), which kept reasoning regardless and left `message.content`
+empty at any token budget. Use llama-server's own `--reasoning off` (or
+`--reasoning-budget 0`) flag when booting the eval server. Never conclude a
+model is "bad at X" from an empty or truncated response without first
+checking whether the response was still inside `<think>`/`reasoning_content`
+when it got cut off.
+
+**Thinking-capable models need a real token budget before judging quality,
+even with reasoning suppression attempted.** Use ≥1024 tokens as an eval
+floor, ≥4096 for genuinely hard reasoning/coding-diagnosis prompts. A
+256-300 token budget measures truncation, not correctness — treat any
+result from an under-budgeted run as void, not as a quality finding.
+
+**Small models (sub-2B parameters) need worked few-shot examples, not just
+instructions.** A bare category list, a one-line format spec, or an
+abstract "pick the most precise match" instruction is not enough signal at
+this size. Write 2-7 worked examples that target the model's *actual*
+observed confusion cases (read the failures first, then write examples for
+those specific pairs/categories) — generic examples that don't address the
+real confusion don't move the number.
+
+**Audit scoring/extraction code with the same suspicion as model output.**
+Before trusting a low accuracy number, check whether the label-extraction
+logic has a substring-order bug: if one label is a substring of another
+(e.g. `"chat"` inside `"chit_chat"`), a naive `if label in text` scan
+checked in the wrong order silently misscores correct model output. Any
+classifier scorer over a label set with this property must match
+longest-label-first with word boundaries (or require an exact match), not
+plain substring containment.
+
+**Design the rubric around the deterministic post-processing that will
+actually run, not the model's raw compliance.** Don't score a model
+pass/fail on hitting an exact numeric range (e.g. "must be 5-8 words") when
+the real pipeline can deterministically fix one direction of the violation
+(truncate an overlong output) but not the other (can't lengthen a too-short
+one). If the shipped code truncates, the rubric's upper bound should be
+"truncates to ≤N," not "must already be ≤N," and there should be no
+artificial lower bound at all — a short-but-correct output is not a defect.
+
+**A plausible mitigation still has to be measured, not assumed.**
+Well-known patterns (e.g. embedding-based tool-retrieval pre-filtering
+before a small dispatcher picks a tool) can still make things worse in a
+specific setup — e.g. if the retrieval step itself has non-trivial miss
+recall, every miss is an unrecoverable failure that a fix targeting a
+different bottleneck won't show up as an improvement for. Run the
+comparison and report a negative result honestly rather than assuming the
+standard fix worked.
+
+**Give concurrent background evals distinct ports explicitly.** Don't rely
+on a script's default `--port` when launching more than one eval in the
+background at once — two servers racing for the same port produces a
+zombie process and a garbage/empty result for whichever one loses the bind,
+which looks like a model failure if you don't notice the port collision.
+
+**When comparing model sizes, verify the smaller model's fix actually
+transfers before concluding "bigger is better/worse."** A flag or prompt
+trick that works on one checkpoint is not guaranteed to work on a
+same-family model at a different size or from a different
+conversion/quantization pipeline — confirm the fix (e.g. `--reasoning off`)
+actually takes effect on the specific gguf under test (check the raw
+response body, not just the summary metric) before drawing a
+capacity conclusion from a comparison.

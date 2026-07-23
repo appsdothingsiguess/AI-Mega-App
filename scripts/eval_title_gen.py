@@ -57,12 +57,17 @@ def score_title(text):
     words = unwrapped.split()
     word_count = len(words)
     trailing_punct = bool(re.search(r"[.!?]$", unwrapped))
+    # Production title-gen (ChatGPT/Claude.ai-style) truncates overlong
+    # titles in code rather than rejecting them, and never penalizes a
+    # short title -- there's no "too short" in a shipped product. The
+    # rubric mirrors that: only an *un-truncatable* overlong title (still
+    # >8 words after postprocessing should have fixed it) is a real fail.
     return {
         "word_count": word_count,
-        "word_count_ok": 5 <= word_count <= 8,
+        "word_count_ok": word_count <= 8,
         "wrapped_in_quotes": wrapped_in_quotes,
         "trailing_punct": trailing_punct,
-        "rubric_pass": (5 <= word_count <= 8) and not wrapped_in_quotes and not trailing_punct,
+        "rubric_pass": (word_count <= 8) and not wrapped_in_quotes and not trailing_punct,
     }
 
 

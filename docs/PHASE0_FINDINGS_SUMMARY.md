@@ -83,74 +83,70 @@ intrinsics) — dropped in favor of Hammer2.1-1.5b and FunctionGemma-270M.
   test server stealing ~10GB VRAM; stopped this session but not disabled —
   decide if it should be `disable`d at boot.
 
-## 4. Test 7+ round — real results, then corrected (see `docs/phase0-measurements.md` §13/§14)
+## 4. Test 7+ — final results (see `docs/phase0-measurements.md` §13 for full detail, §16 for the bug-fix history)
 
-The first pass (§13) ran with genuinely weak harnesses — bare-list prompts
-with zero worked examples for 270M-1.7B models, a real extraction bug in the
-classifier scorer, and a `/no_think` text-suffix fix that turned out not to
-transfer to every model. §14 found and fixed all three; the corrected
-numbers below supersede §13, not just add to it.
+The first pass at these tests ran with genuinely weak harnesses (bare-list
+prompts, a scoring bug, an unreliable thinking-suppression convention,
+too-small token budgets). Two further rounds of fixes found the real root
+causes — see §5 below and `docs/phase0-measurements.md` §16 for the full
+lessons-learned writeup, now also codified in
+`.cursor/rules/010-benchmark-eval-methodology.mdc`. Only final numbers kept
+here:
 
-**Three real bugs, not model limitations:**
-1. `extract_label()` checked `"chat"` before `"chit_chat"` in a substring
-   scan — `"chat"` is literally inside `"chit_chat"`, so correct model output
-   was being scored wrong before the model was ever at fault.
-2. The classifier/Hammer-stress/title-gen prompts had no worked examples at
-   all — too little signal for models this small.
-3. `/no_think` (a text suffix) worked on Qwen3-1.7B but silently failed on
-   Qwen3.6-35B-A3B (`chat-default`) — the model kept reasoning regardless,
-   filling the whole token budget with `reasoning_content` and leaving
-   `content` empty. The reliable fix is llama-server's own
-   `--reasoning off` flag, not a bigger budget and not the text convention.
-
-**Corrected results:**
-- **Classifier accuracy**: **91.76%** overall (was 45.88%) on the *same*
-  Qwen3-1.7B model — clears the ≥90% bar with the bug fix + few-shot prompt
-  + `--reasoning off`, no bigger model required. Per-category: `chat` 100%,
-  `code_task` 88.2%, `tool_call_needed` 78.9%, `reasoning_task` 100%,
-  `vision_task` 100%, `chit_chat` 90%. A same-prompt run against `qwen3-4b`
-  (already on disk, unused) answered the "would a bigger model help"
-  question decisively: **no** — this gguf never honors
-  `--reasoning off`/`--reasoning-budget 0` (confirmed via direct query) and
-  costs **~93.7s per single-word classification** vs. the 1.7B's
-  0.283s/item. Not a capacity finding, just this checkpoint's
-  template/conversion not exposing the same reasoning-suppression hook the
-  1.7B and 35B-A3B checkpoints do — but the practical conclusion holds: stay
-  on the fixed 1.7B, it already clears the bar at a fraction of the cost.
-- **Hammer tool-registry stress**: **63.75% call_f1** (was 53.85%) after
-  few-shot disambiguation examples for the actual confusable tool-name
-  trios. Residual errors are now argument-fidelity (dropping "the"/"a" when
-  copying query text into an argument) — a narrower, different problem than
-  wrong-tool selection.
+- **Classifier accuracy**: **91.76%** overall on Qwen3-1.7B (6 real routing
+  categories) — clears the ≥90% bar with a scoring-bug fix + few-shot prompt
+  + `--reasoning off`, no bigger model required. A same-prompt comparison
+  against `qwen3-4b` (already on disk) answered "would a bigger model help"
+  decisively: **no** — that specific gguf never honors reasoning-suppression
+  flags and costs ~93.7s/call vs. the 1.7B's 0.283s/item. Stay on the fixed
+  1.7B.
+- **Hammer tool-registry stress** (13-tool overlapping registry): **63.75%
+  call_f1** after few-shot disambiguation examples for the actual confusable
+  tool-name trios. Residual errors are argument-fidelity only (dropping
+  "the"/"a" when copying query text into an argument), not wrong-tool
+  selection. A tool-retrieval pre-filter (embed-based top-k candidate
+  narrowing — the standard "tool-RAG" pattern) was tried and **did not
+  help** (60.87%/59.26% at top-k 5/8, both below the unfiltered number) —
+  retrieval itself misses the correct tool 5-9% of the time, and the
+  few-shot prompt already handled most of the real disambiguation. Honest
+  negative result, not adopted.
 - **FunctionGemma-270M tool-registry stress, fair harness**: **36.5%
-  call_f1** using its native chat-template harness + finetuned checkpoint
-  (the old 0% was a harness mismatch, not a real result). First fair
-  head-to-head: Hammer 63.75% vs. FunctionGemma 36.5% — Hammer stays the
-  better dispatcher under registry pressure.
-- **Hammer title generation**: postprocessed rubric-pass rose to **4/8**
-  (was 2/8, and worse-than-raw) once worked examples stopped the
-  code-fence-padding artifact. Residual failures are genuine word-count
-  miscalibration, not formatting — still an open follow-up.
+  call_f1** via its native chat-template harness + finetuned checkpoint.
+  First fair head-to-head: Hammer 63.75% vs. FunctionGemma 36.5% — Hammer
+  stays the better dispatcher under registry pressure.
+- **Hammer title generation**: **8/8 rubric-pass** after (a) few-shot
+  examples in the prompt and (b) fixing the rubric itself — the original
+  5-8-word range punished a model for being short with no recovery path;
+  real title-gen truncates long output in code and never penalizes short
+  output, so `clean_title()` now truncates instead of failing and the
+  rubric drops the minimum.
 - **Structured JSON output (chat-default)**: **100% parse, 100%
-  schema-valid** (was 80%) with `--reasoning off` — confirms the two §13
-  failures were thinking-mode truncation, not a nested/array JSON weakness.
-  Latency also dropped from ~6-10s to under 1s per request.
+  schema-valid** with `--reasoning off` — the earlier failures were
+  thinking-mode truncation, not a nested/array JSON weakness. Latency also
+  dropped from ~6-10s to under 1s per request.
 - **Context-depth degradation (chat-default, `--reasoning off`)**: recall
-  probe is now **correct at every checkpoint from 2k through 32k** — the
-  "empty past 2k" result in §13 was purely the thinking-mode trap
-  contaminating the measurement, not a real long-context recall failure.
-  The honest tok/s degradation is **52.9% by 32k** (worse than §13's
-  contaminated 36% number) — a real, confirmed fail of the ≤30% bar. Net:
-  this model's context-depth problem is a throughput problem only, not an
-  accuracy one.
-- **Dynamic util-load-on-demand**: unblocked. `serving/llama-swap/config.yaml`
-  was regenerated from scratch against the actual locked roster (one entry
-  per routing alias, current model paths, `coder` on the locked Q5_K_M
-  quant, solo-GPU0 `CUDA_VISIBLE_DEVICES` placement instead of the
-  §8-rejected tensor-split, `classifier`/`utility`/`embed` CPU-resident with
-  `ttl: 0`). Real swap-latency numbers: **utility (CPU) cold 20.54s / warm
-  ~9.1-9.4s**, **needle/Hammer (GPU0) cold 3.48s / warm 0.03-0.18s**,
-  **chat-default (GPU0) cold 12.47s / warm 0.67s**.
+  probe is **correct at every checkpoint from 2k through 32k** — an earlier
+  "empty past 2k" result was purely the thinking-mode trap contaminating
+  the measurement. The honest tok/s degradation is **52.9% by 32k** — a
+  real, confirmed fail of the ≤30% bar. This model's context-depth problem
+  is a throughput problem only, not an accuracy one.
+- **Dynamic util-load-on-demand**: `serving/llama-swap/config.yaml` was
+  regenerated from scratch against the actual locked roster (one entry per
+  routing alias, current model paths, `coder` on the locked Q5_K_M quant,
+  solo-GPU0 `CUDA_VISIBLE_DEVICES` placement instead of the §8-rejected
+  tensor-split, `classifier`/`utility`/`embed` CPU-resident with `ttl: 0`).
+  Real swap-latency numbers: **utility (CPU) cold 20.54s / warm ~9.1-9.4s**,
+  **needle/Hammer (GPU0) cold 3.48s / warm 0.03-0.18s**, **chat-default
+  (GPU0) cold 12.47s / warm 0.67s**.
+
+**On the dispatcher's actual job (per PLAN.md §4.7):** Needle/Hammer was
+never designed as the primary or sole tool-calling mechanism — the primary
+path is the main model's own native tool calling; the dispatcher only ever
+assists the call-emission step for models tagged `tool_call: weak`, and the
+plan is explicit that "Needle is the dispatcher, never the planner." A
+mediocre dispatcher score on a deliberately hard 13-tool overlapping
+registry isn't a viability blocker for the app — it's a signal about when
+to lean on the assist path vs. the main model's own tool calling.
 
 Still open, not yet designed:
 - **A debug panel / dev-tool surface** for manually triggering and
@@ -160,11 +156,12 @@ Still open, not yet designed:
   covers 2-3 simultaneous users hitting one chat-default server.
 - **Sustained-load thermal/throttle check** — all benches so far are short
   bursts; a 10-15 min continuous run would catch clock-throttling.
-- **Hammer title-gen word-count calibration** — worked examples fixed the
-  formatting artifact but not the underlying length miscalibration.
+- **Smarter title truncation** (clause-boundary aware) — cosmetic, not a
+  blocker.
 - **Hammer stress argument-fidelity** — article-dropping and one
   code-truncation; worth deciding whether exact-string argument matching is
-  too strict a metric or needs its own prompt fix.
+  too strict a metric or needs its own prompt fix. Unaffected by tool
+  retrieval, so this is a prompt/scoring problem, not a registry-size one.
 
 ## 5. Harness (reusable, no changes needed)
 
@@ -185,3 +182,10 @@ Still open, not yet designed:
   an `if !cmd; then RC=$?; fi` block (real bug hit in `bench_models.sh`).
 - No background agents idle-watching downloads/benchmarks — use direct
   bounded waits instead.
+- Give concurrent background evals distinct `--port` values explicitly —
+  two scripts sharing a default port raced for the bind and produced a
+  garbage/zombie run for the loser (Test 7+ round 2).
+- Full methodology ruleset for small-model evals (token budgets, thinking
+  suppression, few-shot prompting, scoring pitfalls) lives in
+  `.cursor/rules/010-benchmark-eval-methodology.mdc` — read it before
+  writing or trusting a new eval script, not just this bullet list.

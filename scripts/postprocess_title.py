@@ -21,7 +21,7 @@ CASES_PATH = REPO / "scripts" / "eval_data" / "title_cleanup_cases.json"
 FENCE_RE = re.compile(r"^```(?:\w+)?\s*\n?|\n?```$")
 
 
-def clean_title(raw: str) -> str:
+def clean_title(raw: str, max_words: int = 8) -> str:
     text = raw.strip()
     # Strip a full code-fence wrap (```...``` or ```lang\n...\n```)
     if text.startswith("```") and text.endswith("```") and len(text) >= 6:
@@ -29,8 +29,17 @@ def clean_title(raw: str) -> str:
     # Strip a single leading/trailing backtick, or quote wrapping
     while len(text) >= 2 and text[0] in "`\"'" and text[-1] == text[0]:
         text = text[1:-1].strip()
+    # Drop a "Title:" preamble the model sometimes echoes back
+    text = re.sub(r"^title:\s*", "", text, flags=re.IGNORECASE)
     # Strip trailing punctuation
     text = re.sub(r"[.!?]+$", "", text).strip()
+    # Deterministic length cap: production title-gen (ChatGPT/Claude.ai style)
+    # never rejects a model's title for being the "wrong" length -- it just
+    # truncates. There's no analogous fix for too-short, so no minimum is
+    # enforced; a 3-word title is a fine title, not a failure.
+    words = text.split()
+    if len(words) > max_words:
+        text = " ".join(words[:max_words])
     return text
 
 
