@@ -1,0 +1,11 @@
+event: token
+data: {"text":"Hello"}
+
+event: token
+data: {"text":", "}
+
+event: token
+data: {"text":"world!"}
+
+event: done
+data: {"message_id":"<MESSAGE_ID>","model":"chat-default","usage":{"prompt_tokens":5,"completion_tokens":3,"total_tokens":8},"trace_id":"<TRACE_ID>"}
