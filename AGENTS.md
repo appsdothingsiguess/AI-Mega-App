@@ -7,9 +7,9 @@ Personal AI platform: a claude.ai-parity web UI backed by local models on a dedi
 | Layer | Choice |
 |---|---|
 | Backend | Python 3.12, FastAPI, httpx, uvicorn (async, SSE-native) |
-| Inference | llama.cpp `llama-server` behind llama-swap (`:8080`, OpenAI-compatible; groups: resident small models + swapped big-model slot) |
+| Inference | llama.cpp `llama-server` behind llama-swap (`:8080`, OpenAI-compatible; group `resident` = classifier/utility/embed on CPU + dispatcher on GPU1, group `gpu0-main` = one big model at a time on the 3090) |
 | Frontend | TypeScript compiled by plain `tsc` → native ES modules; no React, no bundler, no framework |
-| Storage | SQLite (WAL) + sqlite-vec + FTS5 — one file for chats, memories, vectors, traces |
+| Storage | SQLite (WAL) + FTS5 for text/chats/memories/traces + **Qdrant** for vectors, behind `VectorStore` |
 | Projects | Filesystem-first (`projects/<id>/instructions.md`, `docs/`) |
 | Coding agent | opencode serve (delegated, never nested in the chat tool loop) |
 | Browser | BrowserOS via MCP client (host machine, escalation path only) |
@@ -18,18 +18,18 @@ Personal AI platform: a claude.ai-parity web UI backed by local models on a dedi
 
 1. `PLAN.md` — architecture source of truth. Adhere to it; flag conflicts, never improvise around it.
 2. `docs/FEATURES.md` — per-feature specs (interfaces, config keys, debug spans, toggles).
-3. `docs/BENCHMARK_PLAN.md` — Phase-0 model testing/benchmarks (single box: 3090+3070); decides the roster and the tensor-split-vs-residents placement config.
+3. `docs/PHASE0_FINDINGS_SUMMARY.md` — locked roster + every Phase-0 decision, one line each (raw numbers: `docs/phase0-measurements.md`; the plan behind them: `docs/BENCHMARK_PLAN.md`). Both phases closed.
 4. `docs/PHASE_PROMPTS.md` — task prompts per phase (orchestrator → delegated sub-agents in worktrees).
-5. `docs/CURSOR_RULES.md` — the full `.cursor/rules/` ruleset (001–009), hooks, and `.cursorignore`.
+5. `docs/CURSOR_RULES.md` — the full `.cursor/rules/` ruleset (001–010), hooks, and `.cursorignore`. **`010-benchmark-eval-methodology` is mandatory reading before writing or trusting any eval** — every rule in it traces to a specific wrong number that got published in Phase 0.
 
 ## Frozen contracts (once they exist)
 
 Interface files are the real constraint layer — the type checker enforces what prose cannot. When created, these are read-only without owner approval:
 
-- `app/protocols.py` / `app/types.py` — service Protocols and shared types
+- `app/types.py` — shared types and service Protocols (one module; there is no separate `app/protocols.py`)
 - SQLite schema and SSE event vocabulary (`done`/`error` terminal events)
-- Classifier output schema: `{class, effort, needs_tools}` — classes, never model names
-- Routing aliases: `chat-default | coder | reasoner | vision | utility | embed | classifier | needle`
+- Classifier output schema: `{class, confidence}`, class ∈ `chat|chit_chat|code_task|tool_call_needed|reasoning_task|vision_task` — classes, never model names
+- Routing aliases: `chat-default | coder | coder-small | reasoner | reasoner-alt | vision | utility | embed | classifier | dispatcher`
 
 ## Config architecture
 
@@ -68,4 +68,10 @@ When blocked by scope or constraints: stop and report. A described blocker is su
 
 ## Current phase
 
-**Phase 0 — Ground truth** (single box: 3090+3070). Drivers/CUDA + llama.cpp are **already built on the box** (`ssh ubuntu-ai`, rule `008-remote-box`). Remaining: llama-swap systemd, candidate model downloads, per-class benchmarks, the **placement decision** (tensor-split + CPU residents vs 3090-solo + 3070 residents — from measured CPU-resident latency), swap + sqlite-vec benchmarks. Run as an orchestrator delegating sub-agents (rule `009-subagents`). Full spec: `docs/BENCHMARK_PLAN.md`. Deliverable: `docs/phase0-measurements.md` + llama-swap live on :8080. **No app code in Phase 0.**
+**Phase 1 — Skeleton with eyes.** Phase 0 closed 2026-07-23: roster locked, placement decided (**Config B** — big models solo-pinned to GPU0 via `CUDA_VISIBLE_DEVICES`, `dispatcher` on GPU1, `classifier`/`utility`/`embed` on CPU), sqlite-vec rejected for Qdrant, classifier at 91.76%, dispatcher = Hammer2.1-1.5b. Read `docs/PHASE0_FINDINGS_SUMMARY.md` before touching anything model-shaped.
+
+Phase 1 builds: config load/validate, `/health`, `llm_client`, SQLite schema, SSE chat endpoint, minimal chat UI, **debug trace store + Debug view**, `done`/`error` contract, plus the test harness and CI from day one. Exit: chat with a manually-picked model, every turn fully traced. Run as an orchestrator delegating sub-agents (rule `009-subagents`); prompts in `docs/PHASE_PROMPTS.md`.
+
+Phase-0 carry-ins: the live llama-swap config was fixed and verified on 2026-07-23 (groups block, `--reasoning off`, dispatcher on GPU1, CPU residents no longer holding CUDA contexts) — develop against it as-is and do not hand-edit it further; swapgen reproduces those four properties in Phase 2. The stale `llama-server.service` was disabled by the owner and verified `disabled`+`inactive` with both GPUs idle on 2026-07-25 — **carry-in closed**. Size `first_token_timeout_s` above the **measured 12.47s cold load** and ship a visible `model_loading` state.
+
+Planning docs were audited into mutual consistency on 2026-07-25 and are paste-ready: `PLAN.md` §4.2 is the single source for the chat contract, span names are flat snake_case, the vector store is `app/rag/store.py`, and frontend paths are `web/src/**` → `web/js/**`. Build order: `ci-harness` alone first (owns `tsconfig.json`, `package.json`, fake llama-swap), then backend and frontend in parallel.

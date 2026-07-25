@@ -26,7 +26,15 @@ a feature is a config flag.
 
 Config access goes through the loaded settings object; model names, provider
 URLs, prompts, and thresholds come from `config.yaml` so behavior changes
-without code edits.
+without code edits. That includes per-alias `max_tokens` defaults: a
+thinking-capable model given a small budget returns an empty `content` with
+the whole budget spent inside `reasoning_content`, which looks like a model
+failure and is not one. Never treat an empty completion as a model error
+without checking `finish_reason` and `reasoning_content` first.
+
+Requests that must return parseable output (classification, structured JSON,
+tool-call emission) disable reasoning at the server/request level rather than
+asking the model not to think in the prompt — @PLAN.md §4.1.
 
 Pydantic models validate requests at the API boundary and config at load
 time; dataclasses carry internal data.

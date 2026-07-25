@@ -12,8 +12,23 @@ Inference: llama.cpp `llama-server` instances managed by llama-swap. The one
 inference surface is llama-swap's OpenAI-compatible endpoint, reached through
 `app/llm_client.py`. The `model` field in the request selects the model;
 llama-swap performs all loading and swapping, so the app contains zero
-scheduler or model-lifecycle code. Two boxes each run their own llama-swap;
-`config.yaml` maps model alias → endpoint, so the second box is additive.
+scheduler or model-lifecycle code. A second box, if it ever exists, runs its
+own llama-swap; `config.yaml` maps model alias → endpoint, so it is additive.
+
+Model placement (Phase-0 measured, @PLAN.md §4.1): big models are pinned solo
+to GPU0 with `CUDA_VISIBLE_DEVICES` in the llama-swap entry's `env:`. Do not
+emit `--tensor-split` — a degenerate split measured ~3x slower than a clean
+single-device restriction, and a real split starves the 3070 of the VRAM its
+resident models need. The `groups:` block is required, not cosmetic: without
+it every model shares llama-swap's implicit default group and the residents
+cannot coexist with the big model.
+
+Thinking-capable models are suppressed with llama-server's `--reasoning off`
+(or `--reasoning-budget 0`), never with a `/no_think` prompt suffix — the
+suffix works on some checkpoints and silently fails on others, returning an
+empty `content` with the whole budget spent in `reasoning_content`. Any
+structured-output or classification call sets the flag and a real
+`max_tokens` (>=1024; >=4096 for reasoning work).
 
 Model names, aliases, and routing labels come from `config.yaml`, resolved at
 runtime — this enables zero-code model swaps and keeps prompts model-agnostic.
@@ -24,9 +39,13 @@ hand-written modules (`mount(el, state)` / `unmount()`), keeping every view
 small and framework-free. Vendored small libs only: marked, DOMPurify,
 highlight.js.
 
-Storage: one SQLite file (WAL) + sqlite-vec + FTS5 for chats, messages,
-memories, vectors, debug traces. Vector access goes through the `VectorStore`
-interface so the backing store can change without touching callers.
+Storage: one SQLite file (WAL) + FTS5 for chats, messages, memories, chunk
+text, and debug traces; **Qdrant** holds vectors. Vector access goes through
+the `VectorStore` interface — that interface is why the Phase-0 result
+(sqlite-vec KNN p95 105ms at 100k vectors, against a ~50ms bar) was a config
+swap and not a rewrite. `SqliteVecStore` stays in-tree as the fallback
+implementation and the second target of the conformance suite; no caller
+outside `app/db/vectors.py` knows which store is live.
 
 Streaming: SSE end-to-end. Every stream terminates with a `done` or `error`
 event — consumers rely on this contract.

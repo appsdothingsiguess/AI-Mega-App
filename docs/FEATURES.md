@@ -1,6 +1,6 @@
 # AI Mega App — FEATURES.md (Full Build Document)
 
-**Source of truth:** `/home/user/AI-Mega-App/PLAN.md` (Build Plan v2, 2026-07-20). This document expands every feature in PLAN.md into buildable detail. Where this file and PLAN.md disagree, PLAN.md wins.
+**Source of truth:** `PLAN.md` (Build Plan v2, **rev 6 — 2026-07-23, post-Phase-0**). This document expands every feature in PLAN.md into buildable detail. Where this file and PLAN.md disagree, PLAN.md wins. Measured facts live in `docs/phase0-measurements.md`; the one-line-per-decision version is `docs/PHASE0_FINDINGS_SUMMARY.md`.
 **Post-mortem reference only:** `prompter_x_complete_spec.md` — its decisions (Ollama, LiteLLM, React, WSL2/8GB budgets) are banned.
 **Confidence tags:** [FACT] verifiable · [INFERENCE] reasoned from PLAN.md · [UNCERTAIN] verify before building.
 
@@ -21,23 +21,21 @@ Section map: **Part A** = cross-cutting infrastructure PLAN.md defines (config, 
 
 ## A1. Configuration system
 
-**What.** `config.yaml` (checked-in **defaults** only) + `.env` (secrets only) + a machine-written `settings.local.yaml` overlay. **The Settings UI is the authoritative surface for every user change and writes the overlay (and secrets to `.env`); you never have to hand-edit a file — anything in the file is editable in the UI, and the UI wins.** This designs out the old "edit-a-file-and-a-menu" split. The one thing the UI writes to `.env` (not the overlay) is **API keys** for remote providers (Anthropic, opencode zen, Kimi, Tavily), redacted on read-back. Settings must "account for different models and configurations" — model roster + per-model device/tensor-split assignment (Models tab → swapgen), per-box `model → endpoint` map (multi-computer, future), BrowserOS MCP URL, tool toggles — each a tab-driven overlay edit, no code change. [FACT — PLAN §3.1, §4.14]
+**What.** `config.yaml` (checked-in **defaults** only) + `.env` (secrets only) + a machine-written `settings.local.yaml` overlay. **The Settings UI is the authoritative surface for every user change and writes the overlay (and secrets to `.env`); you never have to hand-edit a file — anything in the file is editable in the UI, and the UI wins.** This designs out the old "edit-a-file-and-a-menu" split. The one thing the UI writes to `.env` (not the overlay) is **API keys** for remote providers (Anthropic, opencode zen, Kimi, Tavily), redacted on read-back. Settings must "account for different models and configurations" — model roster + per-model device assignment (Models tab → swapgen; GPU index or CPU, never a tensor-split), per-box `model → endpoint` map (multi-computer, future), BrowserOS MCP URL, tool toggles — each a tab-driven overlay edit, no code change. [FACT — PLAN §3.1, §4.14]
 
 **Modules & files.**
-- `app/config/loader.py` — load `config.yaml`, deep-merge `settings.local.yaml`, env-substitute from `.env`; expose typed `Config` object.
-- `app/config/schema.py` — pydantic models for every section; validation errors fail startup loudly with the offending key path.
-- `app/config/overlay.py` — read/write `settings.local.yaml` atomically (write-temp + rename); only writer is the Settings API.
+- `app/config.py` — one flat module (rule `002`, ≤300 lines): pydantic models for every section, `load_config()` with deep-merge of `settings.local.yaml` and env-substitution from `.env`, and a cached `get_config()`. Validation errors fail startup loudly with the offending key path. Split into a package only if it genuinely outgrows the cap — and only with owner approval, because five wave-2 agents import from it.
+- `app/settings/store.py` — reads/writes the `settings.local.yaml` overlay atomically (write-temp + rename), re-validating the merged result through `app/config.py` before committing. The Settings API is its only caller; `config.yaml` is never written at runtime. (Phase 2 — see F4/§4.14.)
 - `config.yaml` — repo root, all defaults.
 
 **Interfaces.**
-- `load_config(path: Path = CONFIG_PATH) -> Config` — raises `ConfigError(key_path, reason)`.
-- `apply_overlay(patch: dict) -> Config` — validates merged result before persisting; returns new live config.
-- `GET /api/settings` → merged effective config (secrets redacted); `PATCH /api/settings` → overlay write + in-process hot-reload broadcast (`config_changed` event on an internal pub/sub).
+- `load_config(path: Path = CONFIG_PATH) -> Config` — raises `ConfigError(key_path, reason)`. `get_config() -> Config` — cached accessor.
+- `GET /api/settings` → merged effective config (secrets redacted). Writes are typed and scoped rather than one generic patch: `PUT /api/settings/models/{name}`, `PUT /api/settings/routing`, `GET /api/models`. Each validates, persists the overlay, and hot-reloads in process (`config_changed` on an internal pub/sub) — no restart.
 - Every feature section carries `enabled: bool` — the registry pattern in A-modules checks it at startup *and* per request (hot toggle).
 
 **Config keys.** Top-level sections (each detailed in its feature): `server`, `llm`, `models`, `routing`, `tools`, `rag`, `memory`, `projects`, `attachments`, `artifacts`, `sandbox`, `opencode`, `browseros`, `search`, `summaries`, `debug`, `ui`. Plus `server: {host: 0.0.0.0, port: 8000, static_dir: web/}`.
 
-**Integration points.** Called by literally everything at startup; Settings UI (F4) writes it; swapgen (F14) and opencode config generator (F6) read it as input. Emits span `config.load` at startup with validation duration.
+**Integration points.** Called by literally everything at startup; Settings UI (F4) writes it; swapgen (F14) and opencode config generator (F6) read it as input. Emits span `config_load` at startup with validation duration.
 
 **Build steps.** 1) pydantic schema for Phase-1 sections only; 2) loader + merge + env substitution; 3) fail-loud validation with key paths; 4) overlay writer; 5) `/api/settings` GET/PATCH; 6) hot-reload pub/sub; 7) grow schema per phase.
 
@@ -49,13 +47,13 @@ Section map: **Part A** = cross-cutting infrastructure PLAN.md defines (config, 
 
 ## A2. SQLite storage core
 
-**What.** One SQLite file (WAL mode) holds chats, messages, memories, chunks, vectors (sqlite-vec), FTS5 indexes, attachments metadata, review queue, and debug traces. Single-user scale; Qdrant deliberately removed. [FACT — PLAN §3.1]
+**What.** One SQLite file (WAL mode) holds chats, messages, memories, chunk *text*, FTS5 indexes, attachments metadata, review queue, and debug traces. **Vectors live in Qdrant**, reached only through the `VectorStore` interface. Phase 0 benchmarked sqlite-vec at 100k×768-dim and it failed the gate — KNN p95 105ms against a ~50ms interactive bar, brute-force-scan-bound rather than query-shape-bound (the documented rowid-prefilter hybrid form was already in use; the naive FTS-JOIN form was 11.6s/query and is a trap worth not re-discovering). [FACT — PLAN §3.1, `docs/phase0-measurements.md` §6]
 
 **Modules & files.**
-- `app/db/engine.py` — connection factory (WAL, `busy_timeout`, sqlite-vec extension load), one writer + reader pool via `aiosqlite`. [INFERENCE — aiosqlite fits FastAPI async; any thin async wrapper is acceptable]
-- `app/db/schema.py` — `CREATE TABLE` DDL + versioned migrations (`PRAGMA user_version`), deterministic hand-written SQL (Key Rule 1).
-- `app/db/chats.py`, `app/db/messages.py`, `app/db/memories.py`, `app/db/chunks.py`, `app/db/traces.py`, `app/db/attachments.py` — one repository module per aggregate, plain functions taking a connection.
-- `app/db/vectors.py` — `VectorStore` interface (`upsert`, `query`, `delete_by_source`) + `SqliteVecStore` impl; Qdrant can return behind this interface if corpus outgrows sqlite-vec (>~1M vectors). [FACT — PLAN escape hatch]
+- `app/db.py` — connection factory (WAL, `busy_timeout`), thin query helpers, and a thread-executor wrapper so sync `sqlite3` calls stay off the event loop. **No `aiosqlite`** — the backend dependency core is fastapi/httpx/uvicorn/pydantic/pyyaml and an executor helper is ~15 lines (rule `001`).
+- `app/schema.sql` — `CREATE TABLE` DDL, deterministic hand-written SQL (Key Rule 1), applied by `init_db()`; versioned migrations via `PRAGMA user_version` as later phases add tables.
+- Repository functions live beside their feature (`app/chat/history.py`, `app/memory/store.py`, …) rather than in a `db/` package — one module per feature is the architecture.
+- `app/rag/store.py` (Phase 3) — `VectorStore` interface (`add`, `query`, `delete_by_source`) + **`QdrantStore` (default)** and `SqliteVecStore` (fallback, kept as the conformance suite's second target). Which one is live is the `vectors.store` config key; no caller outside this module knows the difference. [FACT — PLAN §3.1, escape hatch exercised]
 
 **Interfaces.** Core tables (columns typed as SQLite affinities):
 ```sql
@@ -79,19 +77,31 @@ spans(id INTEGER PK, trace_id TEXT, name TEXT, start_ms INT, end_ms INT NULL,
       model TEXT NULL, prompt TEXT NULL, response TEXT NULL,
       tokens_in INT NULL, tokens_out INT NULL, meta_json TEXT)
 -- FTS5: messages_fts(content), memories_fts(content, tags), chunks_fts(content, heading)
--- sqlite-vec: vec_chunks(embedding float[DIM]), vec_messages(embedding float[DIM])  -- DIM from embed model config
+-- Vectors are NOT in SQLite: Qdrant collections `chunks` and `messages`,
+-- keyed by the same TEXT ids as the tables above (DIM from embed model config).
+-- SqliteVecStore's vec_chunks/vec_messages tables exist only when that impl is selected.
 ```
-`VectorStore`: `async upsert(ids: list[str], vecs: list[list[float]], meta: list[dict])`, `async query(vec, k: int, filter: dict) -> list[Hit]` where `Hit = (id, score, meta)`.
+`VectorStore`: `async add(ids: list[str], vecs: list[list[float]], meta: list[dict])`, `async query(vec, k: int, filter: dict) -> list[Hit]` where `Hit = (id, score, meta)`, `async delete_by_source(source: str)`.
 
-**Config keys.** `db: {path: data/app.db, wal: true, vec_extension: auto, backup_dir: data/backups}` (no `enabled:` — storage is not optional; the toggle rule applies to features, not the substrate).
+**Phase-1 subset.** `app/schema.sql` ships only `chats`, `messages`, `traces`, `spans`, `settings_overlay` in Phase 1 — plus **`chats.summary`**, which exists from day one even though nothing writes it until Phase 2's rolling summarizer. That one column is cheaper than a mid-wave frozen-schema approval, and it is why there is no `chat_summaries` table anywhere in this plan.
 
-**Integration points.** Every feature. FTS triggers keep `*_fts` in sync with base tables. Debug spans: `db.migrate` at startup. Phase 0 gate: sqlite-vec benchmarked at 100k chunks before committing [FACT — PLAN Phase 0].
+**Config keys.**
+```yaml
+db: {path: data/app.db, wal: true, backup_dir: data/backups}
+vectors:
+  store: qdrant              # qdrant | sqlite_vec
+  qdrant: {url: "http://127.0.0.1:6333", collection_prefix: mega, timeout_s: 10}
+  dim: 768                   # must match the embed model; validated at startup
+```
+(no `enabled:` — storage is not optional; the toggle rule applies to features, not the substrate)
 
-**Build steps.** 1) engine + extension load + WAL pragmas; 2) v1 schema (chats/messages/traces/spans) for Phase 1; 3) FTS triggers; 4) repository modules; 5) migration runner; 6) vec tables + `VectorStore` in Phase 3; 7) 100k-chunk benchmark script `scripts/bench_sqlitevec.py` (Phase 0 deliverable).
+**Integration points.** Every feature. FTS triggers keep `*_fts` in sync with base tables. Debug spans: `db_migrate` at startup. ~~Phase 0 gate: sqlite-vec at 100k chunks~~ — run, failed, Qdrant adopted (§A2).
 
-**Tests.** pytest with tmp-file DB: migration idempotence; FTS trigger sync on insert/update/delete; vector round-trip (upsert → query returns nearest); concurrent writer+reader under WAL; `VectorStore` conformance suite runnable against any future impl.
+**Build steps.** 1) engine + extension load + WAL pragmas; 2) v1 schema (chats/messages/traces/spans) for Phase 1; 3) FTS triggers; 4) repository modules; 5) migration runner; 6) vec tables + `VectorStore` in Phase 3; 7) ~~100k-chunk benchmark~~ — done in Phase 0 (`scripts/bench_sqlitevec.py`, verdict `logs/benchmarks/sqlitevec_verdict.json`); re-run it against `QdrantStore` with the same harness so the two numbers are comparable.
 
-**Failure modes.** sqlite-vec extension missing → vector features (RAG semantic, chat semantic search) disable with UI banner; FTS/BM25 path still works [INFERENCE — hybrid design degrades to lexical]. DB locked → `busy_timeout` retry; persistent lock → 503 with `error` SSE, never a hung stream.
+**Tests.** pytest with tmp-file DB: migration idempotence; FTS trigger sync on insert/update/delete; vector round-trip (upsert → query returns nearest); concurrent writer+reader under WAL; **the `VectorStore` conformance suite runs against both `QdrantStore` (containerized or skipped in CI) and `SqliteVecStore` (always) — two passing impls is what keeps the interface honest.**
+
+**Failure modes.** **Qdrant unreachable → vector features degrade to FTS/BM25-only** with a UI banner, never a hard failure; the hybrid design is what makes lexical-only a usable degraded mode. `dim` mismatch between config and the live embed model → startup abort with the offending key (a silent mismatch corrupts a collection quietly). DB locked → `busy_timeout` retry; persistent lock → 503 with `error` SSE, never a hung stream.
 
 ---
 
@@ -100,17 +110,16 @@ spans(id INTEGER PK, trace_id TEXT, name TEXT, start_ms INT, end_ms INT NULL,
 **What.** Per-turn `trace_id`; every stage (route, rag, llm request/response, tool dispatch, swap wait, SSE emit) writes a span row to SQLite and mirrors it to a live SSE tap. This is Phase-1 infrastructure other features must call — retrofitting it killed the old build. [FACT — PLAN §4.16]
 
 **Modules & files.**
-- `app/debug/tracer.py` — `Tracer` (per-request), `span()` async context manager, writes rows + publishes to tap.
-- `app/debug/tap.py` — in-process fan-out queue feeding `/api/debug/stream` subscribers; bounded, drop-oldest.
+- `app/debug/trace.py` — `new_trace()` + the `span()` async context manager; writes rows and publishes to the bus.
+- `app/debug/bus.py` — in-process pub/sub fan-out feeding `/api/debug/stream` subscribers; bounded, drop-oldest.
 - `app/debug/api.py` — REST for stored traces + the SSE tap endpoint.
-- `app/debug/gpu_poll.py` — background `nvidia-smi` poller (interval from config) publishing `gpu` events.
-- `app/debug/swap_proxy.py` — proxies llama-swap's status/metrics API into the tap. [UNCERTAIN — exact llama-swap status endpoint path; pin against installed version in Phase 0]
+- `app/debug/bench.py` (Phase 5) — `nvidia-smi` poll endpoint, llama-swap state proxy, and the per-model bench table. [UNCERTAIN — exact llama-swap status endpoint path; pin against the installed version in Phase 2]
 
 **Interfaces.**
-- `tracer = Tracer.begin(chat_id) -> Tracer` (mints `trace_id: str` uuid4); `async with tracer.span(name, **meta) as sp: sp.set(model=..., prompt=..., tokens_in=...)`. Span auto-records start/end ms and exception info on error.
-- `GET /api/debug/traces?chat_id=&limit=` → trace list; `GET /api/debug/traces/{trace_id}` → full span tree (waterfall-ready: name, start_ms, end_ms, meta).
-- `GET /api/debug/stream` (SSE) event types: `span` (a finished span row), `span_start`, `gpu` (`{index, name, mem_total_mb, mem_used_mb, util_pct}` per card), `swap_state` (llama-swap loaded/loading models), `log` (warnings). Terminates with `error` on server shutdown only.
-- Canonical span names (contract, used everywhere): `route.override`, `route.rules`, `route.classifier`, `rag.retrieve`, `memory.inject`, `llm.request`, `llm.first_token`, `swap.wait`, `tool.<name>`, `needle.dispatch`, `sse.emit`, `title.generate`, `summary.update`, `compact.run`, `attach.extract`, `search.<provider>`, `browser.<tool>`, `opencode.session`, `memory.review`.
+- `new_trace(chat_id) -> trace_id` (uuid4); `async with span(trace_id, stage, **fields) as sp: sp.set(model=..., prompt=..., tokens_in=...)`. Span auto-records start/end ms and exception info on error. Both re-exported from `app/debug/__init__.py`.
+- `GET /api/debug/traces?chat_id=&limit=` → trace list with spans nested; `GET /api/debug/trace/{trace_id}` → full waterfall JSON (stage, start/end ms, data).
+- `GET /api/debug/stream` (SSE) event types: `span` (a finished span row), `heartbeat` (15s), and from Phase 5 `gpu` (`{index, name, mem_total_mb, mem_used_mb, util_pct}` per card), `swap_state` (llama-swap loaded/loading models), `log` (warnings).
+- **Canonical span stages — flat snake_case, no dots, frozen in PLAN.md §4.2:** `route`, `llm_request`, `llm_stream`, `sse_emit`, `swap_wait`, `db`, `tool`, `dispatcher`, `search`, `fetch`, `rag_ingest`, `rag_retrieve`, `memory_inject`, `memory_review`, `project_context`, `attachment_extract`, `compaction`, `title`, `summary`, `gpu_inventory`, `swapgen`, `exec`, `browser`, `opencode_session`, `bench`. Per-instance detail (which tool, which provider) is a **field on the span**, not part of the stage name — `stage="tool", name="web_search"`, never `tool.web_search`. Filtering a waterfall by stage only works if the stage vocabulary is closed and small.
 
 **Config keys.**
 ```yaml
@@ -124,9 +133,9 @@ debug:
 
 **Integration points.** Called by: orchestrator (A4), router (F5), RAG/memory (F10), tools (F9), llm client (F1), search (F16), attachments (F11), summaries (F18), opencode (F6), browser (F15). Consumed by: Debug view (F19). Rule 004: a PR adding a pipeline stage without a span is rejected.
 
-**Build steps.** 1) span table + `Tracer` with context-manager API; 2) tap + `/api/debug/stream`; 3) wire into the Phase-1 chat path (route→llm→sse) so the first feature is born traced; 4) trace REST; 5) gpu poller; 6) swap proxy; 7) retention sweeper (daily, deletes old traces unless `store_prompts` archived); 8) span-name contract doc comment in `tracer.py`.
+**Build steps.** 1) span table + `new_trace`/`span` context-manager API; 2) bus + `/api/debug/stream`; 3) wire into the Phase-1 chat path (route→llm→sse) so the first feature is born traced; 4) trace REST; 5) gpu poller; 6) swap proxy; 7) retention sweeper (daily, deletes old traces unless `store_prompts` archived); 8) stage-vocabulary contract doc comment in `trace.py`.
 
-**Tests.** pytest: span nesting produces correct parent ordering by time; exception inside `span()` records error and re-raises; tap subscriber receives span within 100ms; retention deletes only expired; `debug.enabled: false` still lets chat flow (no-op tracer). Contract test: a fake chat turn produces the golden span-name sequence `route.* → llm.request → sse.emit`.
+**Tests.** pytest: span nesting produces correct parent ordering by time; a deliberately failing span write logs and does **not** raise into the caller (chat > observability); tap subscriber receives a span published after subscribe; retention deletes only expired; `debug.enabled: false` still lets chat flow (no-op tracer). Contract test: a fake chat turn produces the golden stage sequence `route → llm_request → llm_stream → sse_emit`.
 
 **Failure modes.** Trace write failure must never fail the turn — tracer catches, logs, continues (chat > observability). Tap backpressure → drop-oldest, `log` event notes drops. `nvidia-smi` absent → `gpu` events omitted, Debug view shows "no GPU telemetry".
 
@@ -138,41 +147,41 @@ debug:
 
 **Modules & files.**
 - `app/chat/orchestrator.py` — the turn loop (no tool logic, no routing logic — calls them).
-- `app/chat/sse.py` — event encoder, heartbeat, terminal-event guarantee (finally-block emitter).
-- `app/chat/context.py` — assembles system prompt + `<memory-context>` block + RAG block + compaction summary into the message list.
-- `app/chat/api.py` — chat/message REST + the stream endpoint.
-- `app/llm/client.py` — thin OpenAI chat-completions client to llama-swap (`model` field selects; llama-swap swaps). No scheduler code — the old ModelScheduler is deleted. [FACT — PLAN §4.1]
+- `app/chat/api.py` — chat/message REST + the stream endpoint; owns the encoder and the terminal-event guarantee (finally-block emitter).
+- `app/chat/history.py` — message persistence helpers over `app/db.py`.
+- `app/chat/compaction.py` (Phase 3) — `maybe_compact(chat)` before the LLM call.
+- `app/llm_client.py` — thin OpenAI chat-completions client to llama-swap (`model` field selects; llama-swap swaps). No scheduler code — the old ModelScheduler is deleted. [FACT — PLAN §4.1]
 
-**Interfaces.**
-- REST: `POST /api/chats` `{project_id?}` → chat; `GET /api/chats?project_id=`, `GET /api/chats/{id}/messages`, `PATCH /api/chats/{id}` (title, model_override, archived), `DELETE /api/chats/{id}`.
-- Stream: `POST /api/chats/{id}/stream` body `{content: str, attachments: [id], model?: str}` → SSE. Event shapes (each `event:` + JSON `data:`):
-  - `message_start {trace_id, message_id, model}`
-  - `route {source: "override"|"rules"|"classifier"|"default", class, effort, model, latency_ms}`
-  - `model_loading {model}` — emitted while llama-swap swaps the 3090 slot (3–10s typical [FACT — PLAN §4.1])
-  - `delta {text}` · `thinking_delta {text}` (reasoner models)
-  - `tool_call {id, name, args_json}` · `tool_result {id, name, summary, is_error}`
-  - `artifact {id, kind, title}` (F8) · `citations {items: [{source, title, url?}]}` (F10/F16)
-  - `title {chat_id, title}` · `usage {tokens_in, tokens_out, tok_per_s}`
-  - `done {}` **or** `error {code, message, recoverable}` — exactly one, always, enforced in `sse.py` `finally`.
-- `llm/client.py`: `async stream_chat(model: str, messages: list[dict], tools: list[dict]|None, response_format: dict|None) -> AsyncIterator[Chunk]`; `async embed(texts: list[str]) -> list[list[float]]`; `Chunk = delta|tool_call_delta|usage|done`.
+**Interfaces.** These mirror PLAN.md §4.2, which is the source; nothing here may diverge from it.
+- REST: `POST /api/chats` `{project_id?}` → chat; `GET /api/chats`, `GET /api/chats/{id}/messages`, `POST /api/chats/{id}/model` (set/clear `model_override`), `POST /api/chats/{id}/attachments` (F11), `DELETE /api/chats/{id}`.
+- Stream: `POST /api/chats/{id}/messages` body `{content: str, attachments: [id], model?: str}` → SSE. Event shapes (each `event:` + JSON `data:`):
+  - `token {text}` — the only content event; thinking tokens from a thinking-enabled alias arrive here too and are tagged in `done`.
+  - `model_loading {model}` — emitted when first-token latency exceeds 2s, i.e. llama-swap is swapping the 3090 slot (**measured up to 12.47s cold** [FACT — PLAN §4.1], not the 3–10s once guessed).
+  - `tool_start {name, args_preview}` · `tool_result {name, content_preview, is_error}` (Phase 3)
+  - `title {chat_id, title}` (Phase 2)
+  - `done {message_id, model, usage, route?, citations?, context?}` **or** `error {kind, detail}` — exactly one, always, enforced in a `finally`.
+- **Why so few events.** Route decision, token usage, citations, and compaction state ride the **`done` payload** rather than each getting a mid-stream event: one terminal payload that later phases add keys to is far easier to keep honest than five optional events the client must tolerate in any order. Build `done` as a dict stages contribute to. Artifacts are detected **client-side** from finished message text (F8 `detect.ts`) — there is no `artifact` event.
+- `llm_client.py`: `async chat(model, messages, *, tools=None, response_format=None, thinking: bool|None=None, max_tokens: int|None=None, stream=True) -> AsyncIterator[ChatDelta]`; `async embed(model, texts) -> list[list[float]]`; `async models() -> list[str]`. `thinking`/`max_tokens` are in the frozen Phase-1 signature deliberately — `reasoner` is `chat-default`'s blob with thinking flipped at the request layer, and structured-output calls need reasoning suppressed per-request (PLAN §4.1).
 
 **Config keys.**
 ```yaml
-llm:
-  base_url: http://127.0.0.1:8080/v1   # llama-swap
+llama_swap:
+  base_url: http://127.0.0.1:8080/v1
   timeout_s: 120
-  first_token_timeout_s: 30            # covers swap wait; then error event
+llm:
+  first_token_timeout_s: 30            # MUST exceed the measured 12.47s cold
+                                       # load of chat-default; then error event
 chat:
   enabled: true
   max_context_tokens: 32768
   heartbeat_seconds: 15
 ```
 
-**Integration points.** Calls: router (F5), context/memory (F10, F17), tool loop (F9), tracer (A3), summaries (F18, fire-and-forget post-turn). Called by: web UI (F4). Spans: `llm.request` (with full prompt when enabled), `llm.first_token`, `swap.wait` (time between request and first token when llama-swap reports loading), `sse.emit`.
+**Integration points.** Calls: router (F5), context providers (F10, F17), tool loop (F9), tracing (A3), background jobs (F18, fire-and-forget post-turn). Called by: web UI (F4). Spans: `llm_request` (with full prompt when enabled), `llm_stream`, `swap_wait` (time between request and first token when llama-swap reports loading), `sse_emit`.
 
-**Build steps.** 1) `llm/client.py` against real llama-swap with `curl`-verified contract; 2) SSE encoder with terminal guarantee + heartbeats; 3) minimal orchestrator (no tools/rag): route→stream→persist; 4) chat REST; 5) tracer wiring; 6) context assembler (Phase 3 grows it); 7) tool-loop hook (F9); 8) golden-transcript contract test.
+**Build steps.** 1) `app/llm_client.py` against real llama-swap with `curl`-verified contract; 2) SSE encoder with terminal guarantee + heartbeats; 3) minimal orchestrator (no tools/rag): resolve model→stream→persist, leaving a marked seam where the Phase-2 router slots in; 4) chat REST; 5) span wiring; 6) `gather_context()` seam (Phase 3 fills it); 7) tool-loop hook (F9); 8) golden-transcript contract test.
 
-**Tests.** pytest vs fake llama-swap (canned OpenAI responses): full turn emits golden event sequence; provider 500 mid-stream → `error` event, stream closed, message row marked failed (Bug-2 regression test); first-token timeout fires; heartbeats present in slow stream; `model_loading` emitted when fake reports loading. Playwright: send message, see streamed text, refresh, history persists.
+**Tests.** pytest vs fake llama-swap (canned OpenAI responses): full turn emits the golden event sequence (`tests/golden/basic_turn.txt`); provider 500 mid-stream → `error` event, stream closed, message row marked failed (Bug-2 regression test); first-token timeout fires; heartbeats present in slow stream; `model_loading` emitted when the fake reports loading. Playwright: send message, see streamed text, refresh, history persists.
 
 **Failure modes.** llama-swap down → immediate `error {code: "llm_unreachable"}` + UI banner with retry. Mid-stream disconnect → partial message persisted with `status` note; UI shows "connection lost" if neither `done` nor `error` arrived (client-side rule, F4). Tool loop exceeding max iterations → loop stops, model asked to answer with what it has. [INFERENCE — standard cap behavior]
 
@@ -207,12 +216,14 @@ chat:
 
 ## F1. llama.cpp + llama-swap inference layer (spec §1)
 
-**What.** All inference is llama.cpp `llama-server` instances fronted by **llama-swap** (:8080): group `resident` (`swap: false`) pins classifier + embedder + needle + utility; group `gpu0-main` (`swap: true`) gives the 3090 an exclusive big-model slot. The backend speaks plain OpenAI chat-completions; llama-swap does every load/swap. Native router mode rejected (no group pinning). [FACT — PLAN §4.1]
+**What.** All inference is llama.cpp `llama-server` instances fronted by **llama-swap** (:8080): group `resident` (`swap: false`) pins `classifier` + `utility` + `embed` (CPU) and `dispatcher` (GPU1); group `gpu0-main` (`swap: true`) gives the 3090 an exclusive big-model slot, one model at a time, placed with `CUDA_VISIBLE_DEVICES=0` and **never `--tensor-split`**. The backend speaks plain OpenAI chat-completions; llama-swap does every load/swap. Native router mode rejected (no group pinning). [FACT — PLAN §4.1]
+
+**Measured behavior this layer must accommodate** [FACT — `docs/phase0-measurements.md` §13]: `chat-default` cold load **12.47s** / warm 0.67s; `dispatcher` cold 3.48s / warm 0.03–0.18s; `utility` (CPU) cold 20.54s / warm ~9.1–9.4s. The `groups:` block is load-bearing — without it llama-swap's implicit default group serializes everything and the residents cannot coexist with the big model.
 
 **Modules & files.**
-- `app/llm/client.py` — (A4) the only code path touching :8080.
-- `app/llm/warmkeeper.py` — ~20-line policy: re-warm `chat-default` when the 3090 has idled on another model N minutes. [FACT — PLAN §4.1 "always loaded" policy]
-- `app/llm/health.py` — startup + periodic: llama-swap reachable, resident group answering.
+- `app/llm_client.py` — (A4) the only code path touching :8080.
+- `app/gpu/rewarm.py` — ~20-line policy: re-warm `chat-default` when the 3090 has idled on another model N minutes; exposes `start_rewarm(app)`, wired at startup (Phase 2, ships with swapgen because it reads the same GPU state). [FACT — PLAN §4.1 "always loaded" policy]
+- Health checks (llama-swap reachable, resident group answering) live in `/health` in `app/main.py` and in `scripts/preflight.py` — not a module of their own.
 - `ops/llama-swap.service`, `ops/llama-server-build.md` — systemd unit + build notes (Phase 0 deliverables).
 - Generated `llama-swap.yaml` — written only by swapgen (F14).
 
@@ -220,56 +231,62 @@ chat:
 
 **Config keys.**
 ```yaml
-llm:               # see A4
-  base_url: ...
-warmkeeper:
-  enabled: true
-  model: chat-default
-  idle_minutes: 10
+llama_swap: {base_url: ..., timeout_s: 120}   # see A4
+llm:  {first_token_timeout_s: 30}             # MUST exceed the measured 12.47s cold load
+gpu:  {rewarm_default_after_min: 10}          # re-warm GPU0 after it has idled on another model
+defaults: {chat_model: chat-default, utility_model: utility, title_model: dispatcher}
 ```
 
-**Integration points.** Everything model-shaped flows through here. Spans: `llm.request`, `swap.wait` (backend measures request→first-token and tags turns that crossed a swap), `llm.first_token`. `model_loading` SSE event sourced from swap state. Phase 0 measures real load times / tok/s and replaces guessed budgets. [FACT — PLAN Phase 0]
+**Integration points.** Everything model-shaped flows through here. Spans: `llm_request`, `swap_wait` (backend measures request→first-token and tags turns that crossed a swap), `llm_stream`. `model_loading` SSE event sourced from swap state. Phase 0 measures real load times / tok/s and replaces guessed budgets. [FACT — PLAN Phase 0]
 
 **Build steps.** 1) Phase 0: build llama.cpp, install llama-swap systemd, hand-write first `llama-swap.yaml`, curl-verify swap + concurrent residents; 2) record measured VRAM/load/tok-s doc; 3) `llm/client.py` + streaming parse; 4) health checks; 5) warmkeeper; 6) `/api/models`; 7) swap-state proxy into debug tap; 8) hand-written yaml replaced by swapgen output (F14) with byte-diff check.
 
 **Tests.** pytest vs fake swap server: streaming parse incl. tool-call deltas and `usage`/`timings`; warmkeeper fires only after idle threshold; health degradation states. Live (`scripts/preflight.py`, not CI): every configured model loads and answers 1 token; embeddings endpoint alive. [FACT — PLAN §4.10]
 
-**Failure modes.** llama-swap down → chat errors fast with actionable message; resident model crashed → llama-swap restarts it [FACT — llama-swap process management]; swap slower than `first_token_timeout_s` → `error {recoverable: true}` and UI offers retry; utility model (3070) serves instant fallback replies while 3090 swaps when router allows [FACT — PLAN §4.1 roster].
+**Failure modes.** llama-swap down → chat errors fast with actionable message; resident model crashed → llama-swap restarts it [FACT — llama-swap process management]; swap slower than `first_token_timeout_s` → `error {recoverable: true}` and UI offers retry. **There is no instant-fallback chat model:** `utility` is CPU-resident and takes ~18–22s for a short generation, so it answers background jobs only — the mitigation for a cold swap is the warmkeeper plus a visible `model_loading` state, not a substitute reply. Routing `chat`→`reasoner` costs nothing because they share one blob.
 
 ## F2. Model classes & roster (spec §2)
 
-**What.** Consolidated ~8-model roster (4 big on the 3090 swap slot, 4 small residents) tagged with a `class:` (general, coding, tool, reasoning, vision) and placement. Old tier aliases (`coding-light/medium/heavy`, …) survive as routing labels pointing at this roster. Speed floor: nothing under ~25 tok/s at working quant. [FACT — PLAN §4.1 roster table]
+**What.** The locked 10-entry roster (5 big on the GPU0 swap slot, 4 residents, 1 off-by-default alternate) tagged with a `class:` (general, coding, tool, reasoning, vision) and a placement. Old tier aliases (`coding-light/medium/heavy`, …) survive as routing labels pointing at this roster. Speed floor: nothing under ~25 tok/s at working quant. **Every row is measured — PLAN §4.1 carries the numbers, `docs/PHASE0_FINDINGS_SUMMARY.md` §1 carries the one-line rationale per pick.** [FACT]
 
 **Modules & files.**
-- `app/models/registry.py` — parse `models:` config into `ModelEntry` records; resolve routing label → alias; validate classes/placements.
-- `app/models/api.py` — `/api/models` detail + per-model tok/s sanity numbers (from `llama-bench` script output file).
+- Parsing `models:` into `ModelEntry` records and resolving routing label → alias is part of `app/config.py`'s pydantic schema — it is validation, not a subsystem, and every agent already imports config.
+- `/api/models` (roster + class + resident flags + live swap state) is served by `app/settings/api.py`; per-model tok/s sanity numbers come from `app/debug/bench.py` (Phase 5).
 - `scripts/bench_models.py` — wraps `llama-bench` per configured model, writes `data/bench.json` (Critical scope = sanity numbers in debug panel; full suite is Future §4). [FACT — PLAN §4.1]
 
-**Interfaces.** `ModelEntry {alias, class, gguf_path, device: "cuda:0"|"cuda:1"|"cpu", resident: bool, ctx: int, quant, tool_call: "native"|"weak", mmproj?: path, extra_args: []}`. `resolve_label(label: str) -> alias`. Roster defaults per PLAN: `chat-default` (Qwen3.6-35B-A3B or 27B, 3090 always-loaded), `coder` (Qwen3-Coder-30B-A3B, 16k/24k ctx = two entries same weights), `reasoner` (R1-32B vs thinking-MoE, Phase 0 A/B keeps one), `vision` (Gemma4-27B + mmproj), `utility` (Qwen3-8B, 3070), `embed` (3070), `classifier` (Qwen3-1.7B, CPU), `needle` (Cactus 26M, CPU).
+**Interfaces.** `ModelEntry {name, class, file, quant, gpu: 0|1|"cpu", resident: bool, ttl_s: int|None, ctx: int, tool_call: "native"|"weak"|"none", mmproj: path|None, thinking: bool, reasoning_off: bool, max_tokens: int, enabled: bool, extra_flags: [str]}`. `resolve_label(label: str) -> name`. Placement is a **GPU index or `"cpu"`**, which swapgen renders as `CUDA_VISIBLE_DEVICES` — never a device string like `cuda:0`, and never a tensor-split (§F14).
+
+`thinking`, `reasoning_off`, and `max_tokens` are not cosmetic: `reasoner` is the *same GGUF as `chat-default`* with thinking enabled at the request layer (so that route never swaps), `classifier` is unusable without `--reasoning off`, and any thinking-capable alias needs a real token budget or it returns empty. All three came out of Phase 0 the hard way.
 
 **Config keys.**
 ```yaml
+# Paths under /home/john/llm-stack/models/{blobs,gguf}; abbreviated here.
+# `models:` is a LIST of entries, each carrying its own `name` — not a map.
+# The list form keeps ordering stable for swapgen's byte-identical output and
+# lets pydantic validate one entry model uniformly.
 models:
-  chat-default: {class: general, path: /models/qwen3.6-35b-a3b-q4.gguf, device: "cuda:0", resident: true, ctx: 32768, tool_call: native}
-  coder:        {class: coding,  path: /models/qwen3-coder-30b-q4.gguf, device: "cuda:0", ctx: 16384}
-  coder-24k:    {class: coding,  path: /models/qwen3-coder-30b-q4.gguf, device: "cuda:0", ctx: 24576}
-  reasoner:     {class: reasoning, path: /models/r1-32b-q4.gguf, device: "cuda:0", ctx: 16384}
-  vision:       {class: vision, path: /models/gemma4-27b-q4.gguf, mmproj: /models/gemma4-mmproj.gguf, device: "cuda:0"}
-  utility:      {class: general, path: /models/qwen3-8b-q4.gguf, device: "cuda:1", resident: true}
-  embed:        {class: embed, path: /models/nomic-embed-v2.gguf, device: "cuda:1", resident: true, embeddings: true}
-  classifier:   {class: classifier, path: /models/qwen3-1.7b-q8.gguf, device: cpu, resident: true, ctx: 4096}
-  needle:       {class: tool, path: /models/needle-q8.gguf, device: cpu, resident: true}
-routing_labels: {coding-light: coder, coding-heavy: coder-24k, reasoning-heavy: reasoner, ...}
+  - {name: chat-default, class: general,    file: .../Qwen3.6-35B-A3B-UD-Q4_K_M.gguf, quant: Q4_K_M, gpu: 0, resident: true, ttl_s: 0, ctx: 32768, tool_call: native}
+  - {name: reasoner,     class: reasoning,  file: .../Qwen3.6-35B-A3B-UD-Q4_K_M.gguf, quant: Q4_K_M, gpu: 0, ctx: 32768, thinking: true, max_tokens: 4096}   # same blob as chat-default — no swap
+  - {name: reasoner-alt, class: reasoning,  file: .../DeepSeek-R1-Distill-Qwen-32B-Q4_K_M.gguf, quant: Q4_K_M, gpu: 0, ctx: 8192, enabled: false, max_tokens: 4096}
+  - {name: coder,        class: coding,     file: .../Qwen3-Coder-30B-A3B-Instruct-Q5_K_M.gguf, quant: Q5_K_M, gpu: 0, ctx: 16384}   # Q5 is the locked quant
+  - {name: coder-small,  class: coding,     file: .../qwen2.5-coder-7b.gguf, quant: Q4_K_M, gpu: 0, ctx: 16384}
+  - {name: vision,       class: vision,     file: .../Qwen3-VL-32B-Instruct-Q4_K_M.gguf, quant: Q4_K_M, mmproj: .../Qwen3-VL-32B-Instruct-mmproj-BF16.gguf, gpu: 0, ctx: 8192}
+  - {name: dispatcher,   class: dispatcher, file: .../Hammer2.1-1.5b-Q4_K_M.gguf, quant: Q4_K_M, gpu: 1, resident: true, ttl_s: 0, ctx: 4096}
+  - {name: classifier,   class: classifier, file: .../Qwen3-1.7B-Q8_0.gguf, quant: Q8_0, gpu: cpu, resident: true, ttl_s: 0, ctx: 4096, reasoning_off: true}
+  - {name: utility,      class: utility,    file: .../qwen3-8b.gguf, quant: Q4_K_M, gpu: cpu, resident: true, ttl_s: 0, ctx: 8192}
+  - {name: embed,        class: embed,      file: .../nomic-embed-text-v2-moe.Q4_K_M.gguf, quant: Q4_K_M, gpu: cpu, resident: true, ttl_s: 0}
+routing_labels: {coding-light: coder-small, coding-heavy: coder, reasoning-heavy: reasoner, ...}
 ```
+Context-variant entries (same weights, different `ctx`) remain supported — the roster no longer ships one because `chat-default` at 32k is the measured target. Note the open caveat: throughput on `chat-default` degrades **52.9% by 32k** (recall stays correct), so compaction thresholds matter more than the window size.
 Per-model toggling = removing/commenting the entry or `enabled: false` on it; registry skips disabled entries and swapgen omits them.
 
-**Integration points.** Input to swapgen (F14), router (F5), model picker (F4), Needle assist (`tool_call: weak` tag, F9). Users add models per class in Settings [FACT — owner decision 4]. Spans: none of its own; registry data annotates `route.*` and `llm.request` spans.
+**Integration points.** Input to swapgen (F14), router (F5), model picker (F4), dispatcher assist (`tool_call: weak` tag, F9). Users add models per class in Settings [FACT — owner decision 4]. Spans: none of its own; registry data annotates `route` and `llm_request` spans.
 
 **Build steps.** 1) `ModelEntry` schema + validation (paths exist, one always-loaded per swap group); 2) label resolution; 3) `/api/models`; 4) Settings editor section (add/edit/disable model → overlay → swapgen regen); 5) bench script + `data/bench.json`; 6) Phase-0 A/B note for `reasoner`.
 
 **Tests.** pytest: label→alias resolution; disabled model invisible to router and swapgen; duplicate device/resident conflicts rejected; ctx-variant entries share one weights path. Router eval (F5) exercises class coverage.
 
-**Failure modes.** Missing GGUF path → that entry disabled with banner, others unaffected. A class with zero enabled models → router maps that class to `chat-default` and flags it in the debug panel. [INFERENCE — graceful-degradation carry-over]
+**Failure modes.** Missing GGUF path → that entry disabled with banner, others unaffected. A class with zero enabled models → router maps that class to `chat-default` and flags it in the debug panel. [INFERENCE — graceful-degradation carry-over] A blob that loads but produces garbage is a real occurrence, not a hypothetical: a Q6_K coder GGUF passed a byte-count check against the remote `content-length` and was still mid-stream-corrupted (`tensor ... not within the file bounds`). `wget -c` cannot detect this. Preflight (F3) loading each model and taking one token is the only cheap check that catches it.
 
 ## F3. Deployment topology & LAN access (spec §3)
 
@@ -314,50 +331,51 @@ Per-model toggling = removing/commenting the entry or `enabled: false` on it; re
 
 ## F5. Smart router (spec §5)
 
-**What.** Three strictly ordered layers resolve the model per turn: (1) per-chat manual override always wins; (2) deterministic rules (attachment types force intents; config keyword rules, word-boundary, 2+ words); (3) grammar-constrained classifier (~1.7B CPU resident) emitting schema-enforced JSON. Every decision emitted to the debug panel with source + latency. [FACT — PLAN §4.3]
+**What.** Three strictly ordered layers resolve the model per turn: (1) per-chat manual override always wins; (2) deterministic rules (attachment types force intents; config keyword rules, word-boundary, 2+ words); (3) grammar-constrained classifier (Qwen3-1.7B-Q8_0, CPU resident) emitting schema-enforced JSON. Every decision emitted to the debug panel with source + latency. **Measured 91.76% on the frozen taxonomy at 0.283s/item** — the Phase-2 ≥90% gate is already met in the lab; Phase 2's job is reproducing it in-app. [FACT — PLAN §4.3, `docs/phase0-measurements.md` §13]
 
 **Modules & files.**
 - `app/router/router.py` — the ordered pipeline, single entry `route()`.
 - `app/router/rules.py` — attachment→intent forcing + keyword rule engine (compiled word-boundary regexes from config).
-- `app/router/classifier.py` — prompt build (~600 tokens + few-shots), llama.cpp `response_format: json_schema` call, timeout, confidence gate.
-- `app/router/resolve.py` — `{class, effort}` → model alias via `routing:` table; classifier **never names models** (old spec's mistake). [FACT — PLAN §4.3]
+- `app/router/classifier.py` — prompt build (~600 tokens + few-shots), llama.cpp `response_format: json_schema` call, timeout, confidence gate. **Three things are load-bearing and must be ported verbatim from Phase 0, not re-derived:** the `--reasoning off` server flag (a `/no_think` suffix is not a substitute — it silently fails on some checkpoints), the few-shot examples targeting the *observed* confusions (live-data-without-a-tool-name: `stock price`/`weather`; file-search-vs-code-writing: `grep`/`find files`), and a real token budget.
+- `app/router/router.py` also owns resolution: `{class, effort}` → model alias via `routing.intents`; the classifier **never names models** (old spec's mistake). [FACT — PLAN §4.3]
 - `eval/router_eval.csv` + `scripts/eval_router.py` — labeled prompt→expected-route set + scorer.
 
 **Interfaces.**
-- `async route(chat: Chat, user_msg: str, attachments: list[Attachment], tracer) -> RouteDecision`
-- `RouteDecision {model: str, source: "override"|"rules"|"classifier"|"default", class: str, effort: "light"|"heavy", needs_tools: list[str], confidence: float|None, latency_ms: int}`
-- Classifier JSON schema (GBNF-enforced by llama.cpp — malformed JSON structurally impossible [FACT]):
+- `async route(chat, text: str, attachments: list) -> RouteResult`, exported from `app/router/__init__.py`.
+- `RouteResult {model: str, source: "override"|"rule"|"classifier"|"fallback", intent: str, confidence: float|None, latency_ms: int}` — the type lives in `app/types.py` and is frozen from Phase 1. `effort` and `needs_tools` are rules-layer outputs carried as span fields, not classifier output.
+- Classifier JSON schema (GBNF-enforced by llama.cpp — malformed JSON structurally impossible [FACT]), **re-frozen 2026-07-23 to the taxonomy that was actually measured**:
 ```json
-{"class": "general|coding|tool|reasoning|vision", "effort": "light|heavy", "needs_tools": ["web_search", "..."], "confidence": 0.0}
+{"class": "chat|chit_chat|code_task|tool_call_needed|reasoning_task|vision_task", "confidence": 0.0}
 ```
-- SSE `route` event (A4) mirrors `RouteDecision`.
+Per-class accuracy: `chat` 100%, `reasoning_task` 100%, `vision_task` 100%, `chit_chat` 90%, `code_task` 88.2%, **`tool_call_needed` 78.9%** (the weak class — expect regressions here first). `effort` and `needs_tools` are **no longer classifier output**; the deterministic rules layer sets them, which is cheaper and testable without a model. A bigger classifier was tested and rejected: Qwen3-4B on the identical prompt costs ~93.7s per classification because that gguf never honors reasoning-suppression flags.
+- There is no `route` SSE event: the decision rides the `done` payload as `{"route": {source, intent, model, confidence}}` and is written in full to the `route` span (A4, PLAN §4.2).
 
 **Config keys.**
 ```yaml
 routing:
   enabled: true                  # off = chat-default for everything (override still honored)
-  default_model: chat-default
   classifier:
     enabled: true
     model: classifier
-    timeout_ms: 2000             # timeout → default model
-    confidence_threshold: 0.6    # below → default model, flagged in debug
+    timeout_s: 2.0               # timeout → fallback_model
+    confidence_threshold: 0.5    # below → fallback_model, flagged in debug
+    fallback_model: chat-default
   rules:
-    - {keywords: ["write code", "stack trace"], class: coding}
-    - {attachment: image, class: vision}       # forced intents
-    - {attachment: code_file, class: coding}
-  table: {general.light: utility, general.heavy: chat-default, coding.light: coder,
-          coding.heavy: coder-24k, reasoning.heavy: reasoner, vision.heavy: vision,
-          tool.light: chat-default}
+    - {keywords: ["write code", "stack trace"], intent: code_task}
+  attachments: {image: vision, code_file: coding}   # forced intents
+  intents: {chat: chat-default, chit_chat: chat-default, code_task: coder,
+            reasoning_task: reasoner, vision_task: vision, tool_call_needed: chat-default}
+  # NB: chit_chat routes to chat-default, not utility — utility is CPU-resident
+  # (~18-22s/short generation) and answers background jobs only.
 ```
 
-**Integration points.** Called by orchestrator before `llm.request`. Reads model registry (F2), attachment types (F11). Spans: `route.override` / `route.rules` / `route.classifier` (with raw classifier output + confidence). Phase-2 exit gate: ≥90% on eval set. Future upgrade path: ModernBERT-style head behind the same `route()` interface [INFERENCE — PLAN §4.3.4].
+**Integration points.** Called by the orchestrator before `llm_request`, at the model-resolution seam Phase 1 left. Reads the model roster (F2), attachment types (F11). Emits **one** `route` span carrying source, intent, confidence, latency_ms, and which layer won (not three stage names — see A3). Phase-2 exit gate: ≥90% on eval set. Future upgrade path: ModernBERT-style head behind the same `route()` interface [INFERENCE — PLAN §4.3.4].
 
 **Build steps.** 1) `RouteDecision` + layer-1 override (Phase 1 ships with override-only); 2) rules engine; 3) classifier prompt (~600 tokens, few-shots) + json_schema call; 4) timeout/confidence fallbacks; 5) resolve table; 6) eval CSV (seed from old repo's labeled set, relabeled to class/effort — no model names); 7) `eval_router.py` in CI-optional job (needs classifier model; run on prompt/model change); 8) wire `route` SSE event + spans.
 
-**Tests.** pytest (no model): override beats everything; rules fire on word-boundary only ("scode" ≠ "code"); attachment forcing; classifier timeout → default; low confidence → default + flag; unknown class from schema impossible by construction but resolver still defends. Eval: ≥90% accuracy gate. Playwright: picking a model in composer shows `source: override` in debug view.
+**Tests.** pytest (no model): override beats everything; rules fire on word-boundary only ("scode" ≠ "code"); attachment forcing; classifier timeout → default; low confidence → default + flag; unknown class from schema impossible by construction but resolver still defends. Eval: ≥90% accuracy gate (baseline 91.76%, margin 1.76 points — a drop is a regression to explain, not noise). **Scorer requirement:** `chat` is a substring of `chit_chat`; the label extractor must match longest-first with word boundaries or exactly. A naive `if label in text` scan cost 45 accuracy points in Phase 0 and produced a completely wrong conclusion about model capacity. Playwright: picking a model in composer shows `source: override` in debug view.
 
-**Failure modes.** Classifier process dead → 2s timeout → default model, `route.classifier` span records failure; chat never blocks on routing. Rules misconfig (bad regex) → that rule skipped with startup warning. `routing.enabled: false` → everything is `default_model`, still traced.
+**Failure modes.** Classifier process dead → 2s timeout → default model, `route` span records failure; chat never blocks on routing. Rules misconfig (bad regex) → that rule skipped with startup warning. `routing.enabled: false` → everything is `default_model`, still traced.
 
 ## F6. opencode integration (spec §6)
 
@@ -389,7 +407,7 @@ opencode:
   allowed_roots: [/home/user/repos, /home/user/AI-Mega-App/projects]
 ```
 
-**Integration points.** Reads model roster (F2) for confgen; Code view (F4); router (F5) may set `needs_tools: ["delegate_opencode"]` as a suggestion signal [INFERENCE]. Spans: `opencode.session` (create/prompt/close with session_id), per-event relay counted in span meta. VS Code integration is docs-only (opencode's own extension) [FACT — PLAN §4.4.3].
+**Integration points.** Reads model roster (F2) for confgen; Code view (F4); router (F5) may set `needs_tools: ["delegate_opencode"]` as a suggestion signal [INFERENCE]. Spans: `opencode_session` (create/prompt/close with session_id), per-event relay counted in span meta. VS Code integration is docs-only (opencode's own extension) [FACT — PLAN §4.4.3].
 
 **Build steps.** 1) Phase 4: install + pin opencode on box, systemd unit; 2) confgen (llama-swap provider) + byte-diff test; 3) smoke-test session API with curl, record shapes; 4) `client.py`; 5) REST façade + SSE relay with terminal guarantee; 6) Code view; 7) delegation confirm flow in chat; 8) `docs/opencode.md` incl. zen switch both directions; 9) optional Windows host registration in Settings.
 
@@ -402,7 +420,7 @@ opencode:
 **What.** Claude.ai-style projects: grid → workspace with instructions, sources/files, project chats, project memory. Filesystem-first (`projects/<id>/instructions.md`, `docs/`) — the one part of the old app that worked — but chats/messages live in SQLite. Ingestion into RAG is incremental on file mtime. [FACT — PLAN §4.5]
 
 **Modules & files.**
-- `app/projects/store.py` — project CRUD over the filesystem + a `projects` row cache in SQLite for listing (`projects(id, name, path, created_at)`); `app/projects/ingest.py` — mtime scan → chunker (F10) → embed → sqlite-vec/FTS, per-file incremental; `app/projects/api.py` — REST + file upload into `docs/`.
+- `app/projects/store.py` — project CRUD over the filesystem + a `projects` row cache in SQLite for listing (`projects(id, name, path, created_at)`); `app/projects/ingest.py` — mtime scan → chunker (F10) → embed → Qdrant + FTS, per-file incremental; `app/projects/api.py` — REST + file upload into `docs/`.
 - `web/src/views/projects.ts` (grid), `web/src/views/project_detail.ts` (instructions editor, file list with ingest status, project chats, project memory tab).
 
 **Interfaces.** `POST /api/projects {name}` → creates `projects/<slug>/` with `instructions.md` + `docs/`; `GET /api/projects`; `GET/PUT /api/projects/{id}/instructions`; `POST /api/projects/{id}/files` (multipart → `docs/`); `GET /api/projects/{id}/files` → `[{path, mtime, ingested: bool, chunks: int}]`; `POST /api/projects/{id}/reingest`. Chats link via `chats.project_id`; project chats inherit instructions (F17 injection) + project RAG scope (F10).
@@ -416,7 +434,7 @@ projects:
   max_file_mb: 50
 ```
 
-**Integration points.** Feeds RAG (F10 scope filter `project_id`), memory scope (F17), opencode `allowed_roots` candidate (F6), file_ops tool scope (F9). Spans: `rag.ingest {project_id, file, chunks, ms}`. Home stays plain new chat — Projects is nav, not a gate (Bug-3 fix). [FACT]
+**Integration points.** Feeds RAG (F10 scope filter `project_id`), memory scope (F17), opencode `allowed_roots` candidate (F6), file_ops tool scope (F9). Spans: `rag_ingest` (fields: project_id, file, chunks, ms). Home stays plain new chat — Projects is nav, not a gate (Bug-3 fix). [FACT]
 
 **Build steps.** 1) filesystem layout + store + SQLite cache; 2) REST; 3) grid + detail views; 4) instructions injection wiring (F17); 5) ingest pipeline hookup (F10); 6) mtime incremental re-ingest; 7) project-scoped retrieval filter proof-test.
 
@@ -429,77 +447,85 @@ projects:
 **What.** Two toggleable tiers. Tier 1 (client, Phase 3): artifact panel rendering markdown/HTML/SVG/JS in a sandboxed iframe (`sandbox="allow-scripts"`, no same-origin) and Python via Pyodide in a web worker — Claude.ai-artifact parity, zero server risk. Tier 2 (server, Phase 4): `POST /api/exec` runs code in a short-lived locked-down Docker container for the `run_code` tool and dep-needing artifacts. In-chat artifacts always use the **chat model** — never opencode. [FACT — PLAN §4.6, §4.4.1]
 
 **Modules & files.**
-- `app/artifacts/detect.py` — fenced-block → artifact extraction from streamed completions (kind: html/svg/js/python/markdown/mermaid), stable artifact ids per chat.
-- `app/sandbox/docker_exec.py` — container lifecycle: `--network none`, mem/cpu/pids limits, read-only rootfs + tmpfs workdir, 30s timeout; images `sandbox-python`, `sandbox-node`; `app/sandbox/api.py` — `/api/exec`.
-- `ops/sandbox/Dockerfile.python`, `ops/sandbox/Dockerfile.node`.
-- `web/src/views/artifact_panel.ts` — right-panel tabs, version history per artifact id; `web/src/artifacts/iframe_host.ts` — srcdoc sandboxed iframe, postMessage console capture; `web/src/artifacts/pyodide_runner.ts` — worker bootstrap, stdout/plot capture.
+- `web/src/artifacts/detect.ts` — **client-side** pure function: finished message text → artifact candidates (html/svg/js/python/markdown/mermaid over a size threshold). Detection is client-side because the artifact is a rendering decision, not a turn outcome; this is why there is no `artifact` SSE event and no server module (PLAN §4.2).
+- `app/exec/runner.py` — container lifecycle: `--network none`, mem/cpu/pids limits, read-only rootfs + tmpfs workdir, 30s timeout; images `sandbox-python`, `sandbox-node`; `app/exec/api.py` — `/api/exec`. The docker argv is built in one function with the security flags as **non-optional constants** — a caller cannot disable them, and a test pins the exact argv.
+- `docker/sandbox-python/Dockerfile`, `docker/sandbox-node/Dockerfile`.
+- `web/src/artifacts/panel.ts` — right-panel controller, tabs (preview/source), per-chat artifact list; `web/src/artifacts/sandbox.ts` — srcdoc sandboxed iframe, postMessage console capture; `web/src/artifacts/pyodide.ts` + `web/workers/pyodide-worker.js` — worker bootstrap, stdout/plot capture; `web/src/artifacts/exec.ts` (Phase 4) — the "Run on server" action.
 
-**Interfaces.** SSE `artifact {id, kind, title}` then panel fetches `GET /api/chats/{id}/artifacts/{aid}` → `{kind, content, version}`. `POST /api/exec {lang: "python"|"node"|"bash", code, stdin?, timeout_s<=30}` → `{exit_code, stdout, stderr, duration_ms, files: [{name, b64}]}` (small outputs only, cap in config). Pyodide runner: `run(code) -> {stdout, stderr, result}` via worker postMessage.
+**Interfaces.** Panel exports exactly three things, and `chat.ts` integrates through those only: `initPanel(hostEl, store)`, `detectArtifacts(text) -> ArtifactCandidate[]`, `showArtifactsFor(messageId)`. Server side: `POST /api/exec {lang: "python"|"node"|"bash", code, files?}` → `{exit_code, stdout, stderr, duration_ms, artifacts: {name: b64}}` (small outputs only, cap in config). Pyodide runner: `run(code) -> {stdout, stderr, result}` via worker postMessage.
 
 **Config keys.**
 ```yaml
 artifacts:
   enabled: true
   tier1: {enabled: true, pyodide: true}
-sandbox:
-  enabled: true              # Tier 2; also gates run_code tool
+exec:                        # Tier 2; also gates the run_code tool
+  enabled: true
   images: {python: sandbox-python:latest, node: sandbox-node:latest}
   timeout_s: 30
   mem_mb: 512
   cpus: 1.0
   pids: 128
-  network: none
   max_output_kb: 256
 ```
+(`--network none` is a hardcoded constant in the runner, not a config key — a security flag a config file can turn off is not a security flag.)
 
-**Integration points.** Orchestrator pipes deltas through `detect.py`; `run_code` tool (F9) calls `docker_exec`; Phase-5 sandbox audit hardens it (no backend auth, but tool-executed code is not the owner — sandbox stays locked [FACT — PLAN Phase 5]). Spans: `tool.run_code` (container id, limits, exit), `artifact.detect`.
+**Integration points.** Orchestrator pipes deltas through `detect.py`; `run_code` tool (F9) calls `app/exec/runner`; Phase-5 sandbox audit hardens it (no backend auth, but tool-executed code is not the owner — sandbox stays locked [FACT — PLAN Phase 5]). Spans: `tool` (name=run_code; container id, limits, exit) and `exec`.
 
-**Build steps.** 1) iframe host + panel with static content; 2) stream detection → panel live-update; 3) Pyodide worker; 4) Docker images; 5) `docker_exec` with full limit set; 6) `/api/exec` + `run_code` tool wiring; 7) audit checklist (escape attempts, resource bombs); 8) toggles verified end-to-end.
+**Build steps.** 1) iframe host + panel with static content; 2) stream detection → panel live-update; 3) Pyodide worker; 4) Docker images; 5) `app/exec/runner.py` with the full limit set; 6) `/api/exec` + `run_code` tool wiring; 7) audit checklist (escape attempts, resource bombs); 8) toggles verified end-to-end.
 
-**Tests.** pytest: detection extracts artifacts from golden streams; exec enforces timeout (sleep 60 → killed), memory cap (alloc bomb → OOM-killed), no network (`curl` fails inside), read-only rootfs (write outside tmpfs fails), output cap. Playwright: HTML artifact renders in panel; JS `alert` sandboxed; Python artifact runs via Pyodide and shows stdout; `sandbox.enabled: false` → `run_code` absent from tool list (toggle wiring proof).
+**Tests.** pytest: detection extracts artifacts from golden streams; exec enforces timeout (sleep 60 → killed), memory cap (alloc bomb → OOM-killed), no network (`curl` fails inside), read-only rootfs (write outside tmpfs fails), output cap. Playwright: HTML artifact renders in panel; JS `alert` sandboxed; Python artifact runs via Pyodide and shows stdout; `exec.enabled: false` → `run_code` absent from tool list (toggle wiring proof).
 
 **Failure modes.** Docker daemon absent → Tier 2 + `run_code` disabled with banner; Tier 1 unaffected. Pyodide load failure (large wasm) → panel shows code with "run unavailable". Runaway container → hard timeout + `docker kill`; orphan sweep at startup. [INFERENCE]
 
-## F9. Tool calls + Needle dispatcher (spec §9, §9.1)
+## F9. Tool calls + dispatcher (spec §9, §9.1)
 
-**What.** Primary path: llama.cpp native tool calling (`--jinja` + model chat template) through the OpenAI `tools` API; the orchestrator runs accumulate-deltas → dispatch → append-result, max N iterations. Tools are self-describing modules auto-discovered into a registry, each toggleable. **Needle assist:** for models tagged `tool_call: weak`, the call-emission step routes to resident Needle (26M) — Needle is the dispatcher, never the planner; anything branching on results stays with the main model. [FACT — PLAN §4.7]
+**What.** Primary path: llama.cpp native tool calling (`--jinja` + model chat template) through the OpenAI `tools` API; the orchestrator runs accumulate-deltas → dispatch → append-result, max N iterations. Tools are self-describing modules auto-discovered into a registry, each toggleable. **Dispatcher assist:** for models tagged `tool_call: weak`, the call-emission step routes to the resident `dispatcher` (**Hammer2.1-1.5b**, GPU1, 0.07–0.21s/call) — the dispatcher is never the planner; anything branching on results stays with the main model. [FACT — PLAN §4.7]
+
+**Measured accuracy sets a design constraint** [FACT — §13]: 79.0% call_f1 on a realistic 6-tool registry, **63.75% on a hostile 13-tool registry** with confusable name-trios, 98.8% parse. After few-shot disambiguation the residual errors are argument-fidelity only (dropping articles while copying query text), not wrong-tool selection. **So: keep tool names semantically distinct** — `web_search`/`web_news`/`web_images` and `file_read`/`file_read_lines`/`read_file_metadata` are exactly the shapes that cost accuracy. Embedding-based tool pre-filtering ("tool-RAG") was measured and made things *worse* (60.87% at k=5); don't add it without re-measuring at a much larger registry.
 
 **Modules & files.**
-- `app/tools/registry.py` — auto-discover `app/tools/impl/*.py`, filter by `enabled`, render OpenAI tool schemas.
-- `app/tools/loop.py` — delta accumulation (reuse old build's correct merge *pattern*), dispatch, result append, iteration cap.
-- `app/tools/needle.py` — Needle call-emission: query + tool schemas → one JSON call; used per-step when the active model is `tool_call: weak`, or in fixed pipelines where the next step is mechanically determined.
-- `app/tools/impl/web_search.py`, `fetch_url.py`, `file_ops.py` (project-scoped read/list/grep, ~100 lines), `run_code.py`, `browser.py` (F15), `memory_save.py`, `memory_search.py` — one module each: `name`, `description`, `schema` (JSON Schema), `async execute(args, ctx) -> ToolResult`, `enabled` (config-bound), `consequential: bool` (browser=true → per-chat opt-in).
+- `app/tools/base.py` — the `Tool` protocol; `app/tools/__init__.py` — registry: auto-discovers tool modules directly under `app/tools/`, filters by `enabled`, renders OpenAI tool schemas, `dispatch(name, args, ctx)` with a `tool` span.
+- The delta-accumulation loop lives in `app/chat/orchestrator.py`, not a separate module — it is the turn loop's inner loop (reuse the old build's correct merge *pattern*, not its code), capped at `tools.max_iterations`.
+- `app/tools/dispatcher.py` — **not a registry Tool**; the assist module for single-shot call emission: query + tool schemas → one JSON call, used per-step when the active model is `tool_call: weak`. (Was `needle.py`; Cactus Needle was evaluated and dropped — see PLAN §4.7.)
+- `app/tools/web_search.py`, `fetch_url.py`, `file_ops.py` (project-scoped read/list/grep, ~100 lines), `run_code.py`, `browser.py` (F15), `memory_save.py`, `memory_search.py` — one flat module each (no `impl/` subdirectory): `name`, `description`, `schema` (JSON Schema), `async execute(args, ctx) -> ToolResult`, `enabled` (config-bound), `consequential: bool` (browser=true → per-chat opt-in).
 
-**Interfaces.** `ToolResult {content: str, is_error: bool, meta: dict}`; `ctx` carries `chat, project_id, tracer, config`. Loop contract: max `tools.max_iterations`; every dispatch emits SSE `tool_call`/`tool_result` and span `tool.<name>` (args, duration, error). Needle: `emit_call(query: str, tools: list[schema]) -> {name, arguments}` — single shot, no chaining [FACT — Cactus's own framing]. Fine-tune plan: after registry stabilizes (end Phase 3), fine-tune Needle on our schemas (~120 examples/tool), adopt only if it beats untuned baseline; schema changes mean retraining. [FACT — PLAN §4.7]
+**Interfaces.** `ToolResult {content: str, is_error: bool, data: dict|None}`; `ToolContext` carries `chat_id, project_id, trace_id, config`. Loop contract: max `tools.max_iterations`; every dispatch emits SSE `tool_start`/`tool_result` and a span with `stage="tool", name=<tool>` (args, duration, error). Dispatcher: `emit_call(text, tool_schemas, client, cfg) -> ToolCallRequest | None` — single shot, no chaining; **every** failure path returns `None` so the caller falls back to native emission. Fine-tune plan (unchanged, deferred): after the registry stabilizes at the end of Phase 3, re-run the Hammer-vs-FunctionGemma comparison against the *real* schemas. The FunctionGemma path is already proven end-to-end — full 250-example finetune → 88.3% call_f1 on a fresh non-overlapping holdout → GGUF conversion (including the upstream `vocab_size` 262144→262146 fix) — with scripts under `scripts/needle_training/`. It lost on registry pressure (36.5%) and per-call latency, not on capability. [FACT — PLAN §4.7]
 
 **Config keys.**
 ```yaml
 tools:
   enabled: true
   max_iterations: 6
-  needle_assist: {enabled: true, model: needle}   # applies to models tagged tool_call: weak
+  dispatcher_assist: true            # applies to models tagged tool_call: weak;
+                                     # the model itself is the roster entry with
+                                     # class `dispatcher` — not repeated here
   web_search: {enabled: true}
   fetch_url: {enabled: true, timeout_s: 20, max_bytes: 2000000}
   file_ops: {enabled: true}          # scope = project dirs only
-  run_code: {enabled: true}          # requires sandbox.enabled
+  run_code: {enabled: true}          # requires exec.enabled
   browser: {enabled: false}          # off by default, per-chat toggle (F15)
-  memory: {enabled: true}            # memory_save/search pair
+  memory_save: {enabled: true}
+  memory_search: {enabled: true}
+search:
+  provider_chain: [ddg, tavily]
 ```
+Every `tools.<key>` matches a module filename under `app/tools/` exactly — the startup wiring test asserts that correspondence in both directions, which is the anti-Bug-1 check.
 
-**Integration points.** Called by orchestrator (A4); tools call search (F16), sandbox (F8), BrowserOS (F15), memory (F10/F17), projects fs (F7). Router's `needs_tools` pre-warms nothing but is logged. Debug panel marks Needle-assisted turns and shows per-step *who decided vs. who emitted*. [FACT — PLAN §4.7]
+**Integration points.** Called by orchestrator (A4); tools call search (F16), sandbox (F8), BrowserOS (F15), memory (F10/F17), projects fs (F7). Router's `needs_tools` pre-warms nothing but is logged. Debug panel marks dispatcher-assisted turns and shows per-step *who decided vs. who emitted*. [FACT — PLAN §4.7] A dev surface for firing candidate dispatchers at live traffic and comparing them is a known gap (PHASE0_FINDINGS §4) — Phase 5 `llama-bench` panel is its natural home.
 
-**Build steps.** 1) registry + schema render + toggle filtering; 2) loop with delta merge + cap; 3) `web_search`/`fetch_url`/`file_ops` (Phase 3 first wave) **wired into the orchestrator the same PR** (Bug-1 regression rule); 4) SSE + span emission; 5) `run_code` (Phase 4); 6) Needle client + weak-model routing; 7) `memory_save/search`; 8) `browser` (Phase 5); 9) Needle fine-tune experiment (post-Phase-3).
+**Build steps.** 1) registry + schema render + toggle filtering; 2) loop with delta merge + cap; 3) `web_search`/`fetch_url`/`file_ops` (Phase 3 first wave) **wired into the orchestrator the same PR** (Bug-1 regression rule); 4) SSE + span emission; 5) `run_code` (Phase 4); 6) dispatcher client + weak-model routing; 7) `memory_save/search`; 8) `browser` (Phase 5); 9) dispatcher fine-tune re-run against the stabilized registry (post-Phase-3).
 
-**Tests.** pytest vs fake LLM emitting tool-call deltas: split-across-chunks arguments merge correctly; unknown tool → `is_error` result fed back, loop continues; cap stops runaway loop; disabled tool absent from schemas AND dispatch rejects it (double gate); Needle path invoked only for `tool_call: weak` models; Needle output validated against schema before execution. **Startup wiring test:** every enabled tool in config appears in the live registry (the anti-Bug-1 test). Playwright: ask "search the web for X" → visible tool chips → cited answer.
+**Tests.** pytest vs fake LLM emitting tool-call deltas: split-across-chunks arguments merge correctly; unknown tool → `is_error` result fed back, loop continues; cap stops runaway loop; disabled tool absent from schemas AND dispatch rejects it (double gate); dispatcher path invoked only for `tool_call: weak` models; dispatcher output validated against schema before execution. **Startup wiring test:** every enabled tool in config appears in the live registry (the anti-Bug-1 test). Playwright: ask "search the web for X" → visible tool chips → cited answer.
 
-**Failure modes.** Tool exception → `is_error` ToolResult to the model (it can recover verbally), never a dead stream. Needle emits invalid call → schema validation fails → fall back to main-model emission for that step, flagged in debug. All tools disabled → plain chat, tools chip hidden.
+**Failure modes.** Tool exception → `is_error` ToolResult to the model (it can recover verbally), never a dead stream. Dispatcher emits an invalid call → schema validation fails → fall back to main-model emission for that step, flagged in debug. Dispatcher picks the *wrong but valid* tool (the realistic failure at 63.75–79% call_f1) → the tool returns a useless-but-honest result and the main model recovers; this is why the assist is per-model opt-in and the primary path stays native tool calling. All tools disabled → plain chat, tools chip hidden.
 
 ## F10. RAG + memory (spec §10) — hermes-agent style
 
-**What.** RAG: per-project ingestion → heading-aware chunking (~512 tokens, 20% overlap) → embeddings via resident embed model → sqlite-vec + FTS5 → hybrid retrieval (vector + BM25, reciprocal-rank fusion) → top-k with source citations in the UI. Memory: discrete fact rows in SQLite (FTS5 + optional embedding), three scopes (user / project / global), injected as a tagged `<memory-context>` block hermes-fashion; all visible/editable in Settings → Memory. Self-improvement: post-turn background review on the utility model *proposes* writes into a review queue (auto-accept optional per scope). [FACT — PLAN §4.8]
+**What.** RAG: per-project ingestion → heading-aware chunking (~512 tokens, 20% overlap) → embeddings via the CPU-resident `embed` model (nomic-embed-text-v2-moe, 11.7–34ms/call, **recall@1 96.67% / recall@5 100%** on a 30-query fixture [FACT — §13]) → **Qdrant (vectors) + SQLite FTS5 (lexical)** → hybrid retrieval (vector + BM25, reciprocal-rank fusion) → top-k with source citations in the UI. Memory: discrete fact rows in SQLite (FTS5 + optional embedding), three scopes (user / project / global), injected as a tagged `<memory-context>` block hermes-fashion; all visible/editable in Settings → Memory. Self-improvement: post-turn background review on the utility model *proposes* writes into a review queue (auto-accept optional per scope). [FACT — PLAN §4.8]
 
 **Modules & files.**
-- `app/rag/chunker.py` — heading-aware markdown/text chunker (tree-sitter AST chunking for code is a later drop-in); `app/rag/embed.py` — batch embed via `llm.client.embed`; `app/rag/retrieve.py` — hybrid query + RRF + k; `app/rag/cite.py` — citation assembly for SSE.
+- `app/rag/chunker.py` — heading-aware markdown/text chunker (tree-sitter AST chunking for code is a later drop-in); `app/rag/embed.py` — batch embed via `llm_client.embed`; `app/rag/retrieve.py` — hybrid query + RRF + k; `app/rag/cite.py` — citation assembly for SSE.
 - `app/memory/store.py` — fact CRUD per scope; `app/memory/inject.py` — build `<memory-context>` block (user-scope always injected per spec §17; project scope in project chats; global on relevance match); `app/memory/reviewer.py` — post-turn utility-model job → `review_queue` proposals (Phase 5); `app/memory/api.py` — REST for Settings → Memory + review queue.
 - `web/src/views/settings/memory.ts` — list/edit/delete facts per scope, review-queue accept/reject.
 
@@ -514,7 +540,7 @@ tools:
 ```
 appended inside the user message [FACT — hermes injects into the user message, PLAN §4.8].
 - REST: `GET/POST/PATCH/DELETE /api/memory?scope=&project_id=`; `GET /api/review-queue`, `POST /api/review-queue/{id} {action: accept|reject}`.
-- SSE `citations` event lists retrieval sources rendered under the message.
+- Retrieval sources ride `done.citations` (see PLAN §4.2 frozen contract) and render under the message — there is no separate `citations` SSE event.
 
 **Config keys.**
 ```yaml
@@ -533,33 +559,33 @@ memory:
     auto_accept: {user: false, project: false, global: false}
 ```
 
-**Integration points.** Context assembler (A4) calls `inject` + `retrieve` before `llm.request`; `memory_save/search` tools (F9) write/read the same store; chat-history embedding (F13) reuses embed/retrieve. Spans: `rag.retrieve` (query, k, hit ids, ms), `memory.inject` (counts per scope), `memory.review` (proposal or no-op). Reviewer failures never block chat (background). [FACT]
+**Integration points.** Context assembler (A4) calls `inject` + `retrieve` before `llm_request`; `memory_save/search` tools (F9) write/read the same store; chat-history embedding (F13) reuses embed/retrieve. Spans: `rag_retrieve` (query, k, hit ids, ms), `memory_inject` (counts per scope), `memory_review` (proposal or no-op). Reviewer failures never block chat (background). [FACT]
 
-**Build steps.** 1) chunker + golden-file chunk tests; 2) embed batch path; 3) vec+FTS dual write on ingest (F7); 4) hybrid retrieve + RRF; 5) citations end-to-end (SSE→UI); 6) memory store + manual CRUD UI; 7) inject wiring with scope rules; 8) `memory_save` tool (Phase 3 manual path); 9) reviewer + queue (Phase 5); 10) auto-accept per-scope toggles.
+**Build steps.** 1) chunker + golden-file chunk tests; 2) embed batch path; 3) Qdrant+FTS dual write on ingest (F7), with the id space shared so a delete hits both; 4) hybrid retrieve + RRF; 5) citations end-to-end (`done` payload → UI); 6) memory store + manual CRUD UI; 7) inject wiring with scope rules; 8) `memory_save` tool (Phase 3 manual path); 9) reviewer + queue (Phase 5); 10) auto-accept per-scope toggles.
 
-**Tests.** pytest: chunker respects headings/overlap; hybrid beats either-alone on a fixture set (known needle docs); RRF ordering deterministic; scope injection matrix (user always / project only in project chat / global on match); reviewer proposal lands in queue and is NOT injected until accepted; accepted memory appears in next turn's `<memory-context>` (full wiring test). Playwright: save a preference via chat ("remember I like X") → visible in Settings → next chat reflects it.
+**Tests.** pytest: chunker respects headings/overlap; hybrid beats either-alone on a fixture set (planted target docs); RRF ordering deterministic; scope injection matrix (user always / project only in project chat / global on match); reviewer proposal lands in queue and is NOT injected until accepted; accepted memory appears in next turn's `<memory-context>` (full wiring test). Playwright: save a preference via chat ("remember I like X") → visible in Settings → next chat reflects it.
 
-**Failure modes.** Embed model down → ingest queues + retrieval degrades to FTS-only (flagged in citations meta). Reviewer error → dropped silently into a `log` tap event; chat unaffected. Oversized memory set → injection capped by token budget, lowest-relevance dropped, span notes truncation. [INFERENCE]
+**Failure modes.** Embed model or Qdrant down → ingest queues + retrieval degrades to FTS-only (flagged in citations meta) — the hybrid design is what makes this a degraded mode rather than an outage. Reviewer error → dropped silently into a `log` tap event; chat unaffected. Oversized memory set → injection capped by token budget, lowest-relevance dropped, span notes truncation. [INFERENCE]
 
 ## F11. Attachments (spec §11)
 
 **What.** Upload → type sniff → extractor registry: text/code direct, PDF (pymupdf), docx/xlsx/pptx (python-docx family or markitdown), images → vision model path; audio is Future. Small extractions go straight to context; large ones become RAG-on-the-fly for that chat. Each extractor is one module. [FACT — PLAN §4.9]
 
 **Modules & files.**
-- `app/attachments/api.py` — `POST /api/upload` (multipart, streams to `data/uploads/`), status endpoint; `app/attachments/sniff.py` — magic-bytes + extension typing; `app/attachments/registry.py` — extractor discovery/dispatch, mirrors tool-registry pattern; `app/attachments/extract/text.py`, `pdf.py`, `office.py`, `image.py` — one module each, `supports(mime) -> bool`, `async extract(path) -> Extraction`.
+- `app/attachments/api.py` — `POST /api/chats/{id}/attachments` (multipart, streams to `data/attachments/`) + `GET /api/attachments/{id}` metadata; `app/attachments/extract.py` — sniffing plus the extractor registry, `register(mime_prefixes, fn)` so a new type is one entry; `app/attachments/context.py` — the context provider registered on the orchestrator's `gather_context` seam.
 
-**Interfaces.** `POST /api/upload` → `{attachment_id, filename, mime, status: "ready"|"extracting"|"error", extracted_chars}`; composer sends `attachments: [id]` in the stream request. `Extraction {text: str|None, images: list[path], meta}`. Threshold logic in `app/chat/context.py`: `extracted_chars <= attachments.inline_max_chars` → inline block; larger → chunk+embed into chat-scoped ephemeral chunks (`chunks.project_id = "chat:<id>"`) retrieved like RAG. Image attachments force `class: vision` in router rules (F5).
+**Interfaces.** `POST /api/chats/{id}/attachments` → `{id, filename, kind, mime, extracted_chars}`; the composer then sends `attachments: [id]` in the stream request. `Extraction {text: str|None, images: list[path], meta}`. Threshold logic in the context provider: `extracted_chars <= attachments.max_inline_tokens` (token-estimated) → inline tagged block; larger → chunk+embed via `rag.ingest_text` into chat-scoped ephemeral chunks (`project_id = "chat:<id>"`) retrieved like RAG, or truncated inline with a notice if `app.rag` is not importable. Image attachments force the `vision` intent in the rules layer (F5).
 
 **Config keys.**
 ```yaml
 attachments:
   enabled: true
   max_mb: 50
-  inline_max_chars: 12000
+  max_inline_tokens: 4000
   extractors: {text: true, pdf: true, office: true, image: true}
 ```
 
-**Integration points.** Router forced intents (F5), context assembly (A4), RAG machinery reuse (F10), vision model path (F2). Spans: `attach.extract {mime, chars, ms, extractor}`.
+**Integration points.** Router forced intents (F5), context assembly (A4), RAG machinery reuse (F10), vision model path (F2). Spans: `attachment_extract` (fields: mime, chars, ms, extractor).
 
 **Build steps.** 1) upload endpoint + storage + attachments table; 2) sniffer; 3) text/code extractor; 4) pdf; 5) office; 6) image→vision wiring (message content parts with image path → llama.cpp multimodal request [UNCERTAIN — exact multimodal payload shape for the installed llama-server; verify in Phase 3]); 7) inline-vs-RAG threshold; 8) composer UI + per-message attachment chips.
 
@@ -592,10 +618,10 @@ attachments:
 
 ## F13. Vector DB & chat-history search (spec §13)
 
-**What.** sqlite-vec is the vector store (decided in §3.1/A2; Qdrant only returns behind the `VectorStore` interface if >~1M vectors). This feature's user-visible half: "search my past chats" — per-message-batch embeddings + FTS over messages, hybrid-searched from the sidebar. [FACT — PLAN §4.8, §4.11]
+**What.** Qdrant is the vector store (decided in §3.1/A2 after sqlite-vec failed its 100k-vector gate; `SqliteVecStore` remains the in-tree fallback behind the same interface). This feature's user-visible half: "search my past chats" — per-message-batch embeddings + FTS over messages, hybrid-searched from the sidebar. [FACT — PLAN §4.8, §4.11]
 
 **Modules & files.**
-- `app/db/vectors.py` — (A2) the interface + impl; `app/search_chats/indexer.py` — background job embedding message batches (per N messages or on chat idle) into `vec_messages`; `app/search_chats/api.py` — `GET /api/search/chats?q=` hybrid over `vec_messages` + `messages_fts`, grouped by chat; `web/src/views/search.ts` — sidebar search box + results (chat title, matching snippet, jump-to-message).
+- `app/rag/store.py` — (A2) the interface + impl; `app/search_chats/indexer.py` — background job embedding message batches (per N messages or on chat idle) into `vec_messages`; `app/search_chats/api.py` — `GET /api/search/chats?q=` hybrid over `vec_messages` + `messages_fts`, grouped by chat; `web/src/views/search.ts` — sidebar search box + results (chat title, matching snippet, jump-to-message).
 
 **Interfaces.** `GET /api/search/chats?q=&limit=20` → `[{chat_id, title, message_id, snippet, score}]`. Indexer: `index_chat(chat_id)` embeds unembedded batches; runs post-turn fire-and-forget alongside summaries (F18).
 
@@ -607,7 +633,7 @@ chat_search:
   semantic: true            # false = FTS-only
 ```
 
-**Integration points.** Reuses embed (F10), utility scheduling slot (F18's background queue), `VectorStore` (A2). Spans: `chat_search.index`, `chat_search.query`. Phase-0 benchmark result decides sqlite-vec confidence. [FACT]
+**Integration points.** Reuses embed (F10), the background queue (F18), `VectorStore` (A2). Spans: `rag_ingest` and `rag_retrieve` (the chat-search indexer reuses them with a `messages` source tag). [FACT]
 
 **Build steps.** 1) FTS-only search first (works day one); 2) indexer job; 3) hybrid merge; 4) sidebar UI + jump-to-message anchor; 5) backfill script for pre-existing chats.
 
@@ -617,12 +643,18 @@ chat_search:
 
 ## F14. GPU delegation & swapgen (spec §14)
 
-**What.** At startup, `nvidia-smi` inventory → GPU inventory endpoint → Settings UI assigns each model to a GPU (or CPU for <2B). A deterministic module renders `llama-swap.yaml` from config + assignments; changing assignments regenerates the file and triggers llama-swap config reload — programmatic config writing, never AI-generated, never hand-edited. [FACT — PLAN §4.1]
+**What.** At startup, `nvidia-smi` inventory → GPU inventory endpoint → Settings UI assigns each model to a GPU or CPU. A deterministic module renders `llama-swap.yaml` from config + assignments; changing assignments regenerates the file and triggers llama-swap config reload — programmatic config writing, never AI-generated, never hand-edited. [FACT — PLAN §4.1]
+
+**Four non-negotiable output properties, each an observed-and-fixed defect in the hand-written config swapgen replaces** [FACT — PLAN §4.1]:
+1. **A `groups:` block always exists** — CPU residents + `dispatcher` in `resident: {swap: false}`, big models in `gpu0-main: {swap: true}`. Omit it and llama-swap's implicit default group serializes every model, which silently defeats Config B.
+2. **Device placement is `CUDA_VISIBLE_DEVICES=<n>` in the entry's `env:`** — never `--tensor-split`. A degenerate split measured ~3x slower than a clean single-device restriction; a real 3,1 split starves GPU1 and OOMs its residents.
+3. **`--reasoning off` on `classifier`** (and any alias with `reasoning_off: true`). Without it the classifier spends its budget in `<think>` and returns empty content — the measured 91.76% does not reproduce.
+4. **`CUDA_VISIBLE_DEVICES=""` on CPU-placed entries.** `--device none -ngl 0` alone still initializes CUDA contexts worth ~150–256MB per card per process — measured as 256MB stolen from the big slot's headroom by the classifier alone.
 
 **Modules & files.**
 - `app/gpu/inventory.py` — parse `nvidia-smi --query-gpu=index,name,memory.total,memory.free --format=csv`; `app/gpu/swapgen.py` — pure function config→yaml (macros incl. `${PORT}`, per-model `cmd`, groups `resident`/`gpu0-main` per PLAN's sample); `app/gpu/api.py` — inventory endpoint + assignment PATCH + reload trigger; `web/src/views/settings/gpu.ts` — assignment table with live VRAM bars.
 
-**Interfaces.** `GET /api/gpu/inventory` → `[{index, name, mem_total_mb, mem_free_mb}]`; `PATCH /api/models/{alias} {device}` → overlay write → `swapgen.render(config) -> str` → write `llama-swap.yaml` → `POST` llama-swap reload endpoint [UNCERTAIN — reload endpoint name per installed llama-swap version; verify Phase 0] → poll until resident group healthy. `render()` output shape per PLAN §4.1 sample (macros/models/groups; `--device CUDAn`/`--device none -ngl 0`; vision adds `--mmproj`) [UNCERTAIN — exact `--device` flag spelling per installed llama.cpp build; verify against `llama-server --help` in Phase 0].
+**Interfaces.** `GET /api/gpu/inventory` → `[{index, name, mem_total_mb, mem_free_mb}]`; `PATCH /api/models/{alias} {device}` → overlay write → `swapgen.render(config) -> str` → write `llama-swap.yaml` → `POST` llama-swap reload endpoint [UNCERTAIN — reload endpoint name per installed llama-swap version; verify Phase 0] → poll until resident group healthy. `render()` output shape per PLAN §4.1 sample (macros/models/groups; `env: [CUDA_VISIBLE_DEVICES=n]` for GPU, `--device none -ngl 0` for CPU; vision adds `--mmproj`; residents get `ttl: 0`). [FACT — verified against the installed build in Phase 0]
 
 **Config keys.**
 ```yaml
@@ -633,11 +665,11 @@ gpu:
   vram_guard: true            # refuse assignment if model est. size > free VRAM
 ```
 
-**Integration points.** Consumes model registry (F2); feeds llama-swap (F1); Settings UI (F4); debug panel shows swap state + GPU poll (A3). Spans: `gpu.inventory`, `swapgen.render`, `swapgen.reload`. Exit gate Phase 2: GPU reassignment without backend restart. [FACT]
+**Integration points.** Consumes model registry (F2); feeds llama-swap (F1); Settings UI (F4); debug panel shows swap state + GPU poll (A3). Spans: `gpu_inventory`, `swapgen`. Exit gate Phase 2: GPU reassignment without backend restart. [FACT]
 
 **Build steps.** 1) inventory parser (fixture-tested on captured nvidia-smi output); 2) swapgen pure function + golden-yaml tests (one per roster scenario: default, model disabled, ctx-variant pair, vision, two-box future map [INFERENCE — future map is config passthrough only]); 3) file write (temp+rename) + generated-file header comment; 4) reload call + health poll; 5) Settings GPU tab; 6) vram_guard estimates (file size × overhead factor from Phase-0 measurements).
 
-**Tests.** pytest: golden yaml byte-diffs; disabled model omitted; resident group always contains classifier/embed/needle/utility when enabled; guard rejects oversized assignment; reload failure rolls the yaml file back to previous version (kept as `.bak`). Live: reassign embed 3070→CPU in Settings, preflight still green.
+**Tests.** pytest: golden yaml byte-diffs; disabled model omitted; **`groups:` block present with the right membership**; **no `--tensor-split` in any emitted cmd**; **`--reasoning off` present for every `reasoning_off: true` alias**; **`CUDA_VISIBLE_DEVICES=""` on every CPU-placed entry**; resident group contains classifier/embed/utility/dispatcher when enabled; guard rejects oversized assignment; reload failure rolls the yaml back to the previous version (kept as `.bak`). The three assertions in bold are regression tests for real observed defects, not hypotheticals. Live: reassign embed CPU→GPU in Settings, preflight still green.
 
 **Failure modes.** `nvidia-smi` absent → CPU-only inventory, big models flagged unassignable, app still runs. Reload fails → rollback yaml + error banner; llama-swap keeps old config (never left half-configured). Hand-edit detected (header hash mismatch) → refuse to overwrite, tell user to move changes into `config.yaml`. [INFERENCE — protects the "never hand-edit" contract]
 
@@ -647,7 +679,7 @@ gpu:
 
 **Modules & files.**
 - `app/mcp/client.py` — minimal MCP client (initialize, list_tools, call_tool) over the transport BrowserOS exposes [UNCERTAIN — SSE vs streamable-HTTP vs stdio-only, and non-localhost reachability; verify Phase 5 before UI work; if localhost-only, a tiny host-side relay or SSH tunnel bridges it (PLAN §4.12.4)]. Generic by design — future MCP servers reuse it.
-- `app/tools/impl/browser.py` — bridges MCP tools into our tool registry: prefixes names (`browser.navigate`…), maps schemas, marks `consequential: true`.
+- `app/tools/browser.py` — bridges MCP tools into our tool registry: prefixes names (`browser.navigate`…), maps schemas, marks `consequential: true`.
 - `web/src/views/settings/browseros.ts` — URL, connect test, tool list display; per-chat toggle chip lives in the composer.
 
 **Interfaces.** `MCPClient.connect(url) -> ServerInfo`, `list_tools() -> [{name, description, input_schema}]`, `call_tool(name, args) -> {content, is_error}`. Tool results (screenshots) returned as image content → attachment pipeline for vision-model consumption [INFERENCE]. Per-chat enable stored as `chats` meta flag; disabled = tools absent from that turn's schema list.
@@ -661,7 +693,7 @@ browseros:
   allowed_tools: []          # empty = all discovered
 ```
 
-**Integration points.** Tool registry (F9), attachments/vision (F11/F2), debug spans `browser.<tool>` (args minus sensitive fields, duration, screenshot ref). BrowserOS may independently point its own in-browser agent at llama-swap `/v1` — docs note only, no backend work. [FACT]
+**Integration points.** Tool registry (F9), attachments/vision (F11/F2), debug spans `browser` (field: action) (args minus sensitive fields, duration, screenshot ref). BrowserOS may independently point its own in-browser agent at llama-swap `/v1` — docs note only, no backend work. [FACT]
 
 **Build steps.** 1) Phase-5 transport spike: verify MCP transport + LAN reachability, document; 2) `mcp/client.py` against findings; 3) registry bridge + consequential gating; 4) settings tab + connect test; 5) per-chat toggle UX; 6) screenshot→vision wiring; 7) `docs/browseros.md` (install, relay/tunnel if needed).
 
@@ -682,14 +714,14 @@ browseros:
 ```yaml
 search:
   enabled: true
-  chain: [ddg, tavily]
+  provider_chain: [ddg, tavily]
   max_results: 8
   ddg: {enabled: true}
   tavily: {enabled: true, api_key_env: TAVILY_API_KEY}
   breaker: {failures: 3, cooldown_s: 300}
 ```
 
-**Integration points.** `web_search` tool (F9); deep research (Future) fans out over this same chain; citations SSE event carries `provider`. Spans: `search.ddg` / `search.tavily` (query, count, ms, fallback_reason).
+**Integration points.** `web_search` tool (F9); deep research (Future) fans out over this same chain; citations (on the `done` payload) carry `provider`. Spans: `search` (field: provider) (query, count, ms, fallback_reason).
 
 **Build steps.** 1) protocol + ddg; 2) tool wiring same PR (anti-Bug-1 — the DDG adapter existing-but-never-injected is the canonical old failure); 3) tavily; 4) chain + breaker; 5) provider surfaced in citations UI; 6) missing-key behavior (tavily self-disables).
 
@@ -718,55 +750,63 @@ prompts:
   allow_project_override: true
 ```
 
-**Integration points.** Context assembler (A4), projects (F7 instructions), memory (F10 user scope "always injected" [FACT — spec §17 via PLAN]). Span: `memory.inject` meta includes template source (`base|project|chat`).
+**Integration points.** Context assembler (A4), projects (F7 instructions), memory (F10 user scope "always injected" [FACT — spec §17 via PLAN]). Span: `memory_inject` meta includes template source (`base|project|chat`).
 
 **Build steps.** 1) template resolver + placeholder engine; 2) wiring into context assembly with order contract; 3) Settings editors + preview (renders the exact final system prompt); 4) project override path; 5) debug panel shows the assembled prompt verbatim (uses `store_prompts`).
 
-**Tests.** pytest: resolution precedence (chat > project > class base); placeholders filled; missing class falls back to `general`; preview equals what `llm.request` span records (the honesty test). Playwright: edit coding template in Settings → next coding-routed message's debug span shows it.
+**Tests.** pytest: resolution precedence (chat > project > class base); placeholders filled; missing class falls back to `general`; preview equals what `llm_request` span records (the honesty test). Playwright: edit coding template in Settings → next coding-routed message's debug span shows it.
 
 **Failure modes.** Template with unknown placeholder → rendered literally + warning, never a failed turn. Empty template → class falls back to `general` base.
 
 ## F18. Auto-title, summaries, compaction (spec §18)
 
-**What.** The `utility` model (3070 resident) handles: chat title after first exchange; rolling summary stored per chat; compaction when context exceeds threshold (summarize oldest turns, keep recent verbatim + summary block — Claude Code's own pattern). All background; failures never block chat. [FACT — PLAN §4.15]
+**What.** Two models, split by who waits on the result [FACT — PLAN §4.15, `docs/phase0-measurements.md` §12]:
+
+- **Titles → `dispatcher`** (Hammer2.1-1.5b, GPU1): 8/8 on the title rubric at **0.042s/call**, versus CPU `utility` at 1/8 and **43.5s**. The utility model hits the same thinking-budget trap as the reasoners and mostly returns nothing at a title-sized budget. The sidebar shows a title immediately, so this one is not "background."
+- **Rolling summary + compaction → `utility`** (Qwen3-8B, CPU): 17.6–21.8s per 100-token summary, fine for a job nobody awaits.
+
+Title post-processing is deterministic and lives in code: `clean_title()` **truncates** overlong output and never penalizes a short title. The 8/8 depends on it — an earlier 4/8 was the rubric's fault for demanding an exact 5–8 word range with no recovery path for "too short." Also strip wrapping quotes and markdown code fences. All background; failures never block chat.
 
 **Modules & files.**
-- `app/background/queue.py` — tiny in-process task queue (post-turn jobs: title, summary, chat-search indexing, memory review) with per-job-type concurrency 1; `app/background/titler.py` — first-exchange → title prompt → `PATCH` chat + SSE `title` event; `app/background/summarizer.py` — rolling `chats.summary` update every N turns; `app/chat/compactor.py` — in-turn (not background): when assembled context > threshold, replace oldest turns with summary block before `llm.request`.
+- `app/background/queue.py` — tiny in-process task queue (post-turn jobs: title, summary, chat-search indexing, memory review) with per-job-type concurrency 1; `app/background/titles.py` — first-exchange → title prompt → `PATCH` chat + SSE `title` event; `app/background/summaries.py` — rolling `chats.summary` update every N turns; `app/chat/compaction.py` (`maybe_compact(chat)`) — in-turn (not background): when assembled context > threshold, replace oldest turns with summary block before `llm_request`.
 
 **Interfaces.** `queue.submit(job_type: str, payload)`; jobs read/write via repositories only. Compaction message shape: a synthetic assistant-side block `"[Summary of earlier conversation]\n…"` preserved at messages head [INFERENCE — pattern per PLAN]; compaction state stored as `chats` meta (`compacted_before_message_id`) so it's stable across turns.
 
 **Config keys.**
 ```yaml
-summaries:
+background:                           # Phase 2
+  title_model: dispatcher             # user-visible → fast model wins (0.042s)
+  summary_model: utility              # unattended → CPU is fine (~18-22s)
+  summary_every_n_turns: 6
+compaction:                           # Phase 3 (in-turn, not background)
   enabled: true
-  model: utility
-  title: {enabled: true}
-  rolling: {enabled: true, every_turns: 6}
-  compaction: {enabled: true, trigger_pct: 80, keep_recent_turns: 8}
+  threshold_tokens: 24000
+  keep_recent_turns: 8
 ```
+`threshold_tokens` is an absolute count rather than a percentage of the window on purpose: `chat-default` loses **52.9% throughput by 32k** while staying accurate, so the trigger wants tuning against that measured curve, and a percentage hides what is actually being traded. Start at 24000 and move it on evidence.
 
-**Integration points.** Orchestrator post-turn hook submits jobs; compactor sits inside context assembly (A4); chat-search indexer (F13) and memory reviewer (F10) ride the same queue. Spans: `title.generate`, `summary.update`, `compact.run` (tokens before/after). SSE `title` event updates sidebar live.
+**Integration points.** Orchestrator post-turn hook submits jobs; compactor sits inside context assembly (A4); chat-search indexer (F13) and memory reviewer (F10) ride the same queue. Spans: `title`, `summary`, `compaction` (tokens before/after). SSE `title` event updates sidebar live.
 
-**Build steps.** 1) queue with error isolation; 2) titler + SSE event + sidebar wiring; 3) rolling summarizer; 4) compactor with token counting (llama.cpp `usage` numbers, else tiktoken-free heuristic chars/4 [INFERENCE]); 5) thresholds in Settings; 6) debug spans.
+**Build steps.** 1) queue with error isolation; 2) titler + SSE event + sidebar wiring; 3) rolling summarizer; 4) compactor with token counting (llama.cpp `usage` numbers, else tiktoken-free heuristic chars/4 [INFERENCE]) — tune `compaction.threshold_tokens` against the measured 52.9% throughput degradation at 32k on `chat-default` rather than guessing; 5) thresholds in Settings; 6) debug spans.
 
-**Tests.** pytest vs fake utility model: title generated exactly once after first exchange; summary refreshes on cadence; compaction triggers at threshold, keeps N recent verbatim, resulting context under limit; utility model failure → job logged, retried once, chat unaffected (the never-block test). Playwright: sidebar title appears without refresh.
+**Tests.** pytest vs fake models: `clean_title()` truncates >8 words, strips wrapping quotes and code fences, and passes a short title unchanged (rubric-matches-postprocessing rule); title generated exactly once after first exchange; summary refreshes on cadence; compaction triggers at threshold, keeps N recent verbatim, resulting context under limit; utility model failure → job logged, retried once, chat unaffected (the never-block test). Playwright: sidebar title appears without refresh.
 
 **Failure modes.** Utility model busy/down → jobs queue and retry; titles show "New chat" meanwhile. Compaction failure → fall back to hard truncation of oldest turns with a visible `[context truncated]` marker (degraded but honest).
 
 ## F19. Debug panel — the Debug view (spec §19, frontend half; backend in A3)
 
-**What.** A **standalone Debug window** (its own route `#/debug`, meant to be opened in a separate browser window/tab so you watch it live beside the app — not an embedded panel), toggled on in Settings → Debug. Fed by `/api/debug/stream` + trace REST: per-turn waterfall, route decision + why, **exactly what each model was sent and returned** (raw prompts/responses incl. thinking tokens, toggle), **token counts + latency/tok-s derived from llama.cpp** (`usage` + `timings`, never client estimates), every tool call (name/args/result/emitter), llama-swap state, nvidia-smi telemetry, Needle-assist markers. Critical infrastructure, shipped in Phase 1 alongside the first chat path. [FACT — PLAN §4.16]
+**What.** A **standalone Debug window** (its own route `#/debug`, meant to be opened in a separate browser window/tab so you watch it live beside the app — not an embedded panel), toggled on in Settings → Debug. Fed by `/api/debug/stream` + trace REST: per-turn waterfall, route decision + why, **exactly what each model was sent and returned** (raw prompts/responses incl. thinking tokens, toggle), **token counts + latency/tok-s derived from llama.cpp** (`usage` + `timings`, never client estimates), every tool call (name/args/result/emitter), llama-swap state, nvidia-smi telemetry, dispatcher-assist markers. Critical infrastructure, shipped in Phase 1 alongside the first chat path. [FACT — PLAN §4.16]
 
 **Modules & files.**
 - `web/src/views/debug.ts` — layout: trace list (left), waterfall + span detail (center), live tails (right); `web/src/debug/waterfall.ts` — span rows → CSS-grid timeline (no chart lib); `web/src/debug/live.ts` — tap subscription: GPU bars, swap state, rolling log; `web/src/debug/span_detail.ts` — prompt/response viewer (monospace, copy button), token/latency stats.
 
-**Interfaces.** Consumes A3's REST + SSE verbatim. Per-turn header shows: `route` source chip (override/rules/classifier/default + confidence), model, tok/s (`usage` + `timings` from llama.cpp [FACT]), swap-wait badge if `swap.wait` span present, Needle badge if `needle.dispatch` spans present ("who decided vs. who emitted" per step [FACT — PLAN §4.7]). Deep link: each chat message has a "debug" affordance → `#/debug?trace=<trace_id>`.
+**Interfaces.** Consumes A3's REST + SSE verbatim. Per-turn header shows: `route` source chip (override/rules/classifier/default + confidence), model, tok/s (`usage` + `timings` from llama.cpp [FACT]), swap-wait badge if `swap_wait` span present, dispatcher badge if `dispatcher` spans present ("who decided vs. who emitted" per step [FACT — PLAN §4.7]). Deep link: each chat message has a "debug" affordance → `#/debug?trace=<trace_id>`.
 
 **Config keys.** `debug:` (A3) drives it; `ui.debug_link_on_messages: true`.
 
 **Integration points.** Pure consumer of A3; every feature's spans appear here for free — that's the point. Per-model bench numbers (F2 `data/bench.json`) render in a models sub-tab.
 
-**Build steps.** 1) trace list + waterfall from REST (Phase 1); 2) live tap tails; 3) span detail with prompt toggle honoring `store_prompts`; 4) route/Needle/swap badges; 5) message→trace deep link; 6) GPU/swap panels; 7) bench tab (Phase 5 `llama-bench` panel [FACT — PLAN Phase 5]).
+**Build steps.** 1) trace list + waterfall from REST (Phase 1); 2) live tap tails; 3) span detail with prompt toggle honoring `store_prompts`; 4) route/dispatcher/swap badges; 5) message→trace deep link; 6) GPU/swap panels; 7) bench tab (Phase 5 `llama-bench` panel [FACT — PLAN Phase 5]).
 
 **Tests.** Playwright vs fake backend: send message → trace appears with golden span sequence; waterfall spans ordered by time; live GPU event updates bar; error turn shows red span with exception text; prompts hidden when `store_prompts: false`. This suite doubles as the wiring proof for A3.
 
@@ -790,8 +830,8 @@ summaries:
 | F5 Router | 2 | `routing.enabled`, `routing.classifier.enabled` | default model |
 | F6 opencode | 4 | `opencode.enabled` | chat model + sandbox |
 | F7 Projects | 3 | `projects.enabled` | plain chats |
-| F8 Artifacts/sandbox | 3–4 | `artifacts.enabled`, `sandbox.enabled` | code shown, not run |
-| F9 Tools + Needle | 3–5 | `tools.enabled`, per-tool, `tools.needle_assist.enabled` | plain chat / main-model emission |
+| F8 Artifacts/sandbox | 3–4 | `artifacts.enabled`, `exec.enabled` | code shown, not run |
+| F9 Tools + dispatcher | 3–5 | `tools.enabled`, per-tool, `tools.dispatcher_assist.enabled` | plain chat / main-model emission |
 | F10 RAG + memory | 3, 5 | `rag.enabled`, `memory.enabled`, `memory.reviewer.enabled` | FTS-only / no injection |
 | F11 Attachments | 3 | `attachments.enabled`, per-extractor | upload rejected visibly |
 | F12 Testing | 1+ | — (process) | — |
@@ -799,8 +839,8 @@ summaries:
 | F14 GPU/swapgen | 2 | `gpu.enabled` | hand-managed yaml |
 | F15 BrowserOS | 5 | `browseros.enabled` + per-chat | fetch_url path |
 | F16 Search chain | 3 | `search.enabled`, per-provider | model answers with caveat |
-| F17 Prompts/prefs | 3 | `prompts.enabled`, `memory.inject` | class-base prompt only |
-| F18 Title/summary/compaction | 2–3 | `summaries.*` | "New chat", hard truncation |
+| F17 Prompts/prefs | 3 | `prompts.enabled`, `memory_inject` | class-base prompt only |
+| F18 Title/summary/compaction | 2–3 | `background.*`, `compaction.enabled` | "New chat", hard truncation |
 | F19 Debug view | 1 | `debug.enabled` | "tracing disabled" notice |
 
-**Non-goals restated (do not build):** Ollama, LiteLLM, React or any frontend framework/bundler, Qdrant (unless the interface escape hatch triggers), backend auth, remote providers before Future, opencode inside the chat tool loop, Needle as planner, browser-driving as the deep-research primary.
+**Non-goals restated (do not build):** Ollama, LiteLLM, React or any frontend framework/bundler, backend auth, remote providers before Future, opencode inside the chat tool loop, **the dispatcher as planner**, browser-driving as the deep-research primary, **`--tensor-split` in generated configs**, **thinking suppression via prompt convention instead of the server flag**. (Qdrant left this list on 2026-07-23 — the escape hatch triggered on measurement.)

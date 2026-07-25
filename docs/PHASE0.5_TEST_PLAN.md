@@ -1,5 +1,7 @@
 # Phase-0.5 Test Plan — Concurrency, CPU-Placement, Quality Eval, FunctionGemma GGUF
 
+**Status: ✅ EXECUTED, closed 2026-07-23.** Results in `docs/phase0-measurements.md` §8–§13; decisions in `docs/PHASE0_FINDINGS_SUMMARY.md`. Kept as the record of what was tested and why.
+
 ## Context
 
 Phase-0 benchmarking (`docs/phase0-measurements.md`, `docs/PHASE0_FINDINGS_SUMMARY.md`,

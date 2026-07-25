@@ -68,20 +68,46 @@ limited-template training set). Cactus's production runtime that would fix
 the latency can't build on x86_64 at all (hard-locked to ARM NEON
 intrinsics) — dropped in favor of Hammer2.1-1.5b and FunctionGemma-270M.
 
-## 3. Open action items
+## 3. Open action items — carried into Phase 1
 
-- **Swap latency (§4, never scripted)** — needs `llama-swap` actually
-  running with `serving/llama-swap/config.yaml` regenerated against
-  current blob paths.
-- **Stale `granite4:3b`/`granite4-3b-longctx` llama-swap entries** point at
-  a missing blob (`sha256-6c02683...`) — not fixed, out of scope so far.
-- **`settings.json`/`app/config.py` empty `ollama_model_names` entries** —
-  confirmed live bug (~3s tax per LLM iteration on affected routes,
-  compounds to 10s+ on multi-step tool calls). Root cause confirmed, fix
-  not yet applied.
-- **`llama-server.service` (systemd)** — was auto-respawning a leftover
-  test server stealing ~10GB VRAM; stopped this session but not disabled —
-  decide if it should be `disable`d at boot.
+**✅ llama-swap config fixed and verified 2026-07-23** (PLAN §4.1). Four
+defects found and corrected in the hand-written config; all four are now
+swapgen acceptance criteria:
+
+1. **No `groups:` block** — every model fell into llama-swap's implicit
+   default group, which swaps, so CPU residents were evicted whenever a big
+   model was requested. Config B did not actually hold at runtime.
+   **Confirmed empirically on v237** before the fix (requesting
+   `chat-default` killed the running classifier), and after the fix
+   `classifier` + `chat-default` + `dispatcher` coexist while a big-slot
+   swap replaces only the big model.
+2. **`--reasoning off` missing from `classifier`** — verified after the fix
+   returning non-empty `content`, `reasoning_content: None`.
+3. **`dispatcher` on GPU0** while GPU1 idled — moved to GPU1, 1303MB.
+4. **CPU residents were still creating CUDA contexts** (~150-256MB/card
+   each) despite `--device none -ngl 0` — `CUDA_VISIBLE_DEVICES=""` on those
+   entries reclaims it. GPU0 now sits at **21908 MiB / 24576 with
+   `chat-default` at 32k**, matching §11's predicted ~2.6GB headroom.
+
+**Did this skew any Phase-0 result?** Only §13's swap-latency numbers, and
+only in the conservative direction. Everything else — the §2 per-model
+benchmarks, the §8 concurrency tests that produced the Config B verdict, the
+§9 quality evals, and the §13 classifier accuracy run — boots `llama-server`
+subprocesses directly (`bench_server.py`, `bench_concurrent.py`,
+`eval_*.py`), never through llama-swap, so the group semantics could not
+reach them. In §13 the per-model cold/warm load times remain valid as load
+times, but the CPU residents' "cold 20.54s / warm ~9.1-9.4s" reflects them
+being repeatedly evicted by GPU models; with `ttl: 0` in a `swap: false`
+group they now load once and stay. **No verdict changes.**
+
+**Still open:**
+
+- **`llama-server.service` (systemd)** — auto-respawns a leftover test
+  server holding ~10GB VRAM; stopped but still `enabled`, so it returns at
+  boot. Needs `sudo systemctl disable` — permission-gated (rule
+  `008-remote-box`), not done.
+- **Stale `granite4:3b`/`granite4-3b-longctx` entries** — gone from the
+  current config; no other reference found.
 
 ## 4. Test 7+ — final results (see `docs/phase0-measurements.md` §13 for full detail, §16 for the bug-fix history)
 

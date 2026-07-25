@@ -20,7 +20,23 @@ diffed on change; changing the SSE contract means updating the golden files
 deliberately in the same PR.
 
 Router changes run the eval harness (`eval/` labeled prompt→route CSV +
-scoring script) and report the score; Phase 2 exit criterion is ≥90%.
+scoring script) and report the score; Phase 2 exit criterion is ≥90%. The
+lab baseline is 91.76% — a 1.76-point margin, so treat any drop as a
+regression to explain, not noise. The scorer must match labels
+longest-first with word boundaries (or exactly): `chat` is a substring of
+`chit_chat`, and a naive `if label in text` scan cost 45 accuracy points
+once already.
+
+Before trusting any eval that involves a local model, read
+`.cursor/rules/010-benchmark-eval-methodology.mdc`. Its rules are not
+style preferences — each one traces to a specific wrong number that was
+published in Phase 0 and later retracted. The short version: suppress
+thinking at the server level, budget tokens generously (>=1024, >=4096 for
+reasoning), give sub-2B models worked few-shot examples aimed at their
+observed confusions, audit the scorer as hard as the model output, design
+rubrics around the post-processing that actually ships, measure plausible
+mitigations instead of assuming them, and give concurrent evals distinct
+ports.
 
 Failing tests are signals to fix code or fix the test's contract with the
 owner — keep them, make them pass.

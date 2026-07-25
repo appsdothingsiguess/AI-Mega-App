@@ -1,12 +1,21 @@
 ---
 description: "Methodology rules for benchmarking/eval scripts against small local models — read before writing or trusting any eval in scripts/"
 globs: ["scripts/bench_*.py", "scripts/eval_*.py", "scripts/needle_training/**/*",
+        "eval/**/*", "app/router/classifier.py",
         "docs/phase0-measurements.md", "docs/PHASE0_FINDINGS_SUMMARY.md"]
 alwaysApply: false
 ---
 Every rule below cost real time during Phase-0/0.5 benchmarking — each one
 traces to a specific wrong number that got reported before the root cause
 was found. Full incident writeup: `docs/phase0-measurements.md` §16.
+
+Two of these outlive benchmarking and bind production code as well
+(@PLAN.md §4.1, §4.3): reasoning is suppressed with llama-server's
+`--reasoning off`, never a prompt suffix; and every thinking-capable model
+gets a real `max_tokens`. The router's shipped classifier
+(`app/router/classifier.py`) is in this rule's glob set for that reason —
+its measured 91.76% depends on the flag, the few-shot examples, and a
+label extractor that matches longest-first, all three.
 
 **Verify the environment before declaring something blocked or unreachable.**
 `ssh <host>` failing to resolve is evidence the alias doesn't resolve from

@@ -32,7 +32,7 @@ it never defines them.
 
 4. **FILE SCOPE is a hard boundary, not a guideline.** Each agent owns an
    explicit, non-overlapping path set. Shared files (`pyproject.toml`,
-   `config.yaml`, `app/config.py`, `app/main.py`, `src/app.ts`) get exactly
+   `config.yaml`, `app/config.py`, `app/main.py`, `web/src/app.ts`) get exactly
    ONE named owner per wave; every other prompt lists them as read-only.
    Optionally copy each prompt into `.cursor/agent-contracts/<branch>.md` so
    the verification agent can audit against it.
@@ -57,155 +57,51 @@ gate: `tsc --noEmit`. Commits: conventional messages, explicit paths only
 
 ### Sub-agent delegation (Cursor 3 Agents Window)
 
-Each phase is written as **one orchestrator prompt that delegates each major step to its own sub-agent** in its own worktree, run in parallel where dependencies allow — this is the Cursor 3 model (Agents Window → native worktrees), and the rule is `009-subagents`. Every phase section names, explicitly: which steps are delegated, the worktree per sub-agent, which run at the same time, and which wait. Phase 0 is the worked example (ORCHESTRATOR → P0-A tooling ∥ P0-B serving, then P0-C benchmark). Read a step's "Sub-agent" tag as "spawn a delegated agent here," not "do it inline." One sub-agent = one worktree = one FILE SCOPE = one completion report.
+Each phase is written as **one orchestrator prompt that delegates each major step to its own sub-agent** in its own worktree, run in parallel where dependencies allow — this is the Cursor 3 model (Agents Window → native worktrees), and the rule is `009-subagents`. Every phase section names, explicitly: which steps are delegated, the worktree per sub-agent, which run at the same time, and which wait. Read a step's "Sub-agent" tag as "spawn a delegated agent here," not "do it inline." One sub-agent = one worktree = one FILE SCOPE = one completion report.
+
+### The frozen contract every prompt restates
+
+`PLAN.md` §4.2 carries the authoritative chat REST endpoints, SSE event
+vocabulary, terminal-event rule, and span-stage list. The prompts below repeat
+pieces of it so each agent starts from truth without reading the whole plan —
+but PLAN.md is the source. **If a prompt and PLAN.md §4.2 ever disagree, that
+is a documentation bug: stop and report it, do not pick one.** Adding an event,
+endpoint, or span stage is an owner decision (rule `002-boundaries`).
+
+The conventions those contracts imply, applied uniformly below:
+
+| | |
+|---|---|
+| Frontend source | `web/src/**/*.ts` → `web/js/**` via `tsc`. There is no top-level `src/`. |
+| Backend substrate | flat modules — `app/config.py`, `app/db.py` + `app/schema.sql`, `app/llm_client.py`, `app/types.py`. Packages only where a feature genuinely has several files (`app/chat/`, `app/debug/`, `app/router/`, `app/tools/`, …). |
+| Span stages | flat snake_case, no dots (`llm_request`, not `llm.request`). |
+| Tests | flat `tests/test_<area>.py`; fakes in `tests/fakes/`; golden transcripts in `tests/golden/`. |
+| Tool modules | one file directly under `app/tools/` (`app/tools/web_search.py`), no `impl/` subdirectory. |
+| Vector store | `app/rag/store.py` owns the `VectorStore` interface and both impls. |
 
 ---
 
-# Phase 0 — Ground truth (box + inference)
+# Phase 0 — Ground truth ✅ COMPLETE 2026-07-23
 
-**Nature: box work over `ssh ubuntu-ai` (rule `008-remote-box`) + a little repo tooling. Produces measured facts, not app code.** The full test spec is `docs/BENCHMARK_PLAN.md` (single box: 3090 + 3070) — this section is the *delegation*: one orchestrator, sub-agents per major step, named worktrees, run in parallel where dependencies allow.
+Prompts removed — the phase is done and they are not reusable. Results:
+`docs/PHASE0_FINDINGS_SUMMARY.md` (decisions) and `docs/phase0-measurements.md`
+(raw numbers, including the retracted-and-corrected ones).
 
-**Already done on the box — do NOT redo:** ✅ 0.1 Drivers + CUDA · ✅ 0.2 llama.cpp built (binaries at `/home/john/llm-stack/engine/llama.cpp/build/bin/`). Record their versions/flags into the measurements doc from the installed build; don't reinstall.
+Five assumptions the later phase prompts were originally written against were
+reversed by measurement. Where a prompt below still reads the old way, this
+table wins:
 
-### Sub-agent delegation (the "one major prompt → delegated sub-agents" model)
+| Was | Is |
+|---|---|
+| `--tensor-split 3,1`, ~32GB pool | solo-GPU0 via `CUDA_VISIBLE_DEVICES` (~3x faster) |
+| sqlite-vec | Qdrant behind `VectorStore` (p95 105ms vs a 50ms bar) |
+| Cactus Needle 26M | Hammer2.1-1.5b, alias `dispatcher` |
+| `utility`/`embed` on a 3070 | CPU-resident (Config B) |
+| `reasoner` = R1-Distill-32B | `chat-default`'s blob in thinking mode |
 
-Paste the **Phase 0 ORCHESTRATOR** prompt (below) into one Cursor agent. It spawns these sub-agents, each in its own worktree, and runs P0-A and P0-B **at the same time**:
-
-| Sub-agent | Worktree | Owns | Runs |
-|---|---|---|---|
-| **P0-A · tooling** | `../AI-Mega-App-p0-measure` (branch `p0/measure`) | repo bench scripts + measurements template (0.6) — no box dependency | immediately, parallel with P0-B |
-| **P0-B · serving** | `../AI-Mega-App-p0-serving` (branch `p0/serving`) | on box via SSH: llama-swap systemd + first config + swap/concurrency verify (0.3, 0.5) | immediately, parallel with P0-A |
-| **P0-C · benchmark** | reuses `../AI-Mega-App-p0-measure` | on box: model downloads + per-class benchmarks + **placement verdict** per BENCHMARK_PLAN (0.4 + §2–§6), fills measurements doc | **after** A's scripts and B's serving exist |
-
-Each sub-agent gets a FILE SCOPE and starts in Plan Mode. Only P0-A and P0-C write repo files, and they own **different** files (scripts vs the measurements doc is co-owned → P0-A creates the template, P0-C fills it, sequential, no overlap). P0-B touches only the box, not the repo.
-
-### Phase 0 ORCHESTRATOR (paste this one)
-
-```
-You are the Phase 0 orchestrator for the AI Mega App rebuild. Source of truth:
-PLAN.md §4.1/§5; the test spec is docs/BENCHMARK_PLAN.md; box access + paths are
-in .cursor/rules/008-remote-box (ssh ubuntu-ai; llama.cpp at
-/home/john/llm-stack/engine/llama.cpp/build/bin; models at
-/home/john/llm-stack/models). Drivers/CUDA and llama.cpp are ALREADY DONE.
-
-Delegate, do not implement yourself:
-1. Create two worktrees from main:
-     git worktree add ../AI-Mega-App-p0-measure  -b p0/measure  main
-     git worktree add ../AI-Mega-App-p0-serving  -b p0/serving  main
-2. Spawn sub-agent P0-A (tooling) in ../AI-Mega-App-p0-measure with the "0.6
-   p0/measure" prompt, and sub-agent P0-B (serving) in ../AI-Mega-App-p0-serving
-   with the "0.3+0.5 p0/serving" prompt. Run BOTH at once.
-3. When A and B report done, spawn P0-C (benchmark) in ../AI-Mega-App-p0-measure
-   with the "0.4+benchmarks p0/measure" prompt.
-4. sudo on the box is permission-gated: if any sub-agent needs sudo, it must ask
-   YOU, and you ask the human — never auto-approve (rule 008).
-Collect each sub-agent's completion report; do not merge until VERIFICATION.
-```
-
-## 0.3 — Sub-agent P0-B (serving): llama-swap + systemd
-
-Worktree `../AI-Mega-App-p0-serving`. Box work over `ssh ubuntu-ai` (rule 008); touches the box, not repo files.
-
-```
-On the box (ssh ubuntu-ai; llama.cpp already built at
-/home/john/llm-stack/engine/llama.cpp/build/bin):
-1. Install llama-swap (latest release binary) under /home/john/llm-stack/serving.
-2. Create systemd unit llama-swap.service: runs as the john user (non-root),
-   listens on 0.0.0.0:8080 (trusted LAN, no auth — PLAN.md §7), config at
-   serving/llama-swap/config.yaml, Restart=on-failure. (systemd install needs
-   sudo — ASK the orchestrator first, rule 008.)
-3. systemctl enable --now llama-swap; verify the web UI answers on :8080.
-4. Record the config-reload endpoint name/method for the installed version, and
-   pin the llama-swap version, in docs/phase0-measurements.md (hand to P0-C).
-```
-
-## 0.4 — Sub-agent P0-C (downloads): candidate GGUFs
-
-Box work. Pull the candidate set defined in **docs/BENCHMARK_PLAN.md §2** (per-class candidates incl. the quant/vision/reasoner A/Bs) into `/home/john/llm-stack/models/blobs`. Check `df -h` before large pulls; delete superseded blobs (rule 008). Record exact filename, SHA/source URL, size in `docs/phase0-measurements.md`. Do not download the full matrix blindly — pull per class as you benchmark so the 363G mount doesn't fill.
-
-## 0.5 — Sub-agent P0-B (serving): first llama-swap config + swap verification
-
-Box work, same worktree as 0.3.
-
-```
-1. Hand-write serving/llama-swap/config.yaml on the box (the ONLY hand-written
-   copy ever — Phase 2 swapgen takes over): macros block with the llama-server
-   path (/home/john/llm-stack/engine/llama.cpp/build/bin/llama-server); groups
-   and device assignment follow the PLACEMENT DECISION from
-   docs/BENCHMARK_PLAN.md §5 (Config A: big models --tensor-split 3,1, residents
-   embed/utility on CPU; or Config B: 3090-solo big, embed/utility on the 3070).
-   Until §5 is decided, stand up Config A (the working hypothesis).
-2. Verify with curl against :8080/v1:
-   a. chat completion on chat-default answers.
-   b. while chat-default is loaded, classifier (and Config-A CPU residents)
-      answer CONCURRENTLY (resident group is not evicted).
-   c. request coder → measure wall-clock swap latency (expect 3–10s); repeat
-      for reasoner and vision; record each.
-   d. vision: send one image; confirm the mmproj path works.
-3. Record all swap latencies + per-model VRAM (nvidia-smi during load) into
-   docs/phase0-measurements.md.
-```
-
-## 0.6 — Sub-agent P0-A (tooling), then P0-C fills it: `p0/measure`
-
-Worktree: `../AI-Mega-App-p0-measure`. **P0-A** writes the scripts + measurements template (below); **P0-C** later runs them on the box and fills the results + placement verdict per `docs/BENCHMARK_PLAN.md`.
-
-```
-CONTEXT
-This is a fresh rebuild of AI-Mega-App; the repo currently contains planning
-docs only. Phase 0 measures ground truth on the Ubuntu GPU box before any app
-code exists. Drivers/CUDA + llama.cpp are already installed (rule 008 paths).
-The test spec you implement tooling for is docs/BENCHMARK_PLAN.md (single box:
-3090+3070). Source of truth: PLAN.md §4.1, §5; docs/BENCHMARK_PLAN.md.
-
-GOAL
-Write the measurement tooling and the results document skeleton:
-1. scripts/bench_models.sh — wraps llama-bench for every GGUF in /models:
-   prints model name, quant, prompt tok/s, gen tok/s as a markdown table row.
-   Accepts a models dir argument (default /models).
-2. scripts/bench_sqlitevec.py — benchmarks sqlite-vec at 100k chunks:
-   generates 100k random 768-dim float32 vectors, inserts into a vec0 virtual
-   table in a temp SQLite file (WAL), then measures top-10 KNN query latency
-   (p50/p95 over 100 queries) and hybrid FTS5+vector query latency. Prints a
-   markdown table. Pure stdlib + sqlite-vec + numpy only.
-3. docs/phase0-measurements.md — template with empty sections the operator
-   fills: driver/CUDA versions, GPU index map, llama.cpp commit + flag
-   spellings, llama-swap version + reload endpoint, per-model table (file,
-   VRAM, load time, tok/s), swap latencies, sqlite-vec results, and a final
-   "Decisions" section (reasoner A/B winner, sqlite-vec verdict per PLAN.md
-   §3.1 escape hatch).
-
-NON-GOALS
-No FastAPI app, no config.yaml, no llama-swap.yaml in the repo, no CI.
-
-FILE SCOPE (hard boundary — touch nothing else)
-  scripts/bench_models.sh
-  scripts/bench_sqlitevec.py
-  docs/phase0-measurements.md
-
-INTERFACES
-Scripts run standalone on the box with python3.12; bench_sqlitevec.py exits
-nonzero and prints a clear message if the sqlite-vec extension fails to load.
-
-CONSTRAINTS
-Start in Plan Mode; present the plan before writing. Keep each file under 300
-lines. Add dependencies only after asking (numpy + sqlite-vec expected). Use
-affirmative, commented shell. Scripts must be re-runnable (idempotent temp
-files).
-
-ACCEPTANCE
-scripts run without syntax errors (bash -n; python -m py_compile). The
-measurements doc has a fillable slot for every unknown listed in PLAN.md §7.
-
-STOP CONDITION
-If you believe any other file needs changing, stop and ask before touching it.
-
-FINAL STEPS
-Commit as `feat(phase0): benchmark scripts + measurements template`. Report:
-files created, how the operator runs each script.
-```
-
-**Phase 0 exit:** `docs/phase0-measurements.md` fully filled in; roster chosen; **placement config (A/B) decided from measured CPU-resident latency** (BENCHMARK_PLAN §5); reasoner + vision A/Bs decided; sqlite-vec verdict recorded; llama-swap live on :8080 with the kept set. No app code exists. Merge `p0/serving` then `p0/measure`.
+The durable output is `.cursor/rules/010-benchmark-eval-methodology.mdc` — eight
+methodology bugs produced eight wrong published numbers before root-causing.
+Read it before writing or trusting any eval.
 
 ---
 
@@ -214,6 +110,15 @@ files created, how the operator runs each script.
 FastAPI app: config, SQLite, llm_client, SSE chat against a manually picked
 model, minimal chat UI, **debug trace store + Debug panel**, CI (PLAN.md §5
 Phase 1). Exit: chat with any manually-picked model, every turn fully traced.
+
+**Operator pre-step (before wave 1, on the box — not a Cursor agent):** disable
+the stale `llama-server.service`. It is currently `enabled`, so it respawns a
+leftover test server holding ~10GB of VRAM at every boot; Phase 0 stopped it but
+did not disable it. `sudo systemctl disable --now llama-server.service` needs
+explicit human approval per rule `008-remote-box` — state what it does, get the
+approval, run the one command, and confirm `nvidia-smi` shows GPU0 free apart
+from llama-swap's own residents. Developing Phase 1 against a box that silently
+loses 10GB produces VRAM numbers nobody can reproduce.
 
 ## Wave 1 (sequential — one agent, defines all shared files)
 
@@ -228,8 +133,8 @@ Phase 1). Exit: chat with any manually-picked model, every turn fully traced.
 | llm-client | `p1/llm-client` | `../AI-Mega-App-p1-llm` | `app/llm_client.py`, `tests/fakes/__init__.py`, `tests/fakes/fake_llama_swap.py`, `tests/test_llm_client.py` | foundation |
 | debug-trace | `p1/debug-trace` | `../AI-Mega-App-p1-debug` | `app/debug/**`, `tests/test_debug_trace.py` | foundation |
 | chat-sse | `p1/chat-sse` | `../AI-Mega-App-p1-chat` | `app/chat/**`, `app/main.py` (OWNER this wave), `tests/test_chat_sse.py`, `tests/golden/**` | foundation |
-| web-shell | `p1/web-shell` | `../AI-Mega-App-p1-web` | `src/**`, `web/**`, `tsconfig.json` | foundation |
-| ci-harness | `p1/ci-harness` | `../AI-Mega-App-p1-ci` | `.github/workflows/ci.yml`, `tests/conftest.py`, `e2e/**`, `playwright.config.ts`, `scripts/dev.sh` | foundation |
+| web-shell | `p1/web-shell` | `../AI-Mega-App-p1-web` | `web/src/**`, `web/**`, `tsconfig.json` | foundation |
+| ci-harness | `p1/ci-harness` | `../AI-Mega-App-p1-ci` | `.github/workflows/ci.yml`, `package.json` (OWNER), `tests/conftest.py`, `e2e/**`, `playwright.config.ts`, `scripts/dev.sh` | foundation |
 
 Shared-file owners this wave: `app/main.py` → chat-sse. `pyproject.toml`,
 `config.yaml`, `app/config.py`, `app/types.py` → frozen (owner was
@@ -243,12 +148,16 @@ CONTEXT
 Fresh rebuild of AI-Mega-App. Repo contains PLAN.md, docs/, and Phase 0
 benchmark scripts — no app code yet. You are the foundation agent: everything
 you write becomes the frozen interface for five parallel agents in the next
-wave. Hardware facts (models, VRAM, tok/s) are in docs/phase0-measurements.md.
+wave. Hardware facts (models, VRAM, tok/s) are in docs/phase0-measurements.md;
+the locked roster and decisions are in docs/PHASE0_FINDINGS_SUMMARY.md — read
+that one first, it is one line per decision.
 Source of truth: PLAN.md §3, §3.1, §4.16, §5 (Phase 1); docs/FEATURES.md §core.
 
 GOAL
 1. pyproject.toml — Python 3.12 project `ai_mega_app`; deps: fastapi, uvicorn,
-   httpx, pydantic, pyyaml, sqlite-vec; dev: pytest, pytest-asyncio, ruff.
+   httpx, pydantic, pyyaml, qdrant-client; dev: pytest, pytest-asyncio, ruff.
+   (Vectors are Qdrant, not sqlite-vec — Phase 0 §6. Phase 1 needs no vector
+   code at all; the dep is here so A2's interface lands once.)
    Include ruff config (line length 100) and pytest config here.
 2. config.yaml — checked-in defaults, the ONE hand-edited config (plus .env
    for secrets). Keys:
@@ -256,9 +165,15 @@ GOAL
      llama_swap: {base_url: "http://127.0.0.1:8080/v1", timeout_s: 120}
      db: {path: "data/app.db"}
      models: list of {name, class: general|coding|tool|reasoning|vision|
-       utility|embed|classifier|needle, ctx, gpu: 0|1|cpu, tool_call:
-       native|weak|none} — seed from the PLAN.md §4.1 roster aliases
-     defaults: {chat_model: "chat-default", utility_model: "utility"}
+       utility|embed|classifier|dispatcher, ctx, gpu: 0|1|cpu, tool_call:
+       native|weak|none, thinking: bool, reasoning_off: bool, max_tokens: int}
+       — seed from the PLAN.md §4.1 locked roster (10 aliases; `dispatcher`
+       replaced `needle`, `reasoner` shares chat-default's blob with
+       thinking: true, `reasoner-alt` ships enabled: false)
+     defaults: {chat_model: "chat-default", utility_model: "utility",
+                title_model: "dispatcher"}
+     llm: {first_token_timeout_s: 30}   # MUST exceed the measured 12.47s
+                                        # cold load of chat-default
      debug: {store_prompts: true}
 3. .env.example — TAVILY_API_KEY= (secrets only; empty placeholders).
 4. app/config.py — pydantic models mirroring the schema; load_config(path) ->
@@ -268,8 +183,14 @@ GOAL
    ChatDelta(content, tool_calls, finish_reason, usage), SSEEvent(event, data),
    RouteResult(model, source, intent, latency_ms, confidence) [stub for P2],
    Span / TraceId aliases.
-6. app/schema.sql + app/db.py — SQLite WAL, sqlite-vec loaded. Tables:
-   chats(id TEXT PK, title, project_id, model_override, created_at, updated_at)
+6. app/schema.sql + app/db.py — SQLite WAL (no vector extension; vectors are
+   Qdrant from Phase 3 onward, behind the VectorStore interface in
+   app/rag/store.py). Tables:
+   chats(id TEXT PK, title, project_id, model_override, summary TEXT NULL,
+         created_at, updated_at)
+     -- `summary` is here from day one on purpose: Phase 2's rolling summarizer
+     -- needs exactly one column, and discovering that mid-wave would stall an
+     -- agent on a frozen-schema approval. No separate chat_summaries table.
    messages(id TEXT PK, chat_id FK, role, content, model, created_at)
    traces(trace_id TEXT PK, chat_id, started_at)
    spans(id INTEGER PK, trace_id FK, stage, started_at, ended_at, data JSON)
@@ -333,7 +254,19 @@ app/llm_client.py — the ONLY module that talks to llama-swap. One class:
       async def chat(self, model: str, messages: list[dict], *,
                      tools: list[dict] | None = None,
                      response_format: dict | None = None,
+                     thinking: bool | None = None,
+                     max_tokens: int | None = None,
                      stream: bool = True) -> AsyncIterator[ChatDelta]
+
+`thinking` and `max_tokens` are in the frozen signature from day one even
+though nothing sets them until Phase 2 (PLAN.md §4.1). `reasoner` is
+`chat-default`'s own blob with thinking enabled at the REQUEST layer, and every
+structured-output call needs reasoning suppressed per-request — a Phase-1
+client without these would force reopening a frozen file the moment Phase 2
+starts. Map `thinking` to llama.cpp's per-request reasoning control and
+`None` to "leave the server's `--reasoning` default alone"; pass `max_tokens`
+straight through. Phase 0's rule stands: a thinking-capable model given a small
+budget returns empty `content`, which reads as a model failure and is not one.
       async def embed(self, model: str, texts: list[str]) -> list[list[float]]
       async def models(self) -> list[str]          # GET /models
       async def close(self) -> None
@@ -481,6 +414,12 @@ GOAL
                             latency exceeds 2s — llama-swap is swapping)
      event: done           data: {"message_id", "model", "usage"}
      event: error          data: {"kind", "detail"}
+   The full frozen vocabulary is PLAN.md §4.2; these four are the subset
+   Phase 1 can emit. Later phases ADD KEYS TO THE `done` PAYLOAD rather than
+   adding events — `route` in Phase 2, `citations` and `context`
+   (compaction state) in Phase 3 — so build `done` as a dict that later stages
+   contribute to, not a fixed three-field literal. `tool_start` /
+   `tool_result` / `title` arrive in Phases 2–3; do not emit them now.
 6. tests/test_chat_sse.py + tests/golden/basic_turn.txt — a golden transcript
    of the full event sequence for one turn against the fake llama-swap;
    contract test diffs future changes (PLAN.md §4.10).
@@ -537,22 +476,22 @@ Source of truth: PLAN.md §4.2, §4.16, §3.1; docs/FEATURES.md §ui.
 
 GOAL
 1. tsconfig.json — strict, target ES2022, module ES2022, outDir web/js,
-   rootDir src. `tsc` is the entire build.
+   rootDir web/src. `tsc` is the entire build.
 2. Static mock first: web/index.html + web/css/theme.css (all colors/spacing
    as CSS custom properties) + web/css/app.css — claude.ai layout: collapsible
    left sidebar (new chat, Chats, recents; Projects placeholder), centered
    chat column, composer with model picker slot, right panel placeholder,
    Debug nav item. PAUSE after the mock and ask for approval before logic.
-3. src/router.ts (~200 lines, hash-based) · src/store.ts (~150 lines pub/sub)
-   · src/api.ts (typed fetch + SSE client with auto-reconnect; a stream that
+3. web/src/router.ts (~200 lines, hash-based) · web/src/store.ts (~150 lines pub/sub)
+   · web/src/api.ts (typed fetch + SSE client with auto-reconnect; a stream that
    ends without done/error renders "connection lost" — hard rule) ·
-   src/app.ts (boot + view registry).
+   web/src/app.ts (boot + view registry).
 4. Views, each `export function mount(el, store)` / `unmount()`:
-   src/views/chat.ts — history, streamed tokens, per-message model label,
+   web/src/views/chat.ts — history, streamed tokens, per-message model label,
    "loading <model>…" indicator on model_loading, composer model picker
    (populated from GET /api/chats + a models list you read from /health for
    now; picker POSTs /api/chats/{id}/model).
-   src/views/debug.ts — trace list + per-turn waterfall (spans as horizontal
+   web/src/views/debug.ts — trace list + per-turn waterfall (spans as horizontal
    bars with stage, latency, model), live-updating from /api/debug/stream.
 5. Markdown: vendor `marked` + DOMPurify into web/vendor/ (small pinned
    files); highlight.js for code blocks.
@@ -562,7 +501,7 @@ No Projects UI, no Settings UI, no artifacts panel (Phase 2–3), no backend
 edits of any kind, no npm bundler config.
 
 FILE SCOPE (hard boundary)
-  src/**  web/**  tsconfig.json
+  web/src/**  web/**  tsconfig.json
 READ-ONLY: everything else.
 
 INTERFACES
@@ -598,12 +537,18 @@ and any endpoint drift observed.
 CONTEXT
 AI-Mega-App rebuild, Phase 1 wave 2. Merged: pyproject.toml (pytest + ruff
 config), app skeleton. Parallel agents are adding app/llm_client.py (+
-tests/fakes/fake_llama_swap.py), app/chat/**, app/debug/**, src/** frontend.
+tests/fakes/fake_llama_swap.py), app/chat/**, app/debug/**, web/src/** frontend.
 CI must need no GPU: everything runs against the fake llama-swap (PLAN.md
 §4.10). Source of truth: PLAN.md §4.10, §5 (Phase 1); docs/FEATURES.md
 §testing.
 
 GOAL
+0. package.json — you OWN it; nobody else had it and every phase gate runs
+   `npx tsc --noEmit`. Dev dependencies only: typescript, @playwright/test. No
+   bundler, no framework, no build script beyond `"build": "tsc"` and
+   `"typecheck": "tsc --noEmit"` (rule 001 — tsc is the entire build). The
+   vendored browser libs (marked, DOMPurify, highlight.js) are pinned files
+   web-shell commits under web/vendor/, NOT npm runtime dependencies.
 1. tests/conftest.py — shared fixtures: tmp SQLite db, loaded test config
    (points llama_swap.base_url at the in-process fake), app TestClient
    factory. Import the fake lazily so your branch tests green before merge.
@@ -621,8 +566,8 @@ No app code, no frontend views, no GPU/live-hardware checks (preflight is
 Phase 5).
 
 FILE SCOPE (hard boundary)
-  tests/conftest.py  .github/workflows/ci.yml  e2e/**  playwright.config.ts
-  scripts/dev.sh
+  tests/conftest.py  .github/workflows/ci.yml  package.json  e2e/**
+  playwright.config.ts  scripts/dev.sh
 READ-ONLY: pyproject.toml (foundation owns it — if a dev-dependency like
 playwright must be added, stop and ask).
 
@@ -669,8 +614,8 @@ SEMANTIC-CONFLICT CHECKLIST (run before/after each merge)
 [ ] chat-sse imports LLMClient/ChatDelta exactly as llm-client shipped them
     (signature diff, not eyeball).
 [ ] chat-sse span stage names match debug-trace's documented vocabulary.
-[ ] SSE event names/payloads in app/chat/api.py match what src/api.ts and
-    src/views/chat.ts parse (grep both sides, compare literally).
+[ ] SSE event names/payloads in app/chat/api.py match what web/src/api.ts and
+    web/src/views/chat.ts parse (grep both sides, compare literally).
 [ ] Debug view consumes /api/debug/stream event name `span` as shipped.
 [ ] conftest fixtures don't shadow fixtures defined in feature test files.
 [ ] app/main.py includes BOTH routers (chat, debug) and static serving —
@@ -704,11 +649,11 @@ p1/web-shell, p1/ci-harness):
    (pyproject.toml, config.yaml, app/config.py, app/types.py, app/main.py)
    modified by a non-owner.
 2. Check out the branch in a scratch worktree; run python -m pytest -q from
-   repo root and tsc --noEmit (if src/ exists). Record pass/fail + new
+   repo root and tsc --noEmit (if web/src/ exists). Record pass/fail + new
    failure names.
 3. Contract spot-checks: streams terminate with done|error in tests; every
    new pipeline stage calls app.debug.span; zero hardcoded model names
-   (grep for roster aliases inside app/ and src/ excluding config.yaml).
+   (grep for roster aliases inside app/ and web/src/ excluding config.yaml).
 4. Output a per-branch verdict table: SCOPE OK / VIOLATIONS, TESTS PASS/FAIL,
    contract notes. Recommend merge or bounce per branch. Do not merge, do not
    fix, do not commit.
@@ -738,10 +683,10 @@ restart.
 | router-eval | `p2/router-eval` | `../AI-Mega-App-p2-eval` | `eval/**`, `scripts/eval_router.py` | config-schema |
 | settings-api | `p2/settings-api` | `../AI-Mega-App-p2-settings` | `app/settings/**`, `app/main.py` (OWNER), `app/chat/orchestrator.py` (OWNER: router seam only), `tests/test_settings_api.py` | config-schema |
 | background-utility | `p2/background-utility` | `../AI-Mega-App-p2-utility` | `app/background/**`, `tests/test_background.py` | config-schema |
-| settings-ui | `p2/settings-ui` | `../AI-Mega-App-p2-ui` | `src/views/settings.ts`, `src/views/chat.ts`, `src/api.ts` (OWNER this wave), `web/css/settings.css` | config-schema |
+| settings-ui | `p2/settings-ui` | `../AI-Mega-App-p2-ui` | `web/src/views/settings.ts`, `web/src/views/chat.ts`, `web/src/api.ts` (OWNER this wave), `web/css/settings.css` | config-schema |
 
 Shared-file owners this wave: `config.yaml`/`app/config.py` frozen after wave
-1; `app/main.py` + orchestrator router-seam → settings-api; `src/api.ts` →
+1; `app/main.py` + orchestrator router-seam → settings-api; `web/src/api.ts` →
 settings-ui.
 
 ## Prompt: `p2/config-schema`
@@ -763,14 +708,19 @@ Extend config.yaml + app/config.py (pydantic) with, exactly:
   routing:
     rules: [{keywords: [str] (2+ words, word-boundary), intent: str}]
     attachments: {image: vision, code_file: coding}   # forced intents
-    intents: map class+effort -> model alias, e.g.
-      general: chat-default · coding: coder · reasoning: reasoner ·
-      vision: vision · tool: chat-default ·
-      coding_light: utility-or-coder per PLAN §4.1 labels
+    intents: map classifier class -> model alias (the frozen 6-class
+      taxonomy, PLAN §4.3):
+      chat: chat-default · chit_chat: chat-default · code_task: coder ·
+      reasoning_task: reasoner · vision_task: vision ·
+      tool_call_needed: chat-default
+      # chit_chat does NOT route to utility: utility is CPU-resident and
+      # takes ~18-22s for a short generation (Phase 0 §8 Test 3).
     classifier: {model: classifier, timeout_s: 2.0,
                  confidence_threshold: 0.5, fallback_model: chat-default}
-  background: {title_model: utility, summary_model: utility,
+  background: {title_model: dispatcher, summary_model: utility,
                summary_every_n_turns: 6}
+      # titles go to the dispatcher (0.042s, 8/8 rubric) not utility
+      # (43.5s, 1/8) — Phase 0 §12.
 Update tests/test_config.py for the new schema; keep old keys compatible.
 
 NON-GOALS
@@ -885,6 +835,20 @@ carries rules, attachment forcing, intents table, classifier settings.
 LLMClient.chat accepts response_format. RouteResult exists in app/types.py.
 Source of truth: PLAN.md §4.3; docs/FEATURES.md §router.
 
+THIS IS A PORT, NOT A DESIGN TASK. Phase 0 already got this classifier from
+45.88% to 91.76% on the real taxonomy (docs/phase0-measurements.md §13,
+scripts/eval_classifier_accuracy.py). Three things are load-bearing and must
+be carried over verbatim rather than re-derived:
+  (a) the `--reasoning off` server flag — a `/no_think` prompt suffix works
+      on some checkpoints and silently fails on others, leaving `content`
+      empty and `reasoning_content` full;
+  (b) the few-shot examples aimed at the OBSERVED confusions — live data
+      with no tool named (`stock price`, `weather`) and file-search vs
+      code-writing (`grep`, `find files`);
+  (c) a real token budget.
+Re-deriving any of these re-opens a solved problem. Read
+.cursor/rules/010-benchmark-eval-methodology.mdc before you start.
+
 GOAL
 app/router/ package, three strictly ordered layers, every decision traced:
 1. app/router/rules.py — layer 2: attachment forcing (image→vision,
@@ -892,10 +856,14 @@ app/router/ package, three strictly ordered layers, every decision traced:
    2+ word phrases). Returns intent | None. Pure, synchronous, no model.
 2. app/router/classifier.py — layer 3: calls the classifier model via
    LLMClient with response_format json_schema enforcing EXACTLY
-   {"class": "general|coding|tool|reasoning|vision",
-    "effort": "light|heavy", "needs_tools": [string], "confidence": number}
-   Prompt ≤ ~600 tokens + few-shots, in a module-level constant. The
-   classifier NEVER sees or names model aliases. Timeout
+   {"class": "chat|chit_chat|code_task|tool_call_needed|reasoning_task|
+              vision_task",
+    "confidence": number}
+   (frozen 2026-07-23 — this is the taxonomy that measured 91.76%; `effort`
+   and `needs_tools` are NOT classifier output, the rules layer sets them.)
+   Prompt ≤ ~600 tokens + the Phase-0 few-shots, in a module-level constant.
+   The classifier NEVER sees or names model aliases. Weakest class is
+   `tool_call_needed` at 78.9% — if accuracy regresses, look there first. Timeout
    config.routing.classifier.timeout_s → fallback. Confidence below
    threshold → fallback, flagged.
 3. app/router/router.py — async route(chat, text, attachments) ->
@@ -950,8 +918,13 @@ gate: ≥90% correct on this set. Source of truth: PLAN.md §4.3, §4.10, §5
 (Phase 2 exit); docs/FEATURES.md §router-eval.
 
 GOAL
-1. eval/router_eval.csv — ≥120 labeled rows: prompt, expected_class,
-   expected_effort, notes. Cover: plain chat, light+heavy coding, tool-ish
+1. eval/router_eval.csv — ≥120 labeled rows: prompt, expected_class, notes.
+   Seed from scripts/eval_data/ (the 85-item Phase-0 set that produced the
+   91.76% baseline) and extend. SCORER REQUIREMENT: `chat` is a substring of
+   `chit_chat` — match labels longest-first with word boundaries, or exactly.
+   A naive `if label in text` scan cost 45 accuracy points in Phase 0 and
+   produced an entirely wrong conclusion about model capacity. Cover: plain
+   chat, chit-chat, coding, tool-ish
    requests (search/fetch phrasing), reasoning, vision-with-attachment
    marker column, adversarial near-misses (code words in casual chat).
 2. scripts/eval_router.py — runs each row through app.router.route with a
@@ -1065,10 +1038,16 @@ Report endpoints, wiring performed, drift observed.
 
 ```
 CONTEXT
-AI-Mega-App, Phase 2 wave 2. The utility model (Qwen3-8B, resident on the
-3070) handles titles/summaries as background tasks; failures never block
-chat (PLAN.md §4.15). config.background has title_model, summary_model,
-summary_every_n_turns. LLMClient + debug spans exist. settings-api wires
+AI-Mega-App, Phase 2 wave 2. Background jobs are split across two models by
+who waits on the result (PLAN.md §4.15, Phase-0 §12): TITLES go to
+`dispatcher` (Hammer2.1-1.5b on GPU1 — 0.042s/call, 8/8 on the rubric),
+SUMMARIES and compaction go to `utility` (Qwen3-8B on CPU — ~18-22s, fine
+for a job nobody awaits; it scores 1/8 on titles at 43.5s because it burns a
+title-sized budget inside <think>). Failures never block chat.
+Title post-processing is deterministic and lives in code: truncate over-long
+output, strip wrapping quotes and markdown fences, and NEVER reject a short
+title — the rubric follows the postprocessing, not the reverse.
+config.background has title_model, summary_model, summary_every_n_turns. LLMClient + debug spans exist. settings-api wires
 your start hook into main.py. Source of truth: PLAN.md §4.1, §4.15;
 docs/FEATURES.md §background.
 
@@ -1077,14 +1056,16 @@ GOAL
    sequential worker, errors logged + span-recorded, never raised to
    callers. start(app) / stop(app) hooks.
 2. app/background/titles.py — after a chat's first exchange completes,
-   generate a ≤6-word title via utility model; write to chats.title; emit
-   SSE `title` event on the chat stream bus if one is open, else UI picks it
-   up on next list fetch. Span stage: title.
+   generate a ≤6-word title via **config.background.title_model, which is the
+   `dispatcher`** (0.042s/call, 8/8 on the rubric — NOT `utility`, which
+   scores 1/8 at 43.5s because it burns a title-sized budget inside
+   <think>); write to chats.title; emit SSE `title` event on the chat stream
+   bus if one is open, else UI picks it up on next list fetch. Span stage:
+   title. Read the alias from config — never a literal.
 3. app/background/summaries.py — rolling summary per chat every
-   summary_every_n_turns; stored in a new column? NO — store in
-   settings_overlay-style table is wrong too; use messages? STOP — a
-   `chat_summaries(chat_id PK, summary, updated_at)` table is required:
-   request it via the STOP CONDITION unless it already exists in schema.sql.
+   summary_every_n_turns via config.background.summary_model (`utility`),
+   written to the existing `chats.summary` column (Phase 1 shipped it; you
+   need no schema change and no new table).
 4. Hook: orchestrator calls background.on_turn_complete(chat_id) — export
    that function; settings-api wires the call.
 5. tests/test_background.py against fake llama-swap.
@@ -1113,13 +1094,13 @@ pytest -q passes: title generated after first exchange; summary at N turns;
 utility-model failure leaves chat unaffected.
 
 STOP CONDITION
-The chat_summaries table needs adding to app/schema.sql (owned by
-foundation/frozen): stop and ask for owner sign-off with the exact DDL
-before writing any code that needs it.
+Any schema change at all (app/schema.sql is frozen — `chats.summary` already
+exists and is the only column you need): stop and ask for owner sign-off with
+the exact DDL before writing code that depends on it.
 
 FINAL STEPS
-pytest -q; commit `feat(background): utility queue, titles, summaries`.
-Report exported hooks and the DDL that was approved.
+pytest -q; commit `feat(background): background queue, titles, summaries`.
+Report exported hooks and which model each job resolved to.
 ```
 
 ## Prompt: `p2/settings-ui`
@@ -1134,27 +1115,27 @@ layout. Backend agents ship this wave (code against these verbatim):
   GET /api/gpu/inventory · GET /api/gpu/swap-config · POST /api/gpu/apply
   chat `done` events now include {"route": {source, intent, model,
   confidence}}; a `title` SSE event may arrive.
-You OWN src/api.ts this wave. Source of truth: PLAN.md §4.1, §4.2, §4.3;
+You OWN web/src/api.ts this wave. Source of truth: PLAN.md §4.1, §4.2, §4.3;
 docs/FEATURES.md §settings-ui.
 
 GOAL
-1. src/views/settings.ts + web/css/settings.css — Settings area: Models
+1. web/src/views/settings.ts + web/css/settings.css — Settings area: Models
    table (name, class, GPU assignment dropdown fed by /api/gpu/inventory,
    resident toggle, ttl); Routing tab (keyword rules editor, intents map);
    Apply button → PUT then POST /api/gpu/apply, surfacing llama-swap's
    reload result. Split into submodules if nearing 300 lines.
-2. src/views/chat.ts — composer model picker now fed from GET /api/models
+2. web/src/views/chat.ts — composer model picker now fed from GET /api/models
    (aliases + class grouping, "Auto (router)" default = clear override);
    per-message model label shows route source on hover (e.g. "coder · via
    classifier 0.92"); live title update on `title` event.
-3. src/api.ts — typed client additions for the endpoints above.
+3. web/src/api.ts — typed client additions for the endpoints above.
 
 NON-GOALS
 No backend edits, no debug view changes, no Projects/artifacts UI.
 
 FILE SCOPE (hard boundary)
-  src/views/settings.ts  src/views/chat.ts  src/api.ts  web/css/settings.css
-READ-ONLY: all other src/**, web/**, everything backend.
+  web/src/views/settings.ts  web/src/views/chat.ts  web/src/api.ts  web/css/settings.css
+READ-ONLY: all other web/src/**, web/**, everything backend.
 
 INTERFACES
 Endpoint list in CONTEXT, verbatim. Views keep the mount/unmount contract.
@@ -1194,8 +1175,9 @@ SEMANTIC-CONFLICT CHECKLIST
     signature; RouteResult fields it forwards exist.
 [ ] settings-api wires gpu.start_rewarm + background.start with the shipped
     hook names.
-[ ] background's chat_summaries DDL landed in schema.sql via approved
-    foundation change (one commit, not two competing ones).
+[ ] background wrote summaries to the existing `chats.summary` column and
+    added no table; titles resolved to `dispatcher`, summaries to `utility`
+    (grep the spans — swapping these is the exact Phase-0 mistake).
 [ ] eval script imports app.router.route successfully post-merge; run
     `python scripts/eval_router.py --fake`.
 [ ] settings-ui endpoint paths/payloads match settings-api + gpu api
@@ -1203,7 +1185,7 @@ SEMANTIC-CONFLICT CHECKLIST
 [ ] `done` event route payload shape matches what chat.ts parses.
 [ ] Golden SSE transcript updated deliberately (route info in done) — a
     diff here must be an intentional contract change, noted in the commit.
-[ ] No non-owner touched config.yaml/app/config.py/app/main.py/src/api.ts.
+[ ] No non-owner touched config.yaml/app/config.py/app/main.py/web/src/api.ts.
 
 PHASE EXIT DEMO (on the box)
 Regenerate llama-swap.yaml from Settings, apply, llama-swap reloads without
@@ -1225,13 +1207,13 @@ For each branch (p2/config-schema, p2/gpu-swapgen, p2/router-classifier,
 p2/router-eval, p2/settings-api, p2/background-utility, p2/settings-ui):
 1. git diff main...<branch> --name-only vs the FILE SCOPE tables above; flag
    every violation, especially non-owner edits to config.yaml,
-   app/config.py, app/main.py, app/chat/orchestrator.py, src/api.ts,
+   app/config.py, app/main.py, app/chat/orchestrator.py, web/src/api.ts,
    app/schema.sql.
 2. Scratch-worktree checkout; python -m pytest -q; tsc --noEmit where
    applicable. Record new failures.
 3. Contract checks: classifier prompt contains zero model aliases; swapgen
    output is deterministic (run generate twice, diff); every new stage has
-   a span; grep app/ src/ for hardcoded roster aliases outside config.
+   a span; grep app/ web/src/ for hardcoded roster aliases outside config.
 4. Verdict table per branch (SCOPE / TESTS / CONTRACTS) + merge-or-bounce
    recommendation. No fixes, no merges, no commits.
 ```
@@ -1240,9 +1222,18 @@ p2/router-eval, p2/settings-api, p2/background-utility, p2/settings-ui):
 
 # Phase 3 — Substance
 
-Tools framework, search, Needle assist, attachments, Projects, RAG, memory,
+Tools framework, search, dispatcher assist, attachments, Projects, RAG, memory,
 Tier-1 artifacts, compaction (PLAN.md §5 Phase 3). Exit: claude.ai-parity
 daily driver.
+
+**Operator pre-step (before wave 2's rag agent — not a Cursor agent):** stand up
+Qdrant. It was adopted on measurement in Phase 0 and never installed, and
+`p3/rag` assumes it is answering on `:6333`. Run it as a Docker container with a
+persistent volume, create the `chunks` and `messages` collections at the `embed`
+model's dimension, and record the version + resolved `dim` in
+`docs/phase0-measurements.md`. A `dim` that disagrees with the live embed model
+corrupts a collection silently, which is why config validates it at startup
+rather than trusting it. Nothing RAG-shaped starts before this is recorded.
 
 ## Wave 1 (sequential — one agent: tool loop + shared seams)
 
@@ -1255,7 +1246,7 @@ daily driver.
 | Agent | Branch | Worktree | FILE SCOPE | Depends |
 |---|---|---|---|---|
 | search | `p3/search` | `../AI-Mega-App-p3-search` | `app/search/**`, `app/tools/web_search.py`, `app/tools/fetch_url.py`, `tests/test_search.py` | tools-core |
-| needle | `p3/needle` | `../AI-Mega-App-p3-needle` | `app/tools/needle_dispatch.py`, `tests/test_needle.py` | tools-core |
+| dispatcher | `p3/dispatcher` | `../AI-Mega-App-p3-dispatcher` | `app/tools/dispatcher.py`, `tests/test_dispatcher.py` | tools-core |
 | attachments | `p3/attachments` | `../AI-Mega-App-p3-attach` | `app/attachments/**`, `tests/test_attachments.py` | tools-core |
 | rag | `p3/rag` | `../AI-Mega-App-p3-rag` | `app/rag/**`, `tests/test_rag.py` | tools-core |
 | memory | `p3/memory` | `../AI-Mega-App-p3-memory` | `app/memory/**`, `app/tools/memory_save.py`, `app/tools/memory_search.py`, `app/chat/compaction.py`, `tests/test_memory.py`, `tests/test_compaction.py` | tools-core |
@@ -1265,15 +1256,15 @@ daily driver.
 
 | Agent | Branch | Worktree | FILE SCOPE | Depends |
 |---|---|---|---|---|
-| projects-ui | `p3/projects-ui` | `../AI-Mega-App-p3-pui` | `src/views/projects.ts`, `src/views/project.ts`, `web/css/projects.css` | wave 2 merged |
-| artifacts | `p3/artifacts` | `../AI-Mega-App-p3-artifacts` | `src/artifacts/**`, `web/css/artifacts.css`, `web/workers/**` | wave 2 merged |
-| chat-ux | `p3/chat-ux` | `../AI-Mega-App-p3-ux` | `src/views/chat.ts`, `src/api.ts` (OWNER this wave), `web/css/app.css` | wave 2 merged |
+| projects-ui | `p3/projects-ui` | `../AI-Mega-App-p3-pui` | `web/src/views/projects.ts`, `web/src/views/project.ts`, `web/css/projects.css` | wave 2 merged |
+| artifacts | `p3/artifacts` | `../AI-Mega-App-p3-artifacts` | `web/src/artifacts/**`, `web/css/artifacts.css`, `web/workers/**` | wave 2 merged |
+| chat-ux | `p3/chat-ux` | `../AI-Mega-App-p3-ux` | `web/src/views/chat.ts`, `web/src/api.ts` (OWNER this wave), `web/css/app.css` | wave 2 merged |
 
 ## Wave 4 (single agent)
 
 | Agent | Branch | Worktree | FILE SCOPE | Depends |
 |---|---|---|---|---|
-| wiring | `p3/wiring` | `../AI-Mega-App-p3-wiring` | `app/main.py` (OWNER), `src/app.ts` + `src/router.ts` (OWNER), `tests/test_phase3_wiring.py` | waves 2–3 merged |
+| wiring | `p3/wiring` | `../AI-Mega-App-p3-wiring` | `app/main.py` (OWNER), `web/src/app.ts` + `web/src/router.ts` (OWNER), `tests/test_phase3_wiring.py` | waves 2–3 merged |
 
 ## Prompt: `p3/tools-core`
 
@@ -1304,16 +1295,16 @@ GOAL
    config.tools.max_iterations. New SSE events:
      event: tool_start   data: {"name", "args_preview"}
      event: tool_result  data: {"name", "content_preview", "is_error"}
-   Needle seam: when the resolved model's config has tool_call: weak AND
-   config.tools.needle_assist is true, call
-   app.tools.needle_dispatch.emit_call(...) for the call-emission step (the
+   Dispatcher seam: when the resolved model's config has tool_call: weak AND
+   config.tools.dispatcher_assist is true, call
+   app.tools.dispatcher.emit_call(...) for the call-emission step (the
    module ships in wave 2 — import lazily, degrade to native path if
    absent). RAG seam: before the LLM call, `context_blocks =
    await gather_context(chat, text)` — a hook list features append to
    (memory + rag register providers). Compaction seam: call
    app.chat.compaction.maybe_compact(chat) if the module exists.
 4. Config schema additions (you OWN config this wave):
-     tools: {max_iterations: 6, needle_assist: true,
+     tools: {max_iterations: 6, dispatcher_assist: true,
              web_search: {enabled: true}, fetch_url: {enabled: true},
              file_ops: {enabled: true}, memory_save: {enabled: true},
              memory_search: {enabled: true}}
@@ -1324,9 +1315,11 @@ GOAL
      compaction: {threshold_tokens: 24000, keep_recent_turns: 8}
 5. app/schema.sql migration (you OWN it this wave): projects(id, name,
    path, created_at), attachments(id, chat_id, filename, mime, path,
-   extracted_chars), memories(id, scope, project_id, content, created_at,
-   embedding BLOB NULL), chunks + vec/FTS5 virtual tables for rag,
-   chat_summaries if not present.
+   extracted_chars), memories(id, scope, project_id, content, created_at),
+   chunks + FTS5 virtual tables for rag's lexical half. **No vector columns
+   or vec tables — vectors live in Qdrant** (PLAN §3.1); the chunk *text*
+   and its id are what SQLite stores. Chat summaries need nothing: Phase 1
+   shipped `chats.summary`.
 6. tests/test_tool_loop.py — echo-tool fixture: loop executes, respects
    max_iterations, tool error surfaces as tool_result is_error (stream
    still ends in done), disabled tool absent from schema list.
@@ -1420,57 +1413,75 @@ pytest -q; commit `feat(search): ddg→tavily chain, web_search+fetch_url`.
 Report provider chain behavior + the dependency request.
 ```
 
-## Prompt: `p3/needle`
+## Prompt: `p3/dispatcher`
 
 ```
 CONTEXT
-AI-Mega-App, Phase 3 wave 2. Cactus Needle (26M, CPU resident, alias
-`needle`) emits ONE JSON tool call per inference — dispatcher, never
+AI-Mega-App, Phase 3 wave 2. The `dispatcher` (Hammer2.1-1.5b, GPU1
+resident) emits ONE JSON tool call per inference — dispatcher, never
 planner; no chaining, no reasoning (PLAN.md §4.7). The orchestrator already
 has the seam: for models tagged tool_call: weak it calls
-app.tools.needle_dispatch.emit_call. Source of truth: PLAN.md §4.7 (Needle
-assist + dispatcher-not-planner), §4.1 roster; docs/FEATURES.md §needle.
+app.tools.dispatcher.emit_call. Source of truth: PLAN.md §4.7 (dispatcher
+assist + dispatcher-not-planner), §4.1 roster; docs/FEATURES.md §F9.
+
+NOTE: Cactus Needle (the model this slot was originally specced for) was
+evaluated in Phase 0 and DROPPED — its production runtime hardcodes ARM NEON
+and cannot build on x86_64, and its reference server ran ~0.9-1.1s/call
+against a 50ms bar. Hammer2.1-1.5b replaced it: 0.07-0.21s/call, 79.0%
+call_f1 on a realistic 6-tool registry, 63.75% on a hostile 13-tool one.
+
+MEASURED CONSTRAINT THAT SHAPES YOUR WORK: at 63.75-79% call_f1, the
+realistic failure is a WRONG-BUT-VALID tool choice, not malformed output
+(parse rate is 98.8%). So: validation catches shape, not correctness — the
+fallback path and the debug span matter more than the happy path. Registry
+design matters too: semantically overlapping tool names
+(web_search/web_news/web_images, file_read/file_read_lines) are exactly what
+cost accuracy. Do NOT add embedding-based tool pre-filtering: it was
+measured in Phase 0 and made things worse (60.87% at top-k=5).
 
 GOAL
-1. app/tools/needle_dispatch.py — NOT a registry Tool; the assist module:
+1. app/tools/dispatcher.py — NOT a registry Tool; the assist module:
      async def emit_call(text: str, tool_schemas: list[dict],
                          client: LLMClient, cfg) -> ToolCallRequest | None
-   Sends query + tool schemas to model alias from
-   config.routing/models (class needle) with response_format json_schema
-   enforcing {name: str, arguments: object}; validates name against the
-   schema list and arguments against that tool's JSON Schema; returns None
-   on validation failure or timeout (caller falls back to the native path).
-   Span stage: needle, fields: chosen_tool, valid, latency_ms — the debug
-   panel marks Needle-assisted turns (who decided vs. who emitted).
-2. tests/test_needle.py — valid call passes validation; unknown tool name →
-   None; malformed args → None; timeout → None; canned responses via fake
+   Sends query + tool schemas to the model alias from config models with
+   class `dispatcher`, with response_format json_schema enforcing
+   {name: str, arguments: object}; validates name against the schema list
+   and arguments against that tool's JSON Schema; returns None on validation
+   failure or timeout (caller falls back to the native path).
+   Span stage: dispatcher, fields: chosen_tool, valid, latency_ms — the
+   debug panel marks dispatcher-assisted turns (who decided vs. who emitted).
+2. tests/test_dispatcher.py — valid call passes validation; unknown tool name
+   → None; malformed args → None; timeout → None; canned responses via fake
    llama-swap.
 
 NON-GOALS
 No orchestrator edits (seam exists), no multi-step planning, no fine-tuning
-tooling (post-Phase-3 per PLAN.md §4.7), no registry changes.
+tooling (post-Phase-3 per PLAN.md §4.7 — the FunctionGemma finetune +
+GGUF-conversion scripts already exist under scripts/needle_training/ and get
+re-run against the stabilized registry, not rebuilt), no registry changes.
 
 FILE SCOPE (hard boundary)
-  app/tools/needle_dispatch.py  tests/test_needle.py
+  app/tools/dispatcher.py  tests/test_dispatcher.py
 READ-ONLY: everything else.
 
 INTERFACES
 emit_call signature verbatim (orchestrator already imports it lazily).
-Model alias resolved from config models with class `needle` — no literal.
+Model alias resolved from config models with class `dispatcher` — no literal.
 
 CONSTRAINTS
 Plan Mode first. File under 300 lines. Every failure path returns None —
-Needle assist degrades, never breaks a turn.
+dispatcher assist degrades, never breaks a turn.
 
 ACCEPTANCE
 pytest -q passes all listed cases; an integration test through the tool
-loop with a weak-tagged model shows the needle span present.
+loop with a weak-tagged model shows the dispatcher span present.
 
 STOP CONDITION
 Seam mismatch with orchestrator as merged → stop and report.
 
 FINAL STEPS
-pytest -q; commit `feat(needle): schema-validated dispatch assist`. Report
+pytest -q; commit `feat(dispatcher): schema-validated dispatch assist`.
+Report
 validation rules and fallback behavior.
 ```
 
@@ -1536,17 +1547,27 @@ provider`. Report extractor matrix + dependency requests.
 ```
 CONTEXT
 AI-Mega-App, Phase 3 wave 2. Hybrid retrieval: heading-aware chunking
-(~512 tokens, 20% overlap) → embeddings via resident `embed` model
-(LLMClient.embed) → sqlite-vec + FTS5 → reciprocal-rank fusion → top-k with
-citations (PLAN.md §4.8). chunks + vec/FTS5 tables exist in schema;
-config.rag has chunk_tokens/overlap_pct/top_k. sqlite-vec verdict is in
-docs/phase0-measurements.md. Source of truth: PLAN.md §4.8, §3.1
-(VectorStore escape hatch); docs/FEATURES.md §rag.
+(~512 tokens, 20% overlap) → embeddings via the CPU-resident `embed` model
+(LLMClient.embed — nomic-embed-text-v2-moe, 11.7-34ms/call, recall@5 100%
+measured) → **Qdrant + SQLite FTS5** → reciprocal-rank fusion → top-k with
+citations (PLAN.md §4.8). chunks + FTS5 tables exist in schema; config.rag
+has chunk_tokens/overlap_pct/top_k.
+
+VECTOR STORE IS QDRANT, NOT sqlite-vec. Phase 0 benchmarked sqlite-vec at
+100k x 768-dim and it failed the gate: KNN p95 105ms against a ~50ms bar,
+brute-force-scan-bound rather than query-shape-bound (docs/phase0-
+measurements.md §6). Two traps recorded there: the naive
+`JOIN fts_items ON rowid` hybrid form costs 11.6s/query (use the documented
+`rowid IN (SELECT ...)` prefilter), and `dim` must match the live embed
+model or a collection silently corrupts. Source of truth: PLAN.md §4.8,
+§3.1, §4.11; docs/FEATURES.md §A2, §F10.
 
 GOAL
 1. app/rag/store.py — VectorStore interface (add(chunks), query(vector,
-   text, k) -> list[Hit]) with the sqlite-vec+FTS5 implementation behind
-   it (Qdrant can return later behind this interface).
+   text, k) -> list[Hit]) with a QdrantStore implementation behind it, plus
+   the SqliteVecStore fallback kept as the conformance suite's second
+   target. Which store is live is config (`vectors.store`); no caller
+   outside this module knows the difference.
 2. app/rag/chunker.py — heading-aware markdown/text chunking, ~512 tokens,
    20% overlap; deterministic chunk ids (source path + hash).
 3. app/rag/ingest.py — ingest_path(project_id, path) incremental on file
@@ -1717,25 +1738,25 @@ AI-Mega-App, Phase 3 wave 3. Backend merged: /api/projects CRUD,
 instructions PUT, file upload+reindex; chats carry project_id. UI mirrors
 claude.ai: project grid → workspace (instructions, files, project chats)
 (PLAN.md §4.5). View contract: mount(el, store)/unmount; hash router;
-src/api.ts typed client (chat-ux owns it this wave — consume existing
+web/src/api.ts typed client (chat-ux owns it this wave — consume existing
 helpers or plain fetch; list needed additions in your report). Source of
 truth: PLAN.md §4.2, §4.5; docs/FEATURES.md §projects-ui.
 
 GOAL
-1. src/views/projects.ts — grid: cards (name, updated, chat count), new
+1. web/src/views/projects.ts — grid: cards (name, updated, chat count), new
    project modal.
-2. src/views/project.ts — workspace: instructions editor (PUT on save),
+2. web/src/views/project.ts — workspace: instructions editor (PUT on save),
    files list + upload + reindex button, project chats list + "new chat in
    project".
 3. web/css/projects.css — claude.ai-parity styling off theme.css
    variables.
 
 NON-GOALS
-No sidebar/nav registration (wave-4 wiring owns src/app.ts + router.ts),
+No sidebar/nav registration (wave-4 wiring owns web/src/app.ts + router.ts),
 no api.ts edits, no backend changes, no artifact panel.
 
 FILE SCOPE (hard boundary)
-  src/views/projects.ts  src/views/project.ts  web/css/projects.css
+  web/src/views/projects.ts  web/src/views/project.ts  web/css/projects.css
 READ-ONLY: everything else.
 
 INTERFACES
@@ -1772,15 +1793,15 @@ streamed markdown. Source of truth: PLAN.md §4.6; docs/FEATURES.md
 §artifacts.
 
 GOAL
-1. src/artifacts/panel.ts — panel controller: mount/unmount into the right
+1. web/src/artifacts/panel.ts — panel controller: mount/unmount into the right
    panel host element; artifact list per chat; tabs (preview/source).
-2. src/artifacts/detect.ts — pure function: message content → artifact
+2. web/src/artifacts/detect.ts — pure function: message content → artifact
    candidates (html, svg, javascript, python, markdown fences over a size
    threshold).
-3. src/artifacts/sandbox.ts — iframe renderer: srcdoc,
+3. web/src/artifacts/sandbox.ts — iframe renderer: srcdoc,
    sandbox="allow-scripts", never allow-same-origin; console/error capture
    relayed via postMessage into the panel.
-4. src/artifacts/pyodide.ts + web/workers/pyodide-worker.js — run Python
+4. web/src/artifacts/pyodide.ts + web/workers/pyodide-worker.js — run Python
    in a worker: load Pyodide lazily (vendored/pinned URL decision → ask if
    vendoring ~10MB is unwanted; a config-served CDN path is acceptable —
    state the choice), stdout/stderr + result surfaced; 30s soft timeout
@@ -1793,7 +1814,7 @@ edits (chat-ux owns it; it will call your exported
 `showArtifactsFor(message)` — export it), no backend.
 
 FILE SCOPE (hard boundary)
-  src/artifacts/**  web/workers/**  web/css/artifacts.css
+  web/src/artifacts/**  web/workers/**  web/css/artifacts.css
 READ-ONLY: everything else.
 
 INTERFACES
@@ -1826,27 +1847,27 @@ CONTEXT
 AI-Mega-App, Phase 3 wave 3. Backend merged: tool SSE events (tool_start,
 tool_result), attachments upload endpoint, citations data in rag context,
 memory API. Artifacts agent (parallel) exports initPanel/detectArtifacts/
-showArtifactsFor from src/artifacts/panel.ts — integrate via those only.
-You OWN src/api.ts this wave. Source of truth: PLAN.md §4.2, §4.6–§4.9;
+showArtifactsFor from web/src/artifacts/panel.ts — integrate via those only.
+You OWN web/src/api.ts this wave. Source of truth: PLAN.md §4.2, §4.6–§4.9;
 docs/FEATURES.md §chat-ux.
 
 GOAL
-1. src/views/chat.ts — render tool_start/tool_result as collapsible tool
+1. web/src/views/chat.ts — render tool_start/tool_result as collapsible tool
    chips in the stream; attachment button → POST
    /api/chats/{id}/attachments with progress; citation markers in
    assistant text become source-hover chips; artifact candidates get an
    "open in panel" affordance (detectArtifacts + showArtifactsFor);
    compaction notice row when a summary block is active.
-2. src/api.ts — typed helpers: uploadAttachment, memories CRUD, projects
+2. web/src/api.ts — typed helpers: uploadAttachment, memories CRUD, projects
    CRUD (the list projects-ui reported), tool event types.
 3. web/css/app.css — chip/citation/upload styles from theme variables.
 
 NON-GOALS
 No artifacts internals, no projects views, no nav/router registration
-(wiring owns src/app.ts + src/router.ts), no backend edits.
+(wiring owns web/src/app.ts + web/src/router.ts), no backend edits.
 
 FILE SCOPE (hard boundary)
-  src/views/chat.ts  src/api.ts  web/css/app.css
+  web/src/views/chat.ts  web/src/api.ts  web/css/app.css
 READ-ONLY: everything else.
 
 INTERFACES
@@ -1856,7 +1877,7 @@ the hard rule.
 
 CONSTRAINTS
 Plan Mode first. Files under 300 lines (extract chat submodules into
-src/views/chat/ if needed — that path is yours by extension; declare it in
+web/src/views/chat/ if needed — that path is yours by extension; declare it in
 your plan). DOMPurify everywhere.
 
 ACCEPTANCE
@@ -1881,15 +1902,15 @@ CONTEXT
 AI-Mega-App, Phase 3 wave 4 — the integration gate that killed the old
 build ("built but not injected", Bug 1) exists because of you. Waves 2–3
 merged: attachments/memory/projects routers, context providers, tools,
-frontend views + artifact panel. You OWN app/main.py, src/app.ts,
-src/router.ts. Source of truth: PLAN.md §5 (Phase 3 exit), §6 rule 005;
+frontend views + artifact panel. You OWN app/main.py, web/src/app.ts,
+web/src/router.ts. Source of truth: PLAN.md §5 (Phase 3 exit), §6 rule 005;
 docs/FEATURES.md.
 
 GOAL
 1. app/main.py — include routers: attachments, memory, projects; confirm
    context providers register on startup (import side effects made
    explicit: call each feature's register() in one visible block).
-2. src/app.ts + src/router.ts — register views: #/projects,
+2. web/src/app.ts + web/src/router.ts — register views: #/projects,
    #/projects/{id}, artifacts panel init in the app shell, sidebar nav
    items (Projects, Memory under Settings), api.ts helpers verified
    against every view's imports.
@@ -1904,7 +1925,7 @@ No feature logic changes — wiring only. Behavior gaps get reported, not
 patched.
 
 FILE SCOPE (hard boundary)
-  app/main.py  src/app.ts  src/router.ts  tests/test_phase3_wiring.py
+  app/main.py  web/src/app.ts  web/src/router.ts  tests/test_phase3_wiring.py
 
 CONSTRAINTS
 Plan Mode first. Minimal diffs. Every register call in one commented
@@ -1930,7 +1951,7 @@ ROLE: Integrator, Phase 3.
 
 MERGE ORDER
 Wave 1: p3/tools-core (alone, then recreate wave-2 worktrees from main).
-Wave 2: p3/search → p3/needle → p3/attachments → p3/rag → p3/memory →
+Wave 2: p3/search → p3/dispatcher → p3/attachments → p3/rag → p3/memory →
 p3/projects (pytest between each).
 Wave 3: p3/chat-ux → p3/artifacts → p3/projects-ui.
 Wave 4: p3/wiring.
@@ -1945,14 +1966,14 @@ SEMANTIC-CONFLICT CHECKLIST
     keys exactly).
 [ ] Context providers (attachments, rag, memory, projects) all register on
     the same seam function tools-core shipped; injection order documented.
-[ ] needle_dispatch.emit_call signature matches the orchestrator's lazy
+[ ] dispatcher.emit_call signature matches the orchestrator's lazy
     import.
 [ ] attachments→rag and projects→rag lazy imports resolve post-merge.
 [ ] SSE tool events parsed by chat.ts match orchestrator emission; golden
     transcript updated once, intentionally.
 [ ] Artifact exports used by chat-ux match panel.ts exports.
 [ ] No non-owner touched config.yaml/app/config.py/app/schema.sql/
-    orchestrator/app/main.py/src/api.ts/src/app.ts.
+    orchestrator/app/main.py/web/src/api.ts/web/src/app.ts.
 
 PHASE EXIT DEMO (on the box)
 Daily-driver run: project with docs → ask a question → cited RAG answer;
@@ -1996,14 +2017,14 @@ before UI work). Build nothing until this is recorded.
 |---|---|---|---|---|
 | exec-sandbox | `p4/exec-sandbox` | `../AI-Mega-App-p4-exec` | `app/exec/**`, `docker/**`, `app/tools/run_code.py`, `tests/test_exec.py` | Phase 3 merged |
 | opencode | `p4/opencode` | `../AI-Mega-App-p4-opencode` | `app/opencode/**`, `docs/opencode.md`, `tests/test_opencode.py` | Phase 3 + operator pre-step |
-| code-ui | `p4/code-ui` | `../AI-Mega-App-p4-ui` | `src/views/code.ts`, `web/css/code.css` | operator pre-step |
-| artifacts-t2 | `p4/artifacts-t2` | `../AI-Mega-App-p4-t2` | `src/artifacts/exec.ts` | Phase 3 merged |
+| code-ui | `p4/code-ui` | `../AI-Mega-App-p4-ui` | `web/src/views/code.ts`, `web/css/code.css` | operator pre-step |
+| artifacts-t2 | `p4/artifacts-t2` | `../AI-Mega-App-p4-t2` | `web/src/artifacts/exec.ts` | Phase 3 merged |
 
 ## Wave 2 (single agent)
 
 | Agent | Branch | Worktree | FILE SCOPE | Depends |
 |---|---|---|---|---|
-| wiring | `p4/wiring` | `../AI-Mega-App-p4-wiring` | `app/main.py` (OWNER), `src/app.ts`/`src/router.ts` (OWNER), `config.yaml`+`app/config.py` (OWNER: exec/opencode keys), `tests/test_phase4_wiring.py` | wave 1 merged |
+| wiring | `p4/wiring` | `../AI-Mega-App-p4-wiring` | `app/main.py` (OWNER), `web/src/app.ts`/`web/src/router.ts` (OWNER), `config.yaml`+`app/config.py` (OWNER: exec/opencode keys), `tests/test_phase4_wiring.py` | wave 1 merged |
 
 ## Prompt: `p4/exec-sandbox`
 
@@ -2143,7 +2164,7 @@ theme.css variables, DOMPurify. Source of truth: PLAN.md §4.4 (web app
 surface list); docs/FEATURES.md §code-ui.
 
 GOAL
-src/views/code.ts + web/css/code.css — the Code area:
+web/src/views/code.ts + web/css/code.css — the Code area:
 1. Session list (directory, status, updated).
 2. New session: directory picker (text input + recent list from
    localStorage), endpoint picker when multiple opencode endpoints exist.
@@ -2158,11 +2179,11 @@ UI in chat (wiring decides placement; expose a small exported banner
 component `renderDelegationSuggestion(dir, onConfirm)` for it).
 
 FILE SCOPE (hard boundary)
-  src/views/code.ts  web/css/code.css
+  web/src/views/code.ts  web/css/code.css
 READ-ONLY: everything else.
 
 CONSTRAINTS
-Plan Mode first. Files under 300 lines (split into src/views/code/ if
+Plan Mode first. Files under 300 lines (split into web/src/views/code/ if
 needed — declare in plan). DOMPurify all opencode-originated content.
 
 ACCEPTANCE
@@ -2182,18 +2203,18 @@ tsc --noEmit; pytest -q stays green. Commit
 
 ```
 CONTEXT
-AI-Mega-App, Phase 4 wave 1. Tier-1 artifact panel exists (src/artifacts:
+AI-Mega-App, Phase 4 wave 1. Tier-1 artifact panel exists (web/src/artifacts:
 panel/detect/sandbox/pyodide). A parallel agent ships POST /api/exec
 {lang, code, files?} -> {stdout, stderr, exit_code, duration_ms,
 artifacts}. Tier 2 = "Run on server" for code needing real deps (PLAN.md
 §4.6). Source of truth: PLAN.md §4.6; docs/FEATURES.md §artifacts.
 
 GOAL
-src/artifacts/exec.ts — adds a "Run on server" action to python/js
+web/src/artifacts/exec.ts — adds a "Run on server" action to python/js
 artifacts in the panel: POSTs /api/exec, renders stdout/stderr/exit code
 and returned artifact files (download links; images inline); busy state +
 30s client timeout mirroring the server's. Integrate via the existing
-panel extension point (add one if missing INSIDE src/artifacts/panel.ts —
+panel extension point (add one if missing INSIDE web/src/artifacts/panel.ts —
 that file is within your reach ONLY for registering the action hook; keep
 the diff to a hook registration, under ~15 lines).
 
@@ -2201,7 +2222,7 @@ NON-GOALS
 No runner changes, no Pyodide changes, no chat.ts edits.
 
 FILE SCOPE (hard boundary)
-  src/artifacts/exec.ts  src/artifacts/panel.ts (hook registration only)
+  web/src/artifacts/exec.ts  web/src/artifacts/panel.ts (hook registration only)
 READ-ONLY: everything else.
 
 CONSTRAINTS
@@ -2225,7 +2246,7 @@ tsc --noEmit; pytest -q stays green. Commit
 CONTEXT
 AI-Mega-App, Phase 4 wave 2. Wave 1 merged: app/exec + run_code,
 app/opencode (+ confgen, delegation suggester), code UI, tier-2 artifact
-action. You OWN main.py, src/app.ts, src/router.ts, config.yaml,
+action. You OWN main.py, web/src/app.ts, web/src/router.ts, config.yaml,
 app/config.py this wave. Source of truth: PLAN.md §4.4, §4.6, §5 (Phase 4
 exit); docs/FEATURES.md.
 
@@ -2234,7 +2255,7 @@ GOAL
    mem_mb, cpus, pids} · opencode: {endpoints: [{name, base_url}],
    confgen_path} · tools.run_code: {enabled: true}.
 2. app/main.py — include exec + opencode routers.
-3. src/app.ts + src/router.ts — register #/code, sidebar Code item;
+3. web/src/app.ts + web/src/router.ts — register #/code, sidebar Code item;
    surface renderDelegationSuggestion in chat when
    suggest_delegation(...) info arrives (add the flag to the chat `done`
    payload via a ≤10-line orchestrator touch — orchestrator ownership
@@ -2248,7 +2269,7 @@ NON-GOALS
 No feature logic; report gaps instead of patching.
 
 FILE SCOPE (hard boundary)
-  app/main.py  src/app.ts  src/router.ts  config.yaml  app/config.py
+  app/main.py  web/src/app.ts  web/src/router.ts  config.yaml  app/config.py
   app/chat/orchestrator.py (≤10-line delegation flag only)
   tests/test_phase4_wiring.py
 
@@ -2278,7 +2299,7 @@ MERGE ORDER
 
 SEMANTIC-CONFLICT CHECKLIST
 [ ] /api/exec request/response shape identical in runner api, run_code,
-    and src/artifacts/exec.ts.
+    and web/src/artifacts/exec.ts.
 [ ] code.ts endpoint paths + `oc` event handling match app/opencode/api.py
     as shipped.
 [ ] Security argv contract test still pins --network none, --read-only,
@@ -2327,8 +2348,8 @@ starts.
 | Agent | Branch | Worktree | FILE SCOPE | Depends |
 |---|---|---|---|---|
 | browser | `p5/browser` | `../AI-Mega-App-p5-browser` | `app/tools/browser.py`, `app/mcp/**`, `tests/test_browser_tool.py` | operator pre-step |
-| reviewer | `p5/reviewer` | `../AI-Mega-App-p5-reviewer` | `app/memory/reviewer.py`, `app/memory/queue.py`, `src/views/review.ts`, `web/css/review.css`, `tests/test_reviewer.py` | Phase 4 merged |
-| bench | `p5/bench` | `../AI-Mega-App-p5-bench` | `scripts/llama_bench.py`, `app/debug/bench.py`, `src/views/debug.ts` (OWNER this wave), `tests/test_bench.py` | Phase 4 merged |
+| reviewer | `p5/reviewer` | `../AI-Mega-App-p5-reviewer` | `app/memory/reviewer.py`, `app/memory/queue.py`, `web/src/views/review.ts`, `web/css/review.css`, `tests/test_reviewer.py` | Phase 4 merged |
+| bench | `p5/bench` | `../AI-Mega-App-p5-bench` | `scripts/llama_bench.py`, `app/debug/bench.py`, `web/src/views/debug.ts` (OWNER this wave), `tests/test_bench.py` | Phase 4 merged |
 | preflight | `p5/preflight` | `../AI-Mega-App-p5-preflight` | `scripts/preflight.py` | Phase 4 merged |
 | docs | `p5/docs` | `../AI-Mega-App-p5-docs` | `docs/features/**`, `README.md` | Phase 4 merged |
 
@@ -2336,7 +2357,7 @@ starts.
 
 | Agent | Branch | Worktree | FILE SCOPE | Depends |
 |---|---|---|---|---|
-| wiring | `p5/wiring` | `../AI-Mega-App-p5-wiring` | `app/main.py`, `src/app.ts`/`src/router.ts`, `config.yaml`+`app/config.py` (browser/reviewer keys), `tests/test_phase5_wiring.py` | wave 1 merged |
+| wiring | `p5/wiring` | `../AI-Mega-App-p5-wiring` | `app/main.py`, `web/src/app.ts`/`web/src/router.ts`, `config.yaml`+`app/config.py` (browser/reviewer keys), `tests/test_phase5_wiring.py` | wave 1 merged |
 
 Plus an operator **sandbox audit checklist** (below) — not a Cursor agent.
 
@@ -2417,7 +2438,7 @@ GOAL
    key — defensive default: no auto-accept). API additions in
    app/memory/queue.py exposing `router`: GET/POST
    /api/memories/proposals (+ accept/reject).
-3. src/views/review.ts + web/css/review.css — review queue UI (list,
+3. web/src/views/review.ts + web/css/review.css — review queue UI (list,
    accept/reject, scope badges), mounted under Settings→Memory (wiring
    registers the route).
 4. tests/test_reviewer.py — canned reviewer output → proposals queued;
@@ -2428,7 +2449,7 @@ NON-GOALS
 No skill creation (Future §7), no background/queue.py edits, no wiring.
 
 FILE SCOPE (hard boundary)
-  app/memory/reviewer.py  app/memory/queue.py  src/views/review.ts
+  app/memory/reviewer.py  app/memory/queue.py  web/src/views/review.ts
   web/css/review.css  tests/test_reviewer.py
 READ-ONLY: everything else.
 
@@ -2457,7 +2478,7 @@ CONTEXT
 AI-Mega-App, Phase 5 wave 1. Debug panel needs per-model tok/s sanity
 numbers + llama-swap state + GPU snapshot (PLAN.md §4.16, §4.1 model
 classes note). scripts/bench_models.sh exists from Phase 0; llama-bench
-lives with the llama.cpp build. You OWN src/views/debug.ts this wave.
+lives with the llama.cpp build. You OWN web/src/views/debug.ts this wave.
 Source of truth: PLAN.md §4.16, §4.10; docs/FEATURES.md §debug.
 
 GOAL
@@ -2468,7 +2489,7 @@ GOAL
    the box, streams progress), GET /api/debug/bench (latest per model);
    plus GET /api/debug/gpu (nvidia-smi poll) and GET /api/debug/swap
    (proxy llama-swap's status/metrics endpoint from config).
-3. src/views/debug.ts — new panel sections: model bench table with
+3. web/src/views/debug.ts — new panel sections: model bench table with
    run-button, live GPU memory bars, llama-swap state (loaded model per
    group). Keep the existing waterfall untouched.
 4. tests/test_bench.py — parser + endpoints against canned outputs.
@@ -2477,7 +2498,7 @@ NON-GOALS
 No full benchmark suite (Future §4), no main.py edits.
 
 FILE SCOPE (hard boundary)
-  scripts/llama_bench.py  app/debug/bench.py  src/views/debug.ts
+  scripts/llama_bench.py  app/debug/bench.py  web/src/views/debug.ts
   tests/test_bench.py
 READ-ONLY: everything else.
 
@@ -2512,7 +2533,7 @@ nonzero exit on any failure:
 2. llama-swap /health (or status endpoint from config) answers.
 3. Every configured model: chat models answer 1 token via /v1 (this
    exercises swap for each big model — print swap latency); embed model
-   answers /v1/embeddings; classifier returns valid schema JSON; needle
+   answers /v1/embeddings; classifier returns valid schema JSON; dispatcher
    answers.
 4. Backend /health, /api/debug/traces answer if the app is running
    (skip-with-notice otherwise).
@@ -2555,7 +2576,7 @@ codebase itself; docs/FEATURES.md.
 
 GOAL
 docs/features/<name>.md for: inference (llama-swap+swapgen), router,
-chat-sse, debug, tools, search, needle, attachments, projects, rag,
+chat-sse, debug, tools, search, dispatcher, attachments, projects, rag,
 memory, artifacts, exec, opencode (extend existing docs/opencode.md via
 link, do not duplicate), background, settings. Each ≤120 lines: What it
 does · Why this design (link PLAN.md §) · Key interfaces (real
@@ -2594,7 +2615,7 @@ written + mismatches found.
 CONTEXT
 AI-Mega-App, Phase 5 wave 2. Wave 1 merged: browser tool + MCP client,
 reviewer + proposal queue (+ requested DDL/hooks), bench panel,
-preflight, docs. You OWN main.py, src/app.ts, src/router.ts, config.yaml,
+preflight, docs. You OWN main.py, web/src/app.ts, web/src/router.ts, config.yaml,
 app/config.py. Source of truth: PLAN.md §5 (Phase 5); docs/FEATURES.md.
 
 GOAL
@@ -2604,7 +2625,7 @@ GOAL
    tools.browser: {enabled: false}.
 2. app/main.py — include queue + bench routers; reviewer registration on
    the background hook.
-3. src/app.ts + src/router.ts — register review view under Settings;
+3. web/src/app.ts + web/src/router.ts — register review view under Settings;
    per-chat browser toggle in the chat composer tools menu (≤15-line
    chat.ts touch, granted for that diff only).
 4. tests/test_phase5_wiring.py — reachability: browser tool appears in
@@ -2612,8 +2633,8 @@ GOAL
    proposal reachable via API; bench endpoints mount.
 
 FILE SCOPE (hard boundary)
-  app/main.py  src/app.ts  src/router.ts  config.yaml  app/config.py
-  src/views/chat.ts (≤15-line toggle only)  tests/test_phase5_wiring.py
+  app/main.py  web/src/app.ts  web/src/router.ts  config.yaml  app/config.py
+  web/src/views/chat.ts (≤15-line toggle only)  tests/test_phase5_wiring.py
 
 CONSTRAINTS
 Plan Mode first. Minimal diffs, single wiring block.

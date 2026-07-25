@@ -26,8 +26,19 @@ Secrets are read from `.env` through the settings object; `config.yaml` and
 everything checked into git stay secret-free. New keys get a documented
 placeholder in `.env.example`.
 
-Routing labels (`chat-default`, `coder`, `coder-small`, `reasoner`, `vision`,
-`utility`, `embed`, `classifier`, `needle`) are config vocabulary: application
-code and prompts use the alias, `config.yaml` maps alias → model file → box +
-GPU. The classifier emits classes, and the `routing:` table resolves classes
-to aliases, so model changes are config edits only.
+Routing labels (`chat-default`, `coder`, `coder-small`, `reasoner`,
+`reasoner-alt`, `vision`, `utility`, `embed`, `classifier`, `dispatcher`) are
+config vocabulary: application code and prompts use the alias, `config.yaml`
+maps alias → model file → device. The classifier emits classes
+(`chat|chit_chat|code_task|tool_call_needed|reasoning_task|vision_task`), and
+the `routing:` table resolves classes to aliases, so model changes are config
+edits only. The alias `needle` is retired — Cactus Needle was evaluated and
+dropped; the slot is `dispatcher` (Hammer2.1-1.5b).
+
+swapgen's output is constrained by measured facts (@PLAN.md §4.1), and its
+golden-file tests assert them: device placement is `CUDA_VISIBLE_DEVICES` in
+`env:` and never `--tensor-split`; a `groups:` block exists with the CPU
+residents plus `dispatcher` in `resident: {swap: false}` and the big models in
+`gpu0-main: {swap: true}`; the `classifier` entry carries `--reasoning off`.
+Each of these was a real defect in the hand-written config that preceded
+swapgen.

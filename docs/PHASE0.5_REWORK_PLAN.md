@@ -1,5 +1,7 @@
 # Phase-0.5 Rework — Fix Token-Budget Bug, Add Hammer-vs-CPU-Titler Test, Rewrite Summary Doc
 
+**Status: ✅ EXECUTED, closed 2026-07-23.** The token-budget bug is rule 3 in `.cursor/rules/010-benchmark-eval-methodology.mdc`; the retracted results and their corrections are in `docs/phase0-measurements.md` §9/§16.
+
 ## Context
 
 Test 4 (reasoner/coder quality eval) capped `max_tokens` at 1024 for the two

@@ -1,6 +1,8 @@
 # Benchmark & Test Plan — Phase 0 Ground Truth
 
-**Status:** Phase 0. **All model testing/benchmarking lives here and happens before any app code** (it is the ground truth the roster, router, and swapgen are written against). Runs on the box over `ssh ubuntu-ai` using the prebuilt binaries in `/home/john/llm-stack/engine/llama.cpp/build/bin/` (see rule `008-remote-box`). Results fold back into `PLAN.md` §4.1.
+**Status: ✅ CLOSED 2026-07-23 — this is the plan that was executed, not work remaining.** Results: `docs/PHASE0_FINDINGS_SUMMARY.md` (decisions) and `docs/phase0-measurements.md` (raw numbers). The placement question §0 poses was answered **Config B** (solo-GPU0 pinning + CPU residents), and the sqlite-vec gate in §6 **failed** (Qdrant adopted). Methodology lessons from executing this plan are codified in `.cursor/rules/010-benchmark-eval-methodology.mdc` — read that before reusing any harness here.
+
+**Original framing below.** **All model testing/benchmarking lives here and happens before any app code** (it is the ground truth the roster, router, and swapgen are written against). Runs on the box over `ssh ubuntu-ai` using the prebuilt binaries in `/home/john/llm-stack/engine/llama.cpp/build/bin/` (see rule `008-remote-box`). Results fold back into `PLAN.md` §4.1.
 
 **Scope: ONE computer — RTX 3090 (24GB) + RTX 3070 (8GB), Ryzen 9, 64GB RAM.** The second box is future; ignore it here. Everything below is decided for this single machine.
 
