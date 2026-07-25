@@ -1,0 +1,64 @@
+# CI gate (PLAN.md §4.10, docs/FEATURES.md F12): lint + typecheck + pytest +
+# Playwright-vs-fake. Runs on a bare runner — zero GPU, zero network to model
+# hosts; everything talks to the in-process fake llama-swap.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install uv
+        uses: astral-sh/setup-uv@v3
+      - run: uv sync
+      - run: uv run ruff check .
+
+  typecheck:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - run: npm install
+      - name: tsc --noEmit (tolerate missing tsconfig.json pre-web-shell-merge)
+        run: |
+          if [ -f tsconfig.json ]; then
+            npx tsc --noEmit
+          else
+            echo "no tsconfig.json yet — skipping typecheck until web-shell merges"
+          fi
+
+  pytest:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install uv
+        uses: astral-sh/setup-uv@v3
+      - run: uv sync
+      - run: uv run python -m pytest -q --basetemp=.pytest-tmp/run
+
+  e2e:
+    runs-on: ubuntu-latest
+    needs: [pytest, typecheck]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install uv
+        uses: astral-sh/setup-uv@v3
+      - run: uv sync
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - run: npm install
+      - run: npx playwright install --with-deps chromium
+      - name: Run Playwright vs fake-LLM backend
+        run: npx playwright test
