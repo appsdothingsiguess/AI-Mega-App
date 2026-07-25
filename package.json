@@ -1,0 +1,15 @@
+{
+  "name": "ai-mega-app-web",
+  "private": true,
+  "version": "0.1.0",
+  "description": "TypeScript build + E2E harness for the AI-Mega-App frontend. No bundler, no framework — tsc is the entire build (rule 001).",
+  "scripts": {
+    "build": "tsc",
+    "typecheck": "tsc --noEmit",
+    "e2e": "playwright test"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.48.0",
+    "typescript": "^5.6.0"
+  }
+}
