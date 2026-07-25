@@ -1,0 +1,125 @@
+# AI Mega App — checked-in defaults (the ONE hand-edited config, plus .env
+# for secrets). The Settings UI writes settings.local.yaml as an overlay on
+# top of this file (Phase 2+); nothing here should be hand-edited at runtime
+# by the app itself. See PLAN.md §3.1, §4.1 and docs/FEATURES.md A1.
+
+server:
+  host: "0.0.0.0"
+  port: 8000
+
+llama_swap:
+  base_url: "http://127.0.0.1:8080/v1"
+  timeout_s: 120
+
+db:
+  path: "data/app.db"
+
+# Locked roster (docs/PHASE0_FINDINGS_SUMMARY.md §1, PLAN.md §4.1). Every
+# model/provider name lives here and only here — never as a Python literal.
+# gpu: 0 | 1 | "cpu" — placement mechanism is always CUDA_VISIBLE_DEVICES,
+# never --tensor-split (measured ~3x slower, PLAN.md §4.1).
+models:
+  - name: chat-default
+    class: general
+    ctx: 32768
+    gpu: 0
+    tool_call: native
+    thinking: false
+    reasoning_off: false
+    max_tokens: 4096
+    enabled: true
+  - name: reasoner
+    # Same blob as chat-default, thinking enabled at the request layer —
+    # not a separate swap entry (PLAN.md §4.1).
+    class: reasoning
+    ctx: 32768
+    gpu: 0
+    tool_call: native
+    thinking: true
+    reasoning_off: false
+    max_tokens: 8192
+    enabled: true
+  - name: reasoner-alt
+    class: reasoning
+    ctx: 8192
+    gpu: 0
+    tool_call: weak
+    thinking: true
+    reasoning_off: false
+    max_tokens: 8192
+    enabled: false
+  - name: coder
+    class: coding
+    ctx: 16384
+    gpu: 0
+    tool_call: native
+    thinking: false
+    reasoning_off: false
+    max_tokens: 4096
+    enabled: true
+  - name: coder-small
+    class: coding
+    ctx: 8192
+    gpu: 0
+    tool_call: weak
+    thinking: false
+    reasoning_off: false
+    max_tokens: 2048
+    enabled: true
+  - name: vision
+    class: vision
+    ctx: 8192
+    gpu: 0
+    tool_call: none
+    thinking: false
+    reasoning_off: false
+    max_tokens: 2048
+    enabled: true
+  - name: dispatcher
+    class: dispatcher
+    ctx: 4096
+    gpu: 1
+    tool_call: native
+    thinking: false
+    reasoning_off: false
+    max_tokens: 256
+    enabled: true
+  - name: utility
+    class: utility
+    ctx: 8192
+    gpu: cpu
+    tool_call: none
+    thinking: false
+    reasoning_off: false
+    max_tokens: 1024
+    enabled: true
+  - name: embed
+    class: embed
+    ctx: 2048
+    gpu: cpu
+    tool_call: none
+    thinking: false
+    reasoning_off: false
+    max_tokens: 256
+    enabled: true
+  - name: classifier
+    class: classifier
+    ctx: 4096
+    gpu: cpu
+    tool_call: none
+    thinking: false
+    reasoning_off: true
+    max_tokens: 64
+    enabled: true
+
+defaults:
+  chat_model: "chat-default"
+  utility_model: "utility"
+  title_model: "dispatcher"
+
+llm:
+  # Must exceed the measured 12.47s cold load of chat-default (PLAN.md §4.1).
+  first_token_timeout_s: 30
+
+debug:
+  store_prompts: true
