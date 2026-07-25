@@ -17,6 +17,8 @@ from app import __version__
 from app.chat.api import router as chat_router
 from app.config import REPO_ROOT, Config, get_config
 from app.db import check_connection, open_db
+from app.debug.api import router as debug_router
+from app.debug.trace import reset_connection as reset_debug_connection
 
 WEB_DIR = REPO_ROOT / "web"
 
@@ -33,15 +35,17 @@ def create_app(config: Config | None = None) -> FastAPI:
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         app.state.config = cfg
         app.state.db = open_db(_resolve_db_path(cfg))
-        try:
-            from app.chat._debug_fallback import bind_connection
-
-            bind_connection(app.state.db)
-        except ImportError:  # pragma: no cover - fallback module always present this wave
-            pass
+        # app/debug/trace.py opens its own connection lazily via the process-
+        # global get_config() cache, which does not track a per-app Config
+        # instance (e.g. one test's tmp db). Bind it explicitly to the same
+        # connection this app instance uses so traces/spans always land in
+        # the right database, and unbind on shutdown so a later app instance
+        # (e.g. the next test) doesn't inherit a closed connection.
+        reset_debug_connection(app.state.db)
         try:
             yield
         finally:
+            reset_debug_connection(None)
             app.state.db.close()
 
     app = FastAPI(title="AI Mega App", version=__version__, lifespan=lifespan)
@@ -57,19 +61,7 @@ def create_app(config: Config | None = None) -> FastAPI:
 
     # --- Wave-2 mount points (each agent includes its own router here) ---
     app.include_router(chat_router)  # p1/chat-sse -> app/chat/api.py
-    try:
-        from app.debug.api import router as debug_router  # p1/debug-trace
-
-        app.include_router(debug_router)
-    except ImportError:
-        # p1/debug-trace not yet merged into this worktree/branch — mount the
-        # minimal stand-in from app/chat/_debug_fallback.py so
-        # GET /api/debug/trace/{id} is reachable for this wave's wiring-proof
-        # test. INTEGRATOR: delete this branch once app/debug/api.py lands;
-        # it should always win once importable.
-        from app.chat._debug_fallback import debug_router as fallback_debug_router
-
-        app.include_router(fallback_debug_router)
+    app.include_router(debug_router)  # p1/debug-trace -> app/debug/api.py
     # app.include_router(settings_api.router) # Phase 2 -> app/settings/api.py
     # -----------------------------------------------------------------------
 

@@ -2,15 +2,6 @@
 routing logic — those are Phase 2/3 modules the orchestrator calls through
 marked seams; this module only resolves the model, streams a completion,
 and persists the turn.
-
-`app/llm_client.py` (p1/llm-client) and `app/debug` (p1/debug-trace) are
-being built concurrently in sibling worktrees and are not merged into this
-branch yet. Both are imported lazily/defensively below so this module's own
-tests can run standalone against a small stand-in that matches each
-sibling's *declared* interface exactly. INTEGRATOR NOTE: once both land on
-main, the `except ImportError` branches below become dead code and should
-be deleted — they exist only so this wave's tests don't depend on
-unmerged work.
 """
 
 from __future__ import annotations
@@ -23,24 +14,11 @@ from typing import Any, Protocol
 
 from app.config import Config, ModelEntry
 from app.db import run_sync
+from app.debug import new_trace, span
+from app.llm_client import LLMClient, LLMError
 from app.types import ChatDelta, SSEEvent
 
 from . import history
-
-# --- app/llm_client.py (p1/llm-client, not yet merged) -------------------
-try:
-    from app.llm_client import LLMClient, LLMError  # type: ignore[import-not-found]
-except ImportError:  # pragma: no cover - exercised only before integration
-
-    class LLMError(Exception):  # type: ignore[no-redef]
-        """Stand-in matching the declared LLMError(kind, detail) shape."""
-
-        def __init__(self, kind: str, detail: str) -> None:
-            self.kind = kind
-            self.detail = detail
-            super().__init__(f"{kind}: {detail}")
-
-    LLMClient = None  # type: ignore[assignment,misc]
 
 
 class ChatCompleter(Protocol):
@@ -58,13 +36,6 @@ class ChatCompleter(Protocol):
         max_tokens: int | None = None,
         stream: bool = True,
     ) -> AsyncIterator[ChatDelta]: ...
-
-
-# --- app/debug (p1/debug-trace, not yet merged) --------------------------
-try:
-    from app.debug import new_trace, span  # type: ignore[import-not-found]
-except ImportError:  # pragma: no cover - exercised only before integration
-    from ._debug_fallback import new_trace, span  # noqa: F401
 
 
 FIRST_TOKEN_WARN_S = 2.0  # PLAN.md §4.2: model_loading fires past this
@@ -124,13 +95,10 @@ class ChatOrchestrator:
         self.llm_client = llm_client if llm_client is not None else self._default_llm_client()
 
     def _default_llm_client(self) -> ChatCompleter:
-        if LLMClient is None:
-            raise LLMError(
-                "llm_client_unavailable",
-                "app.llm_client is not importable in this worktree (p1/llm-client "
-                "not yet merged) and no llm_client was injected",
-            )
-        return LLMClient(self.config)
+        return LLMClient(
+            base_url=self.config.llama_swap.base_url,
+            timeout_s=self.config.llama_swap.timeout_s,
+        )
 
     def _model_entry(self, name: str) -> ModelEntry | None:
         for entry in self.config.models:
