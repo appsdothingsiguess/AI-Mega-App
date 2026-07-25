@@ -30,6 +30,19 @@ packages = ["app"]
 line-length = 100
 target-version = "py312"
 
+# Phase-0 benchmark/eval tooling is a closed-phase artifact: one-off scripts,
+# never imported by `app/`, kept in git as the provenance behind
+# docs/phase0-measurements.md. Linting them costs ~256 findings of no value and
+# blocks CI on frozen code. Deliberately narrow — `scripts/preflight.py`
+# (live-hardware checks) and the Phase-2 `eval/` harness are NOT excluded and
+# must stay clean. Reviving one of these for new work? Drop it from the list.
+extend-exclude = [
+    "scripts/bench_*.py",
+    "scripts/eval_*.py",
+    "scripts/eval_data",
+    "scripts/needle_training",
+]
+
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B"]
 
