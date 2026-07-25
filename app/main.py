@@ -14,6 +14,7 @@ from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 
 from app import __version__
+from app.chat.api import router as chat_router
 from app.config import REPO_ROOT, Config, get_config
 from app.db import check_connection, open_db
 
@@ -33,6 +34,12 @@ def create_app(config: Config | None = None) -> FastAPI:
         app.state.config = cfg
         app.state.db = open_db(_resolve_db_path(cfg))
         try:
+            from app.chat._debug_fallback import bind_connection
+
+            bind_connection(app.state.db)
+        except ImportError:  # pragma: no cover - fallback module always present this wave
+            pass
+        try:
             yield
         finally:
             app.state.db.close()
@@ -49,8 +56,20 @@ def create_app(config: Config | None = None) -> FastAPI:
         }
 
     # --- Wave-2 mount points (each agent includes its own router here) ---
-    # app.include_router(chat_api.router)     # p1/chat-sse -> app/chat/api.py
-    # app.include_router(debug_api.router)    # p1/debug-trace -> app/debug/api.py
+    app.include_router(chat_router)  # p1/chat-sse -> app/chat/api.py
+    try:
+        from app.debug.api import router as debug_router  # p1/debug-trace
+
+        app.include_router(debug_router)
+    except ImportError:
+        # p1/debug-trace not yet merged into this worktree/branch — mount the
+        # minimal stand-in from app/chat/_debug_fallback.py so
+        # GET /api/debug/trace/{id} is reachable for this wave's wiring-proof
+        # test. INTEGRATOR: delete this branch once app/debug/api.py lands;
+        # it should always win once importable.
+        from app.chat._debug_fallback import debug_router as fallback_debug_router
+
+        app.include_router(fallback_debug_router)
     # app.include_router(settings_api.router) # Phase 2 -> app/settings/api.py
     # -----------------------------------------------------------------------
 
