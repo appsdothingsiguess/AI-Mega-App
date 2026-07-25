@@ -7,3 +7,5 @@ logs/
 *.log
 .pytest-tmp/
 .pytest_cache/
+node_modules/
+uv.lock
