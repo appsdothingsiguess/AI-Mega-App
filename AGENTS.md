@@ -68,7 +68,7 @@ When blocked by scope or constraints: stop and report. A described blocker is su
 
 ## Current phase
 
-**Phase 1 — Skeleton with eyes.** Phase 0 closed 2026-07-23: roster locked, placement decided (**Config B** — big models solo-pinned to GPU0 via `CUDA_VISIBLE_DEVICES`, `dispatcher` on GPU1, `classifier`/`utility`/`embed` on CPU), sqlite-vec rejected for Qdrant, classifier at 91.76%, dispatcher = Hammer2.1-1.5b. Read `docs/PHASE0_FINDINGS_SUMMARY.md` before touching anything model-shaped.
+**Phase 1 — Skeleton with eyes. Backend closed 2026-07-25.** `app/config.py`, `app/db.py`+schema, `app/llm_client.py`, `app/debug/**` (trace/span store + SSE tap), `app/chat/**` (SSE chat endpoint), and the CI/test harness are all merged to `main` (42 tests passing, ruff clean). `web/` (`p1/web-shell`) is still open in Cursor — Phase 1 isn't done until it lands and the exit demo runs. Phase 0 closed 2026-07-23: roster locked, placement decided (**Config B** — big models solo-pinned to GPU0 via `CUDA_VISIBLE_DEVICES`, `dispatcher` on GPU1, `classifier`/`utility`/`embed` on CPU), sqlite-vec rejected for Qdrant, classifier at 91.76%, dispatcher = Hammer2.1-1.5b. Read `docs/PHASE0_FINDINGS_SUMMARY.md` before touching anything model-shaped.
 
 Phase 1 builds: config load/validate, `/health`, `llm_client`, SQLite schema, SSE chat endpoint, minimal chat UI, **debug trace store + Debug view**, `done`/`error` contract, plus the test harness and CI from day one. Exit: chat with a manually-picked model, every turn fully traced. Run as an orchestrator delegating sub-agents (rule `009-subagents`); prompts in `docs/PHASE_PROMPTS.md`.
 
