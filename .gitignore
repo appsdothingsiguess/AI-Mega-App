@@ -10,3 +10,4 @@ logs/
 node_modules/
 uv.lock
 data/
+repomix-output.xml
