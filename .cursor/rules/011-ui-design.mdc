@@ -4,10 +4,10 @@ globs: ["web/src/**/*.ts", "web/css/**/*.css", "web/**/*.html"]
 alwaysApply: false
 ---
 
-Source of truth: `design-doc.md` at the repo root. Do not re-derive the visual system from `PLAN.md`/`FEATURES.md` or from claude.ai itself — only `design-doc.md` defines look and feel. If a screen or state isn't covered there, ask before inventing one.
+Source of truth: `docs/design-doc.md` (companion prototype: `docs/design_example.html`, fully simulated). Do not re-derive the visual system from `PLAN.md`/`FEATURES.md` or from claude.ai itself — only `design-doc.md` defines look and feel. If a screen or state isn't covered there, ask before inventing one.
 
 ## Visual identity
-- Always use the graphite/indigo dark palette from `design-doc.md` §1: backgrounds `#0e0f13`/`#131419`/`#1a1b22`/`#22232c`, border `#2a2b35`, text `#eceef2`/`#9296a3`/`#5c606d`, accent indigo `#6e6afd` (hover `#7d7aff`), status success `#3ecf8e` / warning `#e8b339` / error `#f0576a`.
+- Always use the graphite/indigo dark palette from `docs/design-doc.md` §1: backgrounds `#0e0f13`/`#131419`/`#1a1b22`/`#22232c`, border `#2a2b35`, text `#eceef2`/`#9296a3`/`#5c606d`, accent indigo `#6e6afd` (hover `#7d7aff`), status success `#3ecf8e` / warning `#e8b339` / error `#f0576a`.
 - Always use the fixed route-source colors everywhere a route/source badge appears (composer, message list, Debug): override `#e8b339`, rule `#3ecf8e`, classifier `#6e6afd`, fallback `#5c606d`. Never introduce a second color mapping for the same concept.
 - Always pair IBM Plex Sans (UI copy) with IBM Plex Mono for literal system tokens only — model aliases, file paths, span names, token counts, code. Never mono for prose.
 - Always keep density compact: 13–14px body text, 8px base spacing unit, 1px borders instead of shadows/elevation. This is a power-user tool, not a marketing surface — never add drop shadows, gradients, rounded-pill hero sections, or emoji.
@@ -24,6 +24,13 @@ Source of truth: `design-doc.md` at the repo root. Do not re-derive the visual s
 - A fenced code/HTML block in a finished message always opens the right-side artifact panel (Preview/Source tabs); detection reads as client-side, never blocking the stream.
 - When a message names a real repo/directory path (not a pasted snippet), grow a delegation chip ("Delegate to opencode → <dir>") that opens the confirm popup before creating a Code session — never auto-delegate.
 
+## Projects (§3.2)
+- Always a grid of project cards → a workspace with exactly four surfaces: Instructions editor, Files list (per-file ingested/pending state), Project chats, Project memory. Keep the filesystem-first framing literal (`projects/<id>/instructions.md`) — never present projects as opaque database rows.
+
+## Code (§3.3)
+- Session list + "New session" scoped to an **allowed root**: the directory picker offers only registered project/repo paths, never a free-typed filesystem path.
+- Session view is an event stream; the delegation entry point is the chat delegation chip → confirm modal → new session scoped to that directory.
+
 ## Settings
 - Tab rail is exactly: Models, Providers, Routing, Tools, opencode, BrowserOS, Memory, Debug, Appearance — each control must mirror a real `config.yaml`/overlay key from FEATURES.md.
 - Providers tab: API key fields are always masked inputs, saved individually, and described as written to `.env`/redacted-on-read — never implied to be stored in `config.yaml` or shown in plaintext after save.
@@ -33,6 +40,12 @@ Source of truth: `design-doc.md` at the repo root. Do not re-derive the visual s
 
 ## Popups
 - Use one reusable centered modal (title + body + Cancel/Confirm) for every confirm-before-acting moment: enabling the consequential browser tool, testing the BrowserOS connection, saving a provider key, confirming opencode delegation. Always give a Cancel path back to the prior state; never show a modal unprompted.
+
+## Persistence and editing (§3.7)
+- Save = toast after; consequential action = modal before. These two confirmation patterns never substitute for each other.
+- Free-typed fields always get an explicit Save (with Cancel where an edit form exists) and never silently autosave: Models-row Edit (device, context length, API endpoint), the Providers model→endpoint map, the BrowserOS MCP URL, Project Instructions. A small transient bottom-center auto-dismiss toast confirms each write.
+- Boolean toggles (a model's `enabled` switch, tool enables) apply instantly — never put a Save step behind a checkbox.
+- Memory is full CRUD, not review-only: an "Add memory" row (scope + text + Add), a delete control on every active fact, plus the review-queue accept/reject.
 
 ## Component states (always implement all of these, never fewer)
 - Model badges: resident (always warm) / swap-eligible / loading (spinner + elapsed).
@@ -48,4 +61,4 @@ Source of truth: `design-doc.md` at the repo root. Do not re-derive the visual s
 - Always show live GPU telemetry bars and llama-swap state in the top strip; route chips use the same route-source colors as chat; dispatcher-assisted steps are marked "who decided vs. who emitted."
 
 ## What must stay explicitly fake / out of scope
-- Nothing here implies a real backend, real model calls, or real GPU telemetry — this rule governs the UI/visual layer only, per `design-doc.md` §5. Do not wire real network calls into these views under this rule; that is governed by backend rules, not this one.
+- Nothing here implies a real backend, real model calls, or real GPU telemetry — this rule governs the UI/visual layer only, per `docs/design-doc.md` §5. Do not wire real network calls into these views under this rule; that is governed by backend rules, not this one.

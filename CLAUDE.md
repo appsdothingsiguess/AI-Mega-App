@@ -10,7 +10,7 @@ A personal AI platform: a claude.ai-parity web UI backed by local models on a de
 
 **Current phase: Phase 0 closed 2026-07-23. Phase 1 backend closed 2026-07-25** — config/types/SQLite schema, `llm_client` + fake llama-swap, debug trace/span store, chat SSE endpoint, CI/test harness all merged to `main` (42 tests passing). `web/` (frontend, `p1/web-shell`) is still open, being built separately in Cursor. Before writing more `app/` or `web/` code, check `PLAN.md` §5 and `AGENTS.md` "Current phase".
 
-**Planning docs finalized 2026-07-25.** `PLAN.md`, `docs/FEATURES.md`, `docs/PHASE_PROMPTS.md`, and `.cursor/rules/001`–`010` were audited into mutual consistency and are paste-ready for Phase-1 agents. The audit made `PLAN.md` §4.2 the single source for the chat contract (both other docs restate it; neither may diverge), unified span names to flat snake_case, moved the vector store to `app/rag/store.py`, and standardized frontend paths as `web/src/**` → `web/js/**`. Phase-0 carry-in **cleared**: the stale `llama-server.service` is `disabled`+`inactive` and both GPUs are idle.
+**Planning docs finalized 2026-07-25.** `PLAN.md`, `docs/FEATURES.md`, `docs/PHASE_PROMPTS.md`, and `.cursor/rules/001`–`010` were audited (`011-ui-design` + `docs/design-doc.md` added later as the visual layer) into mutual consistency and are paste-ready for Phase-1 agents. The audit made `PLAN.md` §4.2 the single source for the chat contract (both other docs restate it; neither may diverge), unified span names to flat snake_case, moved the vector store to `app/rag/store.py`, and standardized frontend paths as `web/src/**` → `web/js/**`. Phase-0 carry-in **cleared**: the stale `llama-server.service` is `disabled`+`inactive` and both GPUs are idle.
 
 **Phase-1 build order (owner decision 2026-07-25):** `ci-harness` lands alone first — it owns `tsconfig.json`, `package.json`, and the fake llama-swap, which both other agents need for the verification gate. Then backend (`app/**`) and frontend (`web/**`) run in parallel on disjoint file scopes, safe because §4.2 freezes the seam between them. Backend work runs in Claude Code; frontend in Cursor. **opencode is not used to build Phase 1** — it is Phase-4 scope, unpinned, and its session API shapes are still `[UNCERTAIN]` pending a smoke test.
 
@@ -20,7 +20,8 @@ A personal AI platform: a claude.ai-parity web UI backed by local models on a de
 2. `docs/FEATURES.md` — per-feature specs (interfaces, config keys, debug spans, toggles).
 3. `docs/PHASE0_FINDINGS_SUMMARY.md` — the locked roster and every Phase-0 decision, one line each. Raw numbers in `docs/phase0-measurements.md`; the plan that produced them in `docs/BENCHMARK_PLAN.md` (both closed).
 4. `docs/PHASE_PROMPTS.md` — task prompts per phase (orchestrator → delegated sub-agents in worktrees).
-5. `docs/CURSOR_RULES.md` and `.cursor/rules/001`–`010` — the full ruleset this file summarizes; read the `.mdc` file directly for anything not covered below.
+5. `docs/design-doc.md` — visual/UI source of truth (palette, screen inventory, component states) for all `web/**` work; enforced by `.cursor/rules/011-ui-design.mdc`. The UI mirrors claude.ai's *structure*, never its skin.
+6. `docs/CURSOR_RULES.md` and `.cursor/rules/001`–`011` — the full ruleset this file summarizes; read the `.mdc` file directly for anything not covered below.
 
 `AGENTS.md` is the condensed agent entry point — read it first in a new session, it links everything above.
 

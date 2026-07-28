@@ -20,7 +20,8 @@ Personal AI platform: a claude.ai-parity web UI backed by local models on a dedi
 2. `docs/FEATURES.md` — per-feature specs (interfaces, config keys, debug spans, toggles).
 3. `docs/PHASE0_FINDINGS_SUMMARY.md` — locked roster + every Phase-0 decision, one line each (raw numbers: `docs/phase0-measurements.md`; the plan behind them: `docs/BENCHMARK_PLAN.md`). Both phases closed.
 4. `docs/PHASE_PROMPTS.md` — task prompts per phase (orchestrator → delegated sub-agents in worktrees).
-5. `docs/CURSOR_RULES.md` — the full `.cursor/rules/` ruleset (001–010), hooks, and `.cursorignore`. **`010-benchmark-eval-methodology` is mandatory reading before writing or trusting any eval** — every rule in it traces to a specific wrong number that got published in Phase 0.
+5. `docs/design-doc.md` — visual/UI source of truth (palette, screens, component states). Binding on any `web/**` work via `.cursor/rules/011-ui-design.mdc`; never re-derive look and feel from `PLAN.md`/`FEATURES.md`.
+6. `docs/CURSOR_RULES.md` — the full `.cursor/rules/` ruleset (001–011), hooks, and `.cursorignore`. **`010-benchmark-eval-methodology` is mandatory reading before writing or trusting any eval** — every rule in it traces to a specific wrong number that got published in Phase 0.
 
 ## Frozen contracts (once they exist)
 
@@ -68,7 +69,7 @@ When blocked by scope or constraints: stop and report. A described blocker is su
 
 ## Current phase
 
-**Phase 1 — Skeleton with eyes. Backend closed 2026-07-25.** `app/config.py`, `app/db.py`+schema, `app/llm_client.py`, `app/debug/**` (trace/span store + SSE tap), `app/chat/**` (SSE chat endpoint), and the CI/test harness are all merged to `main` (42 tests passing, ruff clean). `web/` (`p1/web-shell`) is still open in Cursor — Phase 1 isn't done until it lands and the exit demo runs. Phase 0 closed 2026-07-23: roster locked, placement decided (**Config B** — big models solo-pinned to GPU0 via `CUDA_VISIBLE_DEVICES`, `dispatcher` on GPU1, `classifier`/`utility`/`embed` on CPU), sqlite-vec rejected for Qdrant, classifier at 91.76%, dispatcher = Hammer2.1-1.5b. Read `docs/PHASE0_FINDINGS_SUMMARY.md` before touching anything model-shaped.
+**Phase 1 — Skeleton with eyes. Backend closed 2026-07-25.** `app/config.py`, `app/db.py`+schema, `app/llm_client.py`, `app/debug/**` (trace/span store + SSE tap), `app/chat/**` (SSE chat endpoint), and the CI/test harness are all merged to `main` (42 tests passing, ruff clean). `web/` (`p1/web-shell`) is still open in Cursor — Phase 1 isn't done until it lands and the exit demo runs. **All frontend work builds to `docs/design-doc.md`** (graphite/indigo dark system, compact density, IBM Plex Sans/Mono; prototype: `docs/design_example.html`), enforced by `.cursor/rules/011-ui-design.mdc` — the UI mirrors claude.ai's *structure* only, never its skin. Phase 0 closed 2026-07-23: roster locked, placement decided (**Config B** — big models solo-pinned to GPU0 via `CUDA_VISIBLE_DEVICES`, `dispatcher` on GPU1, `classifier`/`utility`/`embed` on CPU), sqlite-vec rejected for Qdrant, classifier at 91.76%, dispatcher = Hammer2.1-1.5b. Read `docs/PHASE0_FINDINGS_SUMMARY.md` before touching anything model-shaped.
 
 Phase 1 builds: config load/validate, `/health`, `llm_client`, SQLite schema, SSE chat endpoint, minimal chat UI, **debug trace store + Debug view**, `done`/`error` contract, plus the test harness and CI from day one. Exit: chat with a manually-picked model, every turn fully traced. Run as an orchestrator delegating sub-agents (rule `009-subagents`); prompts in `docs/PHASE_PROMPTS.md`.
 

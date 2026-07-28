@@ -1,6 +1,6 @@
 # Local LLM — UI Design Document
 
-Design reference for the web client described in `PLAN.md` / `FEATURES.md`. Scope: visual system, screen inventory, component states, and the rationale behind each call. Companion prototype: `Local LLM.dc.html` (fully simulated — fake router, fake streaming, fake debug traces; no real backend).
+Design reference for the web client described in `PLAN.md` / `FEATURES.md`. Scope: visual system, screen inventory, component states, and the rationale behind each call. Companion prototype: `docs/design_example.html` (fully simulated — fake router, fake streaming, fake debug traces; no real backend).
 
 ## 1. Visual system
 

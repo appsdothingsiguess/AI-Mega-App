@@ -466,19 +466,25 @@ event vocabulary, and the model-resolution seam left for Phase 2.
 CONTEXT
 AI-Mega-App rebuild, Phase 1 wave 2. Frontend is TypeScript compiled by plain
 tsc to native ES modules — no React, no bundler, no framework (PLAN.md §3.1).
-UI target is a 1:1 mirror of claude.ai web layout; static mock FIRST, approved
+UI target mirrors claude.ai's *structure* only (sidebar → chat → context panel),
+never its branded skin — the visual identity is the graphite/indigo system in
+docs/design-doc.md §1. Static mock FIRST, approved
 before logic (PLAN.md §4.2). Backend (parallel agent) exposes:
   POST /api/chats · GET /api/chats · GET/POST /api/chats/{id}/messages (SSE:
   token, model_loading, done, error) · POST /api/chats/{id}/model
   GET /api/debug/traces · GET /api/debug/trace/{id} · GET /api/debug/stream
   (SSE: span, heartbeat) · GET /health
 Source of truth: PLAN.md §4.2, §4.16, §3.1; docs/FEATURES.md §ui.
+Source of truth for visual design: docs/design-doc.md; apply
+.cursor/rules/011-ui-design.mdc for all component states, colors, typography,
+and CSS correctness rules.
 
 GOAL
 1. tsconfig.json — strict, target ES2022, module ES2022, outDir web/js,
    rootDir web/src. `tsc` is the entire build.
 2. Static mock first: web/index.html + web/css/theme.css (all colors/spacing
-   as CSS custom properties) + web/css/app.css — claude.ai layout: collapsible
+   as CSS custom properties, seeded from docs/design-doc.md §1) +
+   web/css/app.css — collapsible
    left sidebar (new chat, Chats, recents; Projects placeholder), centered
    chat column, composer with model picker slot, right panel placeholder,
    Debug nav item. PAUSE after the mock and ask for approval before logic.
@@ -1117,6 +1123,9 @@ layout. Backend agents ship this wave (code against these verbatim):
   confidence}}; a `title` SSE event may arrive.
 You OWN web/src/api.ts this wave. Source of truth: PLAN.md §4.1, §4.2, §4.3;
 docs/FEATURES.md §settings-ui.
+Source of truth for visual design: docs/design-doc.md; apply
+.cursor/rules/011-ui-design.mdc for all component states, colors, typography,
+and CSS correctness rules.
 
 GOAL
 1. web/src/views/settings.ts + web/css/settings.css — Settings area: Models
@@ -1741,6 +1750,9 @@ claude.ai: project grid → workspace (instructions, files, project chats)
 web/src/api.ts typed client (chat-ux owns it this wave — consume existing
 helpers or plain fetch; list needed additions in your report). Source of
 truth: PLAN.md §4.2, §4.5; docs/FEATURES.md §projects-ui.
+Source of truth for visual design: docs/design-doc.md; apply
+.cursor/rules/011-ui-design.mdc for all component states, colors, typography,
+and CSS correctness rules.
 
 GOAL
 1. web/src/views/projects.ts — grid: cards (name, updated, chat count), new
@@ -1748,8 +1760,8 @@ GOAL
 2. web/src/views/project.ts — workspace: instructions editor (PUT on save),
    files list + upload + reindex button, project chats list + "new chat in
    project".
-3. web/css/projects.css — claude.ai-parity styling off theme.css
-   variables.
+3. web/css/projects.css — styling off theme.css variables only (no new
+   literal colors).
 
 NON-GOALS
 No sidebar/nav registration (wave-4 wiring owns web/src/app.ts + router.ts),
@@ -1791,6 +1803,9 @@ worker — zero server risk, claude.ai parity (PLAN.md §4.6). The chat view
 right-panel placeholder exists since Phase 1. Fenced code blocks arrive in
 streamed markdown. Source of truth: PLAN.md §4.6; docs/FEATURES.md
 §artifacts.
+Source of truth for visual design: docs/design-doc.md; apply
+.cursor/rules/011-ui-design.mdc for all component states, colors, typography,
+and CSS correctness rules.
 
 GOAL
 1. web/src/artifacts/panel.ts — panel controller: mount/unmount into the right
@@ -1850,6 +1865,9 @@ memory API. Artifacts agent (parallel) exports initPanel/detectArtifacts/
 showArtifactsFor from web/src/artifacts/panel.ts — integrate via those only.
 You OWN web/src/api.ts this wave. Source of truth: PLAN.md §4.2, §4.6–§4.9;
 docs/FEATURES.md §chat-ux.
+Source of truth for visual design: docs/design-doc.md; apply
+.cursor/rules/011-ui-design.mdc for all component states, colors, typography,
+and CSS correctness rules.
 
 GOAL
 1. web/src/views/chat.ts — render tool_start/tool_result as collapsible tool
@@ -1905,6 +1923,9 @@ merged: attachments/memory/projects routers, context providers, tools,
 frontend views + artifact panel. You OWN app/main.py, web/src/app.ts,
 web/src/router.ts. Source of truth: PLAN.md §5 (Phase 3 exit), §6 rule 005;
 docs/FEATURES.md.
+Source of truth for visual design: docs/design-doc.md; apply
+.cursor/rules/011-ui-design.mdc for all component states, colors, typography,
+and CSS correctness rules.
 
 GOAL
 1. app/main.py — include routers: attachments, memory, projects; confirm
@@ -2162,6 +2183,9 @@ prompt · GET /api/code/sessions/{id}/events (SSE: `oc` events passthrough
 + done/error). Web shell conventions: mount/unmount views, hash routes,
 theme.css variables, DOMPurify. Source of truth: PLAN.md §4.4 (web app
 surface list); docs/FEATURES.md §code-ui.
+Source of truth for visual design: docs/design-doc.md; apply
+.cursor/rules/011-ui-design.mdc for all component states, colors, typography,
+and CSS correctness rules.
 
 GOAL
 web/src/views/code.ts + web/css/code.css — the Code area:
@@ -2208,6 +2232,9 @@ panel/detect/sandbox/pyodide). A parallel agent ships POST /api/exec
 {lang, code, files?} -> {stdout, stderr, exit_code, duration_ms,
 artifacts}. Tier 2 = "Run on server" for code needing real deps (PLAN.md
 §4.6). Source of truth: PLAN.md §4.6; docs/FEATURES.md §artifacts.
+Source of truth for visual design: docs/design-doc.md; apply
+.cursor/rules/011-ui-design.mdc for all component states, colors, typography,
+and CSS correctness rules.
 
 GOAL
 web/src/artifacts/exec.ts — adds a "Run on server" action to python/js
@@ -2249,6 +2276,9 @@ app/opencode (+ confgen, delegation suggester), code UI, tier-2 artifact
 action. You OWN main.py, web/src/app.ts, web/src/router.ts, config.yaml,
 app/config.py this wave. Source of truth: PLAN.md §4.4, §4.6, §5 (Phase 4
 exit); docs/FEATURES.md.
+Source of truth for visual design: docs/design-doc.md; apply
+.cursor/rules/011-ui-design.mdc for all component states, colors, typography,
+and CSS correctness rules.
 
 GOAL
 1. Config keys: exec: {enabled, images: {python, node}, timeout_s: 30,
@@ -2480,6 +2510,9 @@ numbers + llama-swap state + GPU snapshot (PLAN.md §4.16, §4.1 model
 classes note). scripts/bench_models.sh exists from Phase 0; llama-bench
 lives with the llama.cpp build. You OWN web/src/views/debug.ts this wave.
 Source of truth: PLAN.md §4.16, §4.10; docs/FEATURES.md §debug.
+Source of truth for visual design: docs/design-doc.md; apply
+.cursor/rules/011-ui-design.mdc for all component states, colors, typography,
+and CSS correctness rules.
 
 GOAL
 1. scripts/llama_bench.py — python wrapper over llama-bench for one model
@@ -2617,6 +2650,9 @@ AI-Mega-App, Phase 5 wave 2. Wave 1 merged: browser tool + MCP client,
 reviewer + proposal queue (+ requested DDL/hooks), bench panel,
 preflight, docs. You OWN main.py, web/src/app.ts, web/src/router.ts, config.yaml,
 app/config.py. Source of truth: PLAN.md §5 (Phase 5); docs/FEATURES.md.
+Source of truth for visual design: docs/design-doc.md; apply
+.cursor/rules/011-ui-design.mdc for all component states, colors, typography,
+and CSS correctness rules.
 
 GOAL
 1. Config keys: browser: {endpoint, transport, timeout_s,
