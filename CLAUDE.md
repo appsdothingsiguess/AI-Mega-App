@@ -103,7 +103,7 @@ When a task prompt says to delegate to sub-agents (phase work), follow `.cursor/
 
 The box (RTX 3090 24GB + RTX 3070 8GB, Ryzen 9, 64GB RAM) is **hostname `ailab`**. Check `hostname` before reaching for ssh: sessions started in `/home/john/AI-Mega-App` are typically running *on* the box already, in which case inference commands run locally and `ssh ubuntu-ai` does not resolve. That alias only exists on machines configured for it — when off-box, all inference work (model downloads, `llama.cpp`/`llama-bench` runs, llama-swap config, benchmarks) goes over that connection rather than into the repo checkout. Models live at `/home/john/llm-stack/models`, llama.cpp is already built at `/home/john/llm-stack/engine/llama.cpp/build/bin/` — don't re-install/rebuild.
 
-**llama-swap is not a systemd service** (no `llama-swap.service` unit) — it is launched manually, so expect `:8080` to be down at the start of a session and don't read that as breakage. Nothing in Phase-1 CI needs it: tests run against the fake llama-swap.
+**llama-swap runs as a systemd service** (`/etc/systemd/system/llama-swap.service`, enabled, `WantedBy=multi-user.target`) — it starts on boot and restarts on failure, so `:8080` should already be up at the start of a session. `sudo systemctl status/restart llama-swap` to check or bounce it (a `sudo` command still needs explicit approval per the rule below). Nothing in Phase-1 CI needs it: tests run against the fake llama-swap.
 
 **sudo on the box is permission-gated:** run non-sudo work freely; a single `sudo` command requires explicit human approval each time, stating what it does and why. Never batch-approve or run sudo autonomously. Full detail: `.cursor/rules/008-remote-box.mdc`.
 
