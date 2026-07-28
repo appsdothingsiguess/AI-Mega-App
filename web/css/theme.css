@@ -1,0 +1,94 @@
+/* Graphite/indigo design tokens — docs/design-doc.md §1 */
+:root {
+  --bg-app: #0e0f13;
+  --bg-sidebar: #131419;
+  --bg-panel: #1a1b22;
+  --bg-elevated: #22232c;
+  --border: #2a2b35;
+  --text: #eceef2;
+  --text-secondary: #9296a3;
+  --text-muted: #5c606d;
+  --accent: #6e6afd;
+  --accent-hover: #7d7aff;
+  --accent-soft: rgba(110, 106, 253, 0.12);
+  --success: #3ecf8e;
+  --warning: #e8b339;
+  --error: #f0576a;
+  --route-override: #e8b339;
+  --route-rule: #3ecf8e;
+  --route-classifier: #6e6afd;
+  --route-fallback: #5c606d;
+  --space: 8px;
+  --font-sans: "IBM Plex Sans", system-ui, sans-serif;
+  --font-mono: "IBM Plex Mono", ui-monospace, monospace;
+  --radius: 8px;
+  --sidebar-width: 240px;
+  --sidebar-collapsed: 52px;
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  height: 100%;
+  background: var(--bg-app);
+  color: var(--text);
+  font-family: var(--font-sans);
+  font-size: 13.5px;
+  line-height: 1.45;
+  -webkit-font-smoothing: antialiased;
+}
+
+button,
+textarea,
+input,
+select {
+  font: inherit;
+  color: inherit;
+}
+
+a {
+  color: var(--accent);
+}
+
+a:hover {
+  color: var(--accent-hover);
+}
+
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--border);
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+@keyframes blink {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0;
+  }
+}
+
+@keyframes spin {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}

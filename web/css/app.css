@@ -1,0 +1,184 @@
+/* App shell layout — sidebar + main + view host */
+
+#app {
+  display: flex;
+  width: 100%;
+  height: 100vh;
+  overflow: hidden;
+  background: var(--bg-app);
+}
+
+#sidebar {
+  width: var(--sidebar-width);
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-sidebar);
+  border-right: 1px solid var(--border);
+  transition: width 0.15s ease;
+}
+
+#app.sidebar-collapsed #sidebar {
+  width: var(--sidebar-collapsed);
+}
+
+#app.sidebar-collapsed .nav-label,
+#app.sidebar-collapsed .brand-name,
+#app.sidebar-collapsed .recents-block {
+  display: none;
+}
+
+.sidebar-header {
+  display: flex;
+  align-items: center;
+  gap: var(--space);
+  padding: 14px 12px;
+  border-bottom: 1px solid var(--border);
+}
+
+.brand-mark {
+  width: 22px;
+  height: 22px;
+  border-radius: 6px;
+  background: linear-gradient(135deg, var(--accent), #4a46c9);
+  flex-shrink: 0;
+}
+
+.brand-name {
+  font-weight: 600;
+  font-size: 14px;
+  letter-spacing: 0.2px;
+  white-space: nowrap;
+  overflow: hidden;
+}
+
+.collapse-btn {
+  margin-left: auto;
+  background: transparent;
+  border: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  padding: 4px;
+  display: inline-flex;
+}
+
+.collapse-btn:hover {
+  color: var(--text-secondary);
+}
+
+.nav-section {
+  padding: 10px 10px 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.nav-btn,
+.nav-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  border: none;
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+  text-align: left;
+  width: 100%;
+  white-space: nowrap;
+}
+
+.nav-btn:hover,
+.nav-item:hover {
+  background: var(--bg-elevated);
+  color: var(--text);
+}
+
+.nav-item.active {
+  background: var(--accent-soft);
+  color: var(--text);
+}
+
+.nav-item.placeholder {
+  opacity: 0.55;
+  cursor: default;
+}
+
+.nav-item.placeholder:hover {
+  background: transparent;
+  color: var(--text-secondary);
+}
+
+.recents-block {
+  margin-top: 14px;
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.recents-label {
+  padding: 0 16px 6px;
+  font-size: 11px;
+  letter-spacing: 0.4px;
+  color: var(--text-muted);
+  text-transform: uppercase;
+}
+
+.recents-list {
+  flex: 1;
+  overflow-y: auto;
+  padding: 0 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.recent-item {
+  padding: 8px 10px;
+  border-radius: 8px;
+  border: none;
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+  text-align: left;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12.5px;
+}
+
+.recent-item:hover,
+.recent-item.active {
+  background: var(--bg-elevated);
+  color: var(--text);
+}
+
+.sidebar-footer {
+  padding: 10px;
+  border-top: 1px solid var(--border);
+}
+
+#main {
+  flex: 1;
+  min-width: 0;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+}
+
+#view {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.muted {
+  color: var(--text-muted);
+}
+
+.mono {
+  font-family: var(--font-mono);
+}
