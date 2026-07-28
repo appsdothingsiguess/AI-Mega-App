@@ -51,12 +51,20 @@ def create_app(config: Config | None = None) -> FastAPI:
     app = FastAPI(title="AI Mega App", version=__version__, lifespan=lifespan)
 
     @app.get("/health")
-    def health() -> dict[str, str]:
+    def health() -> dict[str, object]:
         conn: sqlite3.Connection = app.state.db
         return {
             "status": "ok",
             "version": __version__,
             "db": "ok" if check_connection(conn) else "error",
+            # Static roster from config.yaml, not live llama-swap state.
+            # Placeholder for the composer model picker until Phase 2's
+            # GET /api/models adds resident/loaded flags (docs/FEATURES.md F3).
+            "models": [
+                {"name": m.name, "class": m.class_, "enabled": m.enabled}
+                for m in cfg.models
+                if m.enabled
+            ],
         }
 
     # --- Wave-2 mount points (each agent includes its own router here) ---

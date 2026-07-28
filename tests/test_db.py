@@ -133,3 +133,4 @@ def test_health_endpoint_reports_db_ok(tmp_path: Path) -> None:
         assert body["status"] == "ok"
         assert body["db"] == "ok"
         assert "version" in body
+        assert body["models"] == [{"name": "chat-default", "class": "general", "enabled": True}]
