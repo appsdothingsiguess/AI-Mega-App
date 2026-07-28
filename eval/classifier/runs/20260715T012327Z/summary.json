@@ -1,0 +1,52 @@
+{
+  "timestamp": "20260715T012327Z",
+  "mode": "ids",
+  "variant": "local",
+  "gold_map": "gold_map.json",
+  "ollama_base_url": "http://192.168.0.240:11434",
+  "configured_classifier": "ollama/qwen2.5:1.5b-32k",
+  "models": [
+    {
+      "classifier_model": "qwen2.5:1.5b-32k",
+      "n": 4,
+      "composite": 0.0,
+      "intent_acc": 0.0,
+      "tools_acc": 0.0,
+      "model_acc": 0.0,
+      "tier_acc": 0.0,
+      "latency_mean_ms": 1116.41,
+      "latency_median_ms": 1114.05,
+      "intent_confusion": {
+        "web_search": {
+          "general_chat": 4
+        }
+      },
+      "model_confusion": {
+        "local/tool-calling-medium": {
+          "local/qwen3-8b": 4
+        }
+      }
+    }
+  ],
+  "best": {
+    "classifier_model": "qwen2.5:1.5b-32k",
+    "n": 4,
+    "composite": 0.0,
+    "intent_acc": 0.0,
+    "tools_acc": 0.0,
+    "model_acc": 0.0,
+    "tier_acc": 0.0,
+    "latency_mean_ms": 1116.41,
+    "latency_median_ms": 1114.05,
+    "intent_confusion": {
+      "web_search": {
+        "general_chat": 4
+      }
+    },
+    "model_confusion": {
+      "local/tool-calling-medium": {
+        "local/qwen3-8b": 4
+      }
+    }
+  }
+}

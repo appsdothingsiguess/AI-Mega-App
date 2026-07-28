@@ -1,0 +1,18 @@
+{
+  "id": "thread-1784095807-670737",
+  "title": null,
+  "created_at": "2026-07-15T06:10:07.670737+00:00",
+  "messages": [
+    {
+      "role": "user",
+      "content": "run `echo hi`",
+      "created_at": "2026-07-15T06:10:27.986132+00:00"
+    },
+    {
+      "role": "assistant",
+      "content": "The command `echo hi` was executed successfully. The output is:\n\n```\nhi\n```\n\nLet me know if you need further assistance!",
+      "created_at": "2026-07-15T06:10:47.634126+00:00",
+      "model": "local/tool-calling-medium"
+    }
+  ]
+}

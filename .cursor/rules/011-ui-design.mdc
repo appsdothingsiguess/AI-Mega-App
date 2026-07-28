@@ -1,0 +1,51 @@
+---
+description: "Local LLM web client UI/visual design — apply whenever building or editing any frontend view, component, or style in web/src/views, web/css, or any chat/settings/debug/projects/code screen"
+globs: ["web/src/**/*.ts", "web/css/**/*.css", "web/**/*.html"]
+alwaysApply: false
+---
+
+Source of truth: `design-doc.md` at the repo root. Do not re-derive the visual system from `PLAN.md`/`FEATURES.md` or from claude.ai itself — only `design-doc.md` defines look and feel. If a screen or state isn't covered there, ask before inventing one.
+
+## Visual identity
+- Always use the graphite/indigo dark palette from `design-doc.md` §1: backgrounds `#0e0f13`/`#131419`/`#1a1b22`/`#22232c`, border `#2a2b35`, text `#eceef2`/`#9296a3`/`#5c606d`, accent indigo `#6e6afd` (hover `#7d7aff`), status success `#3ecf8e` / warning `#e8b339` / error `#f0576a`.
+- Always use the fixed route-source colors everywhere a route/source badge appears (composer, message list, Debug): override `#e8b339`, rule `#3ecf8e`, classifier `#6e6afd`, fallback `#5c606d`. Never introduce a second color mapping for the same concept.
+- Always pair IBM Plex Sans (UI copy) with IBM Plex Mono for literal system tokens only — model aliases, file paths, span names, token counts, code. Never mono for prose.
+- Always keep density compact: 13–14px body text, 8px base spacing unit, 1px borders instead of shadows/elevation. This is a power-user tool, not a marketing surface — never add drop shadows, gradients, rounded-pill hero sections, or emoji.
+- This UI mirrors claude.ai's *structure* (sidebar → chat → context panel) only, never its branded skin. Do not reintroduce Claude's cream/orange palette or logo language.
+
+## Structure (never violate)
+- Left rail nav is exactly: New chat, Chats (recents), Projects, Code, Settings, Debug — collapsible. Home is always a plain new chat; Projects/Code/Debug are nav destinations, never gates.
+- Debug is modeled as its own view/route, matching the spec's standalone-window intent — never merge it into an inline panel of the chat view.
+
+## Chat screen
+- Composer always has: text input, attach button, per-chat tool toggle chips (web_search, browser, file_ops), and a model picker grouped by class (General/Reasoning/Coding/Vision) showing device (GPU0/GPU1/CPU) and resident/swap state. Selecting a model sets `model_override`; "Auto" clears it.
+- Every assistant message always carries a per-message model label and, when routed, a route badge (source + confidence) using the fixed route-source colors; clicking it deep-links to the matching Debug trace.
+- Streaming always follows: `model_loading` banner during a cold swap → token-by-token stream → inline tool-call chips when a tool fires → a terminal state (done or connection-lost). Never leave a stream visually hanging with no terminal state.
+- A fenced code/HTML block in a finished message always opens the right-side artifact panel (Preview/Source tabs); detection reads as client-side, never blocking the stream.
+- When a message names a real repo/directory path (not a pasted snippet), grow a delegation chip ("Delegate to opencode → <dir>") that opens the confirm popup before creating a Code session — never auto-delegate.
+
+## Settings
+- Tab rail is exactly: Models, Providers, Routing, Tools, opencode, BrowserOS, Memory, Debug, Appearance — each control must mirror a real `config.yaml`/overlay key from FEATURES.md.
+- Providers tab: API key fields are always masked inputs, saved individually, and described as written to `.env`/redacted-on-read — never implied to be stored in `config.yaml` or shown in plaintext after save.
+- Tools tab: toggling the consequential `browser` tool from off→on always requires the confirm popup first; other tools toggle directly.
+- opencode tab: show per-host enable + URL, the allowed-roots list as read-only, and a local-vs-zen confgen switch.
+- BrowserOS tab: global enable toggle, MCP URL field, and a "Test connection" action that opens a result popup — never a silent pass/fail.
+
+## Popups
+- Use one reusable centered modal (title + body + Cancel/Confirm) for every confirm-before-acting moment: enabling the consequential browser tool, testing the BrowserOS connection, saving a provider key, confirming opencode delegation. Always give a Cancel path back to the prior state; never show a modal unprompted.
+
+## Component states (always implement all of these, never fewer)
+- Model badges: resident (always warm) / swap-eligible / loading (spinner + elapsed).
+- Tool chips: pending → success/error; consequential tools show an amber confirm state before running.
+- Connection: streaming / connection-lost / reconnected — never a silent hang.
+
+## CSS correctness (regression guard)
+- Never append a `px` unit to unitless CSS properties — `line-height`, `font-weight`, `opacity`, `z-index`, `flex`/`flex-grow`/`flex-shrink`, `order`, `grid-column`, `grid-row`. A prior bug did this via a generic style-object-to-string helper and caused wrapped text to render stacked on top of itself.
+- Always set `white-space: nowrap` on single-line interactive chip/pill labels so they cannot wrap under their own container.
+
+## Debug view
+- Always three-pane: trace list (left) → waterfall (span rows, width = duration) → span detail (raw prompt/response toggle, token counts + tok/s). Token counts and tok/s must read as sourced from llama.cpp timings, never a client-side estimate.
+- Always show live GPU telemetry bars and llama-swap state in the top strip; route chips use the same route-source colors as chat; dispatcher-assisted steps are marked "who decided vs. who emitted."
+
+## What must stay explicitly fake / out of scope
+- Nothing here implies a real backend, real model calls, or real GPU telemetry — this rule governs the UI/visual layer only, per `design-doc.md` §5. Do not wire real network calls into these views under this rule; that is governed by backend rules, not this one.

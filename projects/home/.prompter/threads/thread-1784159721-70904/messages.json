@@ -1,0 +1,18 @@
+{
+  "id": "thread-1784159721-70904",
+  "title": null,
+  "created_at": "2026-07-15T23:55:21.710036+00:00",
+  "messages": [
+    {
+      "role": "user",
+      "content": "hello so what can you do?",
+      "created_at": "2026-07-16T04:35:32.252641+00:00"
+    },
+    {
+      "role": "assistant",
+      "content": "Hello! I'm Prompter X, your personal AI assistant for the **__home__** project. Here's what I can do:\n\n1. **Answer questions** using information from the project's documentation (`docs/` folder).  \n   - Example: If you ask about project workflows, I'll reference relevant files like `docs/README.md` or `docs/roadmap.md`.\n\n2. **Provide actionable insights** based on the project's goals and instructions.  \n   - Example: Help troubleshoot issues, suggest improvements, or clarify ambiguous steps.\n\n3. **Fetch live data** if needed (e.g., system status, external resources) using available tools.  \n   - Example: Check the current time or pull updates from a API (if configured).\n\n4. **Acknowledge limitations** if documents don't have enough info.  \n   - Example: \"The `docs/requirements.md` file doesn't mention X\u2014would you like me to search for additional resources?\"\n\n5. **Streamline workflows** by reducing repetitive tasks (e.g., formatting code, organizing notes).\n\n**Note**: I don\u2019t have access to external files or tools unless explicitly configured. Let me know how I can assist with your specific needs! \ud83d\ude0a",
+      "created_at": "2026-07-16T04:35:45.952140+00:00",
+      "model": "local/qwen3-8b"
+    }
+  ]
+}

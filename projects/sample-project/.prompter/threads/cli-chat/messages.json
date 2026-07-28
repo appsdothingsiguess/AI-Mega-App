@@ -1,0 +1,34 @@
+{
+  "id": "cli-chat",
+  "title": "cli-chat",
+  "created_at": "2026-07-14T18:48:31.795406+00:00",
+  "messages": [
+    {
+      "role": "user",
+      "content": "hello ",
+      "created_at": "2026-07-14T18:48:53.019671+00:00"
+    },
+    {
+      "role": "user",
+      "content": "grep for `ChatOrchestrator` in this project",
+      "created_at": "2026-07-15T06:04:19.506868+00:00"
+    },
+    {
+      "role": "assistant",
+      "content": "I'll need to search through the project files to find occurrences of `ChatOrchestrator`. I'll use the `grep` command to do this. Could you please provide the directory where the project's source code is located?",
+      "created_at": "2026-07-15T06:04:32.053420+00:00",
+      "model": "local/coding-light"
+    },
+    {
+      "role": "user",
+      "content": "grep for `ChatOrchestrator` in this project",
+      "created_at": "2026-07-15T06:05:05.902311+00:00"
+    },
+    {
+      "role": "assistant",
+      "content": "I'm sorry, but I need more context to perform that search. Could you specify which directory or file(s) within the project you'd like me to search for `ChatOrchestrator`?",
+      "created_at": "2026-07-15T06:05:14.529310+00:00",
+      "model": "local/coding-light"
+    }
+  ]
+}

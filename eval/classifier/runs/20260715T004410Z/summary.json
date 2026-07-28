@@ -1,0 +1,166 @@
+{
+  "timestamp": "20260715T004410Z",
+  "mode": "ids",
+  "variant": "local",
+  "gold_map": "gold_map.json",
+  "ollama_base_url": "http://192.168.0.240:11434",
+  "configured_classifier": "ollama/qwen2.5:1.5b-32k",
+  "models": [
+    {
+      "classifier_model": "qwen2.5:1.5b-32k",
+      "n": 33,
+      "composite": 0.7878787878787878,
+      "intent_acc": 0.8484848484848485,
+      "tools_acc": 0.9393939393939394,
+      "model_acc": 0.8484848484848485,
+      "tier_acc": 0.8787878787878788,
+      "latency_mean_ms": 1478.57,
+      "latency_median_ms": 1443.99,
+      "intent_confusion": {
+        "general_chat": {
+          "general_chat": 1,
+          "coding_advanced": 1,
+          "deep_research": 1
+        },
+        "web_search": {
+          "web_search": 3
+        },
+        "deep_research": {
+          "deep_research": 3
+        },
+        "coding_basic": {
+          "coding_basic": 3
+        },
+        "coding_advanced": {
+          "coding_advanced": 2,
+          "general_chat": 1
+        },
+        "bash": {
+          "bash": 2,
+          "coding_advanced": 1
+        },
+        "pdf_gen": {
+          "pdf_gen": 3
+        },
+        "file_ops": {
+          "file_ops": 3
+        },
+        "vision": {
+          "vision": 3
+        },
+        "reasoning_medium": {
+          "reasoning_medium": 3
+        },
+        "reasoning_heavy": {
+          "reasoning_heavy": 2,
+          "deep_research": 1
+        }
+      },
+      "model_confusion": {
+        "local/qwen3-8b": {
+          "<empty>": 1,
+          "local/coding-heavy": 1,
+          "local/reasoning-heavy": 1
+        },
+        "local/tool-calling-medium": {
+          "local/tool-calling-medium": 11,
+          "local/coding-heavy": 1
+        },
+        "local/reasoning-heavy": {
+          "local/reasoning-heavy": 6
+        },
+        "local/coding-light": {
+          "local/coding-light": 3
+        },
+        "local/coding-heavy": {
+          "local/coding-heavy": 2,
+          "<empty>": 1
+        },
+        "local/vision-medium": {
+          "local/vision-medium": 3
+        },
+        "local/reasoning-medium": {
+          "local/reasoning-medium": 3
+        }
+      }
+    }
+  ],
+  "best": {
+    "classifier_model": "qwen2.5:1.5b-32k",
+    "n": 33,
+    "composite": 0.7878787878787878,
+    "intent_acc": 0.8484848484848485,
+    "tools_acc": 0.9393939393939394,
+    "model_acc": 0.8484848484848485,
+    "tier_acc": 0.8787878787878788,
+    "latency_mean_ms": 1478.57,
+    "latency_median_ms": 1443.99,
+    "intent_confusion": {
+      "general_chat": {
+        "general_chat": 1,
+        "coding_advanced": 1,
+        "deep_research": 1
+      },
+      "web_search": {
+        "web_search": 3
+      },
+      "deep_research": {
+        "deep_research": 3
+      },
+      "coding_basic": {
+        "coding_basic": 3
+      },
+      "coding_advanced": {
+        "coding_advanced": 2,
+        "general_chat": 1
+      },
+      "bash": {
+        "bash": 2,
+        "coding_advanced": 1
+      },
+      "pdf_gen": {
+        "pdf_gen": 3
+      },
+      "file_ops": {
+        "file_ops": 3
+      },
+      "vision": {
+        "vision": 3
+      },
+      "reasoning_medium": {
+        "reasoning_medium": 3
+      },
+      "reasoning_heavy": {
+        "reasoning_heavy": 2,
+        "deep_research": 1
+      }
+    },
+    "model_confusion": {
+      "local/qwen3-8b": {
+        "<empty>": 1,
+        "local/coding-heavy": 1,
+        "local/reasoning-heavy": 1
+      },
+      "local/tool-calling-medium": {
+        "local/tool-calling-medium": 11,
+        "local/coding-heavy": 1
+      },
+      "local/reasoning-heavy": {
+        "local/reasoning-heavy": 6
+      },
+      "local/coding-light": {
+        "local/coding-light": 3
+      },
+      "local/coding-heavy": {
+        "local/coding-heavy": 2,
+        "<empty>": 1
+      },
+      "local/vision-medium": {
+        "local/vision-medium": 3
+      },
+      "local/reasoning-medium": {
+        "local/reasoning-medium": 3
+      }
+    }
+  }
+}

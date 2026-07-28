@@ -1,0 +1,1192 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+  body{margin:0;background:#0e0f13;}
+  * { box-sizing: border-box; }
+  ::-webkit-scrollbar{width:8px;height:8px;}
+  ::-webkit-scrollbar-thumb{background:#2a2b35;border-radius:4px;}
+  ::-webkit-scrollbar-track{background:transparent;}
+  @keyframes blink{0%,100%{opacity:1}50%{opacity:0}}
+  @keyframes spin{from{transform:rotate(0deg)}to{transform:rotate(360deg)}}
+  a{color:#6e6afd;}
+  a:hover{color:#7d7aff;}
+</style>
+</helmet>
+<div style="display:flex;width:100%;height:100vh;background:#0e0f13;font-family:'IBM Plex Sans',system-ui,sans-serif;color:#eceef2;overflow:hidden;">
+
+  <!-- SIDEBAR -->
+  <div style="{{ sidebarStyle }}">
+    <div style="display:flex;align-items:center;gap:8px;padding:14px 12px;border-bottom:1px solid #2a2b35;">
+      <div style="width:22px;height:22px;border-radius:6px;background:linear-gradient(135deg,#6e6afd,#4a46c9);flex-shrink:0;"></div>
+      <sc-if value="{{ !sidebarCollapsed }}"><div style="font-weight:600;font-size:14px;letter-spacing:.2px;white-space:nowrap;overflow:hidden;">Local LLM</div></sc-if>
+      <div style="margin-left:auto;cursor:pointer;color:#5c606d;padding:4px;" onClick="{{ toggleSidebar }}" title="Collapse">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"></rect><line x1="9" y1="3" x2="9" y2="21"></line></svg>
+      </div>
+    </div>
+
+    <div style="padding:10px 10px 6px 10px;">
+      <div style="{{ navBtnStyle }}" onClick="{{ newChat }}">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>
+        <sc-if value="{{ !sidebarCollapsed }}"><span>New chat</span></sc-if>
+      </div>
+    </div>
+
+    <div style="padding:0 10px;display:flex;flex-direction:column;gap:2px;">
+      <div style="{{ navItemStyle_chat }}" onClick="{{ goChat }}">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path></svg>
+        <sc-if value="{{ !sidebarCollapsed }}"><span>Chats</span></sc-if>
+      </div>
+      <div style="{{ navItemStyle_projects }}" onClick="{{ goProjects }}">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"></path></svg>
+        <sc-if value="{{ !sidebarCollapsed }}"><span>Projects</span></sc-if>
+      </div>
+      <div style="{{ navItemStyle_code }}" onClick="{{ goCode }}">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="16 18 22 12 16 6"></polyline><polyline points="8 6 2 12 8 18"></polyline></svg>
+        <sc-if value="{{ !sidebarCollapsed }}"><span>Code</span></sc-if>
+      </div>
+      <div style="{{ navItemStyle_debug }}" onClick="{{ goDebug }}">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"></polyline></svg>
+        <sc-if value="{{ !sidebarCollapsed }}"><span>Debug</span></sc-if>
+        <sc-if value="{{ !sidebarCollapsed }}"><div style="margin-left:auto;width:6px;height:6px;border-radius:50%;background:#3ecf8e;"></div></sc-if>
+      </div>
+    </div>
+
+    <sc-if value="{{ !sidebarCollapsed }}" hint-placeholder-val="{{ true }}">
+    <div style="margin-top:14px;padding:0 16px 6px 16px;font-size:11px;letter-spacing:.4px;color:#5c606d;text-transform:uppercase;">Recents</div>
+    <div style="flex:1;overflow-y:auto;padding:0 10px;display:flex;flex-direction:column;gap:1px;">
+      <sc-for list="{{ chats }}" as="chatItem" hint-placeholder-count="3">
+        <div style="{{ chatItem.rowStyle }}" onClick="{{ chatItem.onSelect }}">
+          <span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">{{ chatItem.title }}</span>
+        </div>
+      </sc-for>
+    </div>
+    </sc-if>
+
+    <div style="padding:10px;border-top:1px solid #2a2b35;">
+      <div style="{{ navItemStyle_settings }}" onClick="{{ goSettings }}">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg>
+        <sc-if value="{{ !sidebarCollapsed }}"><span>Settings</span></sc-if>
+      </div>
+    </div>
+  </div>
+
+  <!-- MAIN -->
+  <div style="flex:1;min-width:0;height:100%;display:flex;flex-direction:column;">
+
+    <sc-if value="{{ isChatView }}" hint-placeholder-val="{{ true }}">
+    <div style="flex:1;min-height:0;display:flex;">
+      <div style="flex:1;min-width:0;display:flex;flex-direction:column;">
+        <div style="padding:12px 20px;border-bottom:1px solid #2a2b35;display:flex;align-items:center;gap:8px;font-size:13px;color:#9296a3;">
+          <span style="color:#eceef2;font-weight:500;">{{ activeChatTitle }}</span>
+        </div>
+
+        <div style="flex:1;overflow-y:auto;padding:24px 0;" id="msgScroll">
+          <div style="max-width:760px;margin:0 auto;display:flex;flex-direction:column;gap:22px;padding:0 24px;">
+            <sc-for list="{{ activeMessages }}" as="msg" hint-placeholder-count="2">
+              <div style="display:flex;flex-direction:column;align-items:{{ msg.align }};gap:6px;">
+                <div style="{{ msg.bubbleStyle }}">{{ msg.content }}<sc-if value="{{ msg.showCursor }}"><span style="display:inline-block;width:7px;height:15px;background:#6e6afd;margin-left:2px;vertical-align:text-bottom;animation:blink 1s step-start infinite;"></span></sc-if></div>
+                <sc-if value="{{ msg.hasToolChip }}">
+                  <div style="{{ msg.toolChipStyle }}">
+                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>
+                    <span>{{ msg.toolLabel }}</span>
+                  </div>
+                </sc-if>
+                <sc-if value="{{ msg.hasDelegateChip }}">
+                  <div style="display:flex;align-items:center;gap:8px;font-size:12px;color:#eceef2;background:rgba(110,106,253,.1);border:1px solid rgba(110,106,253,.35);border-radius:8px;padding:8px 12px;cursor:pointer;width:fit-content;" onClick="{{ msg.onDelegate }}">
+                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#6e6afd" stroke-width="2"><polyline points="16 18 22 12 16 6"></polyline><polyline points="8 6 2 12 8 18"></polyline></svg>
+                    <span>{{ msg.delegateLabel }}</span>
+                    <span style="color:#6e6afd;">confirm →</span>
+                  </div>
+                </sc-if>
+                <sc-if value="{{ msg.hasMeta }}">
+                  <div style="display:flex;align-items:center;gap:8px;font-size:11px;color:#5c606d;font-family:'IBM Plex Mono',monospace;">
+                    <span>{{ msg.model }}</span>
+                    <span style="{{ msg.routeChipStyle }}">{{ msg.routeLabel }}</span>
+                    <span>{{ msg.tokLabel }}</span>
+                    <sc-if value="{{ msg.hasArtifact }}"><span style="color:#6e6afd;cursor:pointer;" onClick="{{ msg.openArtifact }}">view artifact →</span></sc-if>
+                  </div>
+                </sc-if>
+              </div>
+            </sc-for>
+
+            <sc-if value="{{ modelLoadingLabel }}">
+              <div style="display:flex;align-items:center;gap:8px;font-size:12px;color:#e8b339;font-family:'IBM Plex Mono',monospace;background:rgba(232,179,57,.08);border:1px solid rgba(232,179,57,.25);padding:8px 12px;border-radius:8px;width:fit-content;">
+                <div style="width:12px;height:12px;border:2px solid rgba(232,179,57,.3);border-top-color:#e8b339;border-radius:50%;animation:spin .8s linear infinite;"></div>
+                <span>{{ modelLoadingLabel }}</span>
+              </div>
+            </sc-if>
+          </div>
+        </div>
+
+        <div style="padding:14px 24px 20px 24px;">
+          <div style="max-width:760px;margin:0 auto;">
+            <div style="display:flex;gap:6px;margin-bottom:8px;flex-wrap:wrap;">
+              <sc-for list="{{ toolChips }}" as="tc" hint-placeholder-count="3">
+                <div style="{{ tc.style }}" onClick="{{ tc.onToggle }}">{{ tc.label }}</div>
+              </sc-for>
+            </div>
+            <div style="background:#1a1b22;border:1px solid #2a2b35;border-radius:14px;padding:10px 10px 8px 14px;">
+              <textarea placeholder="Message Local LLM…" value="{{ composerText }}" onInput="{{ onComposerInput }}" onKeyDown="{{ onComposerKeyDown }}" rows="1" style="width:100%;background:transparent;border:none;outline:none;resize:none;color:#eceef2;font-family:'IBM Plex Sans',sans-serif;font-size:14px;line-height:1.5;max-height:160px;"></textarea>
+              <div style="display:flex;align-items:center;gap:8px;margin-top:6px;">
+                <div style="position:relative;">
+                  <div style="{{ modelPickerBtnStyle }}" onClick="{{ toggleModelPicker }}">
+                    <span style="width:6px;height:6px;border-radius:50%;background:{{ modelPickerDotColor }};"></span>
+                    <span>{{ selectedModelLabel }}</span>
+                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"></polyline></svg>
+                  </div>
+                  <sc-if value="{{ modelPickerOpen }}">
+                    <div style="position:absolute;bottom:36px;left:0;width:300px;background:#1a1b22;border:1px solid #2a2b35;border-radius:10px;box-shadow:0 12px 32px rgba(0,0,0,.5);padding:6px;z-index:20;max-height:360px;overflow-y:auto;">
+                      <div style="{{ autoModelRowStyle }}" onClick="{{ selectAutoModel }}">
+                        <span>Auto</span><span style="font-size:11px;color:#5c606d;">router decides</span>
+                      </div>
+                      <sc-for list="{{ modelPickerGroups }}" as="grp" hint-placeholder-count="4">
+                        <div style="padding:8px 10px 2px 10px;font-size:10px;letter-spacing:.4px;text-transform:uppercase;color:#5c606d;">{{ grp.name }}</div>
+                        <sc-for list="{{ grp.items }}" as="mi" hint-placeholder-count="2">
+                          <div style="{{ mi.rowStyle }}" onClick="{{ mi.onSelect }}">
+                            <div style="display:flex;flex-direction:column;gap:1px;">
+                              <span style="font-family:'IBM Plex Mono',monospace;font-size:12.5px;">{{ mi.name }}</span>
+                              <span style="font-size:10.5px;color:#5c606d;">{{ mi.desc }}</span>
+                            </div>
+                            <span style="{{ mi.badgeStyle }}">{{ mi.device }}</span>
+                          </div>
+                        </sc-for>
+                      </sc-for>
+                    </div>
+                  </sc-if>
+                </div>
+                <div style="margin-left:auto;color:#5c606d;font-size:11px;">⏎ to send</div>
+                <div style="{{ sendBtnStyle }}" onClick="{{ sendMessage }}">
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="12" y1="19" x2="12" y2="5"></line><polyline points="5 12 12 5 19 12"></polyline></svg>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <sc-if value="{{ artifactOpen }}">
+        <div style="width:440px;flex-shrink:0;border-left:1px solid #2a2b35;background:#131419;display:flex;flex-direction:column;">
+          <div style="padding:12px 16px;border-bottom:1px solid #2a2b35;display:flex;align-items:center;gap:10px;">
+            <div style="display:flex;gap:4px;">
+              <div style="{{ artifactTabPreviewStyle }}" onClick="{{ setArtifactTabPreview }}">Preview</div>
+              <div style="{{ artifactTabSourceStyle }}" onClick="{{ setArtifactTabSource }}">Source</div>
+            </div>
+            <div style="margin-left:auto;cursor:pointer;color:#5c606d;" onClick="{{ closeArtifact }}">✕</div>
+          </div>
+          <div style="padding:14px 16px;font-size:11px;color:#5c606d;border-bottom:1px solid #2a2b35;font-family:'IBM Plex Mono',monospace;">{{ artifactTitle }}</div>
+          <div style="flex:1;overflow:auto;padding:16px;">
+            <sc-if value="{{ artifactIsPreviewTab }}" hint-placeholder-val="{{ true }}">
+              <div style="{{ artifactPreviewStyle }}">{{ artifactPreviewContent }}</div>
+            </sc-if>
+            <sc-if value="{{ !artifactIsPreviewTab }}">
+              <pre style="margin:0;font-family:'IBM Plex Mono',monospace;font-size:12px;color:#c9cbd4;white-space:pre-wrap;line-height:1.6;">{{ artifactSourceContent }}</pre>
+            </sc-if>
+          </div>
+        </div>
+      </sc-if>
+    </div>
+    </sc-if>
+
+    <sc-if value="{{ isProjectsView }}">
+      <div style="flex:1;overflow-y:auto;">
+        <sc-if value="{{ !activeProjectId }}" hint-placeholder-val="{{ true }}">
+        <div style="max-width:960px;margin:0 auto;padding:32px 24px;">
+          <div style="font-size:20px;font-weight:600;margin-bottom:4px;">Projects</div>
+          <div style="font-size:13px;color:#9296a3;margin-bottom:24px;">Filesystem-first — instructions, sources, project chats and memory scoped to one working set.</div>
+          <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:14px;">
+            <sc-for list="{{ projects }}" as="proj" hint-placeholder-count="3">
+              <div style="background:#1a1b22;border:1px solid #2a2b35;border-radius:12px;padding:16px;cursor:pointer;display:flex;flex-direction:column;gap:8px;" onClick="{{ proj.onOpen }}">
+                <div style="width:32px;height:32px;border-radius:8px;background:rgba(110,106,253,.12);display:flex;align-items:center;justify-content:center;color:#6e6afd;">
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"></path></svg>
+                </div>
+                <div style="font-weight:500;font-size:14px;">{{ proj.name }}</div>
+                <div style="font-size:12px;color:#5c606d;">{{ proj.fileCount }} files · {{ proj.chatCount }} chats</div>
+              </div>
+            </sc-for>
+          </div>
+        </div>
+        </sc-if>
+        <sc-if value="{{ activeProjectId }}">
+        <div style="max-width:960px;margin:0 auto;padding:24px;">
+          <div style="display:flex;align-items:center;gap:10px;margin-bottom:18px;">
+            <span style="color:#5c606d;cursor:pointer;font-size:13px;" onClick="{{ backToProjects }}">Projects</span>
+            <span style="color:#5c606d;">/</span>
+            <span style="font-weight:600;font-size:15px;">{{ activeProjectName }}</span>
+          </div>
+          <div style="display:flex;gap:4px;border-bottom:1px solid #2a2b35;margin-bottom:18px;">
+            <sc-for list="{{ projectTabs }}" as="pt" hint-placeholder-count="4">
+              <div style="{{ pt.style }}" onClick="{{ pt.onClick }}">{{ pt.label }}</div>
+            </sc-for>
+          </div>
+          <sc-if value="{{ isProjectTabInstructions }}">
+            <textarea value="{{ activeProjectInstructions }}" onInput="{{ onInstructionsInput }}" style="width:100%;min-height:280px;background:#1a1b22;border:1px solid #2a2b35;border-radius:10px;padding:14px;color:#eceef2;font-family:'IBM Plex Mono',monospace;font-size:12.5px;line-height:1.6;outline:none;"></textarea>
+            <div style="{{ saveBtnStyle }}" onClick="{{ saveInstructions }}">Save</div>
+          </sc-if>
+          <sc-if value="{{ isProjectTabFiles }}">
+            <div style="display:flex;flex-direction:column;gap:1px;">
+              <sc-for list="{{ activeProjectFiles }}" as="f" hint-placeholder-count="4">
+                <div style="display:flex;align-items:center;gap:10px;padding:9px 10px;border-bottom:1px solid #1e1f28;font-size:12.5px;">
+                  <span style="font-family:'IBM Plex Mono',monospace;flex:1;color:#c9cbd4;">{{ f.path }}</span>
+                  <span style="{{ f.statusStyle }}">{{ f.statusLabel }}</span>
+                </div>
+              </sc-for>
+            </div>
+          </sc-if>
+          <sc-if value="{{ isProjectTabChats }}">
+            <div style="display:flex;flex-direction:column;gap:1px;">
+              <sc-for list="{{ activeProjectChats }}" as="pc" hint-placeholder-count="2">
+                <div style="padding:10px;border-bottom:1px solid #1e1f28;font-size:13px;cursor:pointer;" onClick="{{ pc.onOpen }}">{{ pc.title }}</div>
+              </sc-for>
+            </div>
+          </sc-if>
+          <sc-if value="{{ isProjectTabMemory }}">
+            <div style="display:flex;flex-direction:column;gap:8px;">
+              <sc-for list="{{ activeProjectMemories }}" as="m" hint-placeholder-count="3">
+                <div style="background:#1a1b22;border:1px solid #2a2b35;border-radius:8px;padding:10px 12px;font-size:13px;">{{ m }}</div>
+              </sc-for>
+            </div>
+          </sc-if>
+        </div>
+        </sc-if>
+      </div>
+    </sc-if>
+
+    <sc-if value="{{ isCodeView }}">
+      <div style="flex:1;overflow-y:auto;padding:32px 24px;">
+        <div style="max-width:880px;margin:0 auto;">
+          <div style="display:flex;align-items:center;margin-bottom:20px;">
+            <div>
+              <div style="font-size:20px;font-weight:600;">Code</div>
+              <div style="font-size:13px;color:#9296a3;">opencode sessions, scoped to registered directories.</div>
+            </div>
+            <div style="{{ newSessionBtnStyle }}" onClick="{{ newCodeSession }}">New session</div>
+          </div>
+          <div style="display:flex;flex-direction:column;gap:10px;">
+            <sc-for list="{{ codeSessions }}" as="s" hint-placeholder-count="2">
+              <div style="background:#1a1b22;border:1px solid #2a2b35;border-radius:10px;padding:14px 16px;">
+                <div style="display:flex;align-items:center;gap:10px;">
+                  <span style="width:7px;height:7px;border-radius:50%;background:{{ s.statusColor }};"></span>
+                  <span style="font-family:'IBM Plex Mono',monospace;font-size:12.5px;color:#c9cbd4;">{{ s.directory }}</span>
+                  <span style="margin-left:auto;font-size:11px;color:#5c606d;">{{ s.host }}</span>
+                </div>
+                <div style="margin-top:8px;font-size:12px;color:#9296a3;font-family:'IBM Plex Mono',monospace;">{{ s.lastEvent }}</div>
+              </div>
+            </sc-for>
+          </div>
+        </div>
+      </div>
+    </sc-if>
+
+    <sc-if value="{{ isSettingsView }}">
+      <div style="flex:1;display:flex;min-height:0;">
+        <div style="width:200px;flex-shrink:0;border-right:1px solid #2a2b35;padding:20px 10px;">
+          <div style="font-size:16px;font-weight:600;padding:0 10px 14px 10px;">Settings</div>
+          <sc-for list="{{ settingsTabs }}" as="st" hint-placeholder-count="6">
+            <div style="{{ st.style }}" onClick="{{ st.onClick }}">{{ st.label }}</div>
+          </sc-for>
+        </div>
+        <div style="flex:1;overflow-y:auto;padding:24px 32px;">
+
+          <sc-if value="{{ isSettingsModels }}" hint-placeholder-val="{{ true }}">
+            <div style="font-size:15px;font-weight:600;margin-bottom:4px;">Models</div>
+            <div style="font-size:12.5px;color:#9296a3;margin-bottom:16px;">Roster, device placement and residency. Placement writes CUDA_VISIBLE_DEVICES — never a tensor-split.</div>
+            <div style="border:1px solid #2a2b35;border-radius:10px;overflow:hidden;">
+              <div style="display:grid;grid-template-columns:1.4fr 1fr .8fr .8fr .8fr 40px 50px;gap:8px;padding:9px 14px;background:#1a1b22;font-size:11px;color:#5c606d;text-transform:uppercase;letter-spacing:.3px;">
+                <span>Alias</span><span>Class</span><span>Device</span><span>Resident</span><span>Ctx</span><span></span><span></span>
+              </div>
+              <sc-for list="{{ rosterRows }}" as="r" hint-placeholder-count="6">
+                <div>
+                  <div style="display:grid;grid-template-columns:1.4fr 1fr .8fr .8fr .8fr 40px 50px;gap:8px;padding:10px 14px;border-top:1px solid #1e1f28;align-items:center;font-size:12.5px;">
+                    <span style="font-family:'IBM Plex Mono',monospace;">{{ r.name }}</span>
+                    <span style="color:#9296a3;">{{ r.class }}</span>
+                    <span style="font-family:'IBM Plex Mono',monospace;color:#9296a3;">{{ r.device }}</span>
+                    <span style="color:{{ r.residentColor }};">{{ r.residentLabel }}</span>
+                    <span style="color:#9296a3;font-family:'IBM Plex Mono',monospace;">{{ r.ctx }}</span>
+                    <span style="color:#6e6afd;cursor:pointer;font-size:11.5px;" onClick="{{ r.onEdit }}">Edit</span>
+                    <div style="{{ r.toggleTrackStyle }}" onClick="{{ r.onToggle }}"><div style="{{ r.toggleThumbStyle }}"></div></div>
+                  </div>
+                  <sc-if value="{{ r.editing }}">
+                    <div style="padding:12px 14px;border-top:1px solid #1e1f28;background:#15161c;display:flex;gap:10px;align-items:flex-end;flex-wrap:wrap;">
+                      <div style="display:flex;flex-direction:column;gap:4px;">
+                        <span style="font-size:10.5px;color:#5c606d;text-transform:uppercase;">Device</span>
+                        <select value="{{ r.draftDevice }}" onChange="{{ r.onDraftDevice }}" style="background:#0e0f13;border:1px solid #2a2b35;border-radius:6px;padding:6px 8px;color:#eceef2;font-family:'IBM Plex Mono',monospace;font-size:12px;">
+                          <option value="GPU0">GPU0</option>
+                          <option value="GPU1">GPU1</option>
+                          <option value="CPU">CPU</option>
+                        </select>
+                      </div>
+                      <div style="display:flex;flex-direction:column;gap:4px;">
+                        <span style="font-size:10.5px;color:#5c606d;text-transform:uppercase;">Ctx tokens</span>
+                        <input value="{{ r.draftCtx }}" onInput="{{ r.onDraftCtx }}" style="width:90px;background:#0e0f13;border:1px solid #2a2b35;border-radius:6px;padding:6px 8px;color:#eceef2;font-family:'IBM Plex Mono',monospace;font-size:12px;outline:none;"></input>
+                      </div>
+                      <div style="display:flex;flex-direction:column;gap:4px;flex:1;min-width:160px;">
+                        <span style="font-size:10.5px;color:#5c606d;text-transform:uppercase;">Endpoint</span>
+                        <input value="{{ r.draftEndpoint }}" onInput="{{ r.onDraftEndpoint }}" style="width:100%;background:#0e0f13;border:1px solid #2a2b35;border-radius:6px;padding:6px 8px;color:#eceef2;font-family:'IBM Plex Mono',monospace;font-size:12px;outline:none;"></input>
+                      </div>
+                      <div style="{{ saveBtnStyle }}" onClick="{{ r.onSaveEdit }}">Save</div>
+                      <div style="font-size:12.5px;color:#5c606d;cursor:pointer;padding:7px 10px;" onClick="{{ r.onCancelEdit }}">Cancel</div>
+                    </div>
+                  </sc-if>
+                </div>
+              </sc-for>
+            </div>
+          </sc-if>
+
+          <sc-if value="{{ isSettingsRouting }}">
+            <div style="font-size:15px;font-weight:600;margin-bottom:4px;">Routing</div>
+            <div style="font-size:12.5px;color:#9296a3;margin-bottom:16px;">Override → deterministic rules → classifier, strictly ordered.</div>
+            <div style="display:flex;align-items:center;justify-content:space-between;background:#1a1b22;border:1px solid #2a2b35;border-radius:10px;padding:14px 16px;margin-bottom:10px;">
+              <div><div style="font-size:13px;">Classifier enabled</div><div style="font-size:11.5px;color:#5c606d;">Qwen3-1.7B, CPU — 91.76% on the frozen taxonomy</div></div>
+              <div style="{{ classifierToggleTrackStyle }}" onClick="{{ toggleClassifier }}"><div style="{{ classifierToggleThumbStyle }}"></div></div>
+            </div>
+            <div style="background:#1a1b22;border:1px solid #2a2b35;border-radius:10px;padding:14px 16px;margin-bottom:10px;">
+              <div style="font-size:13px;margin-bottom:8px;">Confidence threshold — {{ confidenceThresholdLabel }}</div>
+              <input type="range" min="0" max="1" step="0.05" value="{{ confidenceThreshold }}" onInput="{{ onConfidenceInput }}" style="width:100%;accent-color:#6e6afd;"></input>
+            </div>
+            <div style="font-size:12px;color:#5c606d;text-transform:uppercase;letter-spacing:.3px;margin:14px 0 8px 0;">Keyword rules</div>
+            <sc-for list="{{ routingRules }}" as="rr" hint-placeholder-count="3">
+              <div style="display:flex;align-items:center;gap:10px;background:#1a1b22;border:1px solid #2a2b35;border-radius:8px;padding:9px 12px;margin-bottom:6px;font-size:12.5px;">
+                <span style="font-family:'IBM Plex Mono',monospace;color:#c9cbd4;flex:1;">{{ rr.keywords }}</span>
+                <span style="color:#6e6afd;">→ {{ rr.intent }}</span>
+              </div>
+            </sc-for>
+          </sc-if>
+
+          <sc-if value="{{ isSettingsTools }}">
+            <div style="font-size:15px;font-weight:600;margin-bottom:4px;">Tools</div>
+            <div style="font-size:12.5px;color:#9296a3;margin-bottom:16px;">Consequential tools require a per-chat confirm even when enabled here.</div>
+            <sc-for list="{{ toolRows }}" as="t" hint-placeholder-count="6">
+              <div style="display:flex;align-items:center;justify-content:space-between;background:#1a1b22;border:1px solid #2a2b35;border-radius:10px;padding:12px 16px;margin-bottom:8px;">
+                <div style="display:flex;align-items:center;gap:8px;">
+                  <span style="font-family:'IBM Plex Mono',monospace;font-size:13px;">{{ t.name }}</span>
+                  <sc-if value="{{ t.consequential }}"><span style="font-size:10px;color:#e8b339;background:rgba(232,179,57,.12);padding:2px 6px;border-radius:4px;">consequential</span></sc-if>
+                </div>
+                <div style="{{ t.toggleTrackStyle }}" onClick="{{ t.onToggle }}"><div style="{{ t.toggleThumbStyle }}"></div></div>
+              </div>
+            </sc-for>
+          </sc-if>
+
+          <sc-if value="{{ isSettingsProviders }}">
+            <div style="font-size:15px;font-weight:600;margin-bottom:4px;">Providers</div>
+            <div style="font-size:12.5px;color:#9296a3;margin-bottom:16px;">API keys are written to .env, redacted on read-back. Everything else here is local — no remote model calls unless a key is set.</div>
+            <sc-for list="{{ providerRows }}" as="pr" hint-placeholder-count="4">
+              <div style="background:#1a1b22;border:1px solid #2a2b35;border-radius:10px;padding:12px 16px;margin-bottom:8px;">
+                <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;">
+                  <span style="font-size:13px;font-weight:500;">{{ pr.name }}</span>
+                  <span style="{{ pr.statusStyle }}">{{ pr.statusLabel }}</span>
+                  <sc-if value="{{ pr.future }}"><span style="font-size:10px;color:#5c606d;background:#22232c;padding:2px 6px;border-radius:4px;">v2 / future</span></sc-if>
+                </div>
+                <div style="display:flex;gap:8px;">
+                  <input type="password" placeholder="{{ pr.placeholder }}" value="{{ pr.value }}" onInput="{{ pr.onInput }}" style="flex:1;background:#0e0f13;border:1px solid #2a2b35;border-radius:6px;padding:7px 10px;color:#eceef2;font-family:'IBM Plex Mono',monospace;font-size:12px;outline:none;"></input>
+                  <div style="{{ saveKeyBtnStyle }}" onClick="{{ pr.onSave }}">Save</div>
+                </div>
+              </div>
+            </sc-for>
+            <div style="font-size:12px;color:#5c606d;text-transform:uppercase;letter-spacing:.3px;margin:16px 0 8px 0;">Model → endpoint map</div>
+            <div style="background:#1a1b22;border:1px solid #2a2b35;border-radius:10px;padding:12px 16px;">
+              <div style="font-size:11.5px;color:#5c606d;margin-bottom:8px;">All models resolve here by default. Multi-box mapping is a future extension point.</div>
+              <div style="display:flex;gap:8px;">
+                <input value="{{ endpointMap }}" onInput="{{ onEndpointMapInput }}" style="flex:1;background:#0e0f13;border:1px solid #2a2b35;border-radius:6px;padding:7px 10px;color:#eceef2;font-family:'IBM Plex Mono',monospace;font-size:12px;outline:none;"></input>
+                <div style="{{ saveBtnStyle }}" onClick="{{ saveEndpointMap }}">Save</div>
+              </div>
+            </div>
+          </sc-if>
+
+          <sc-if value="{{ isSettingsOpencode }}">
+            <div style="font-size:15px;font-weight:600;margin-bottom:4px;">opencode</div>
+            <div style="font-size:12.5px;color:#9296a3;margin-bottom:16px;">Delegated coding sessions, scoped to registered directories. Never called as a one-off tool-RPC.</div>
+            <sc-for list="{{ opencodeHosts }}" as="oh" hint-placeholder-count="2">
+              <div style="display:flex;align-items:center;gap:12px;background:#1a1b22;border:1px solid #2a2b35;border-radius:10px;padding:12px 16px;margin-bottom:8px;">
+                <span style="font-size:13px;font-weight:500;width:70px;">{{ oh.name }}</span>
+                <span style="font-family:'IBM Plex Mono',monospace;font-size:12px;color:#9296a3;flex:1;">{{ oh.url }}</span>
+                <div style="{{ oh.toggleTrackStyle }}" onClick="{{ oh.onToggle }}"><div style="{{ oh.toggleThumbStyle }}"></div></div>
+              </div>
+            </sc-for>
+            <div style="font-size:12px;color:#5c606d;text-transform:uppercase;letter-spacing:.3px;margin:16px 0 8px 0;">Allowed roots</div>
+            <sc-for list="{{ allowedRoots }}" as="ar" hint-placeholder-count="2">
+              <div style="font-family:'IBM Plex Mono',monospace;font-size:12.5px;color:#c9cbd4;background:#1a1b22;border:1px solid #2a2b35;border-radius:8px;padding:8px 12px;margin-bottom:6px;">{{ ar }}</div>
+            </sc-for>
+            <div style="font-size:12px;color:#5c606d;text-transform:uppercase;letter-spacing:.3px;margin:16px 0 8px 0;">Provider (confgen)</div>
+            <div style="display:flex;gap:8px;">
+              <div style="{{ confgenLocalStyle }}" onClick="{{ setConfgenLocal }}">local — llama-swap /v1</div>
+              <div style="{{ confgenZenStyle }}" onClick="{{ setConfgenZen }}">zen — DeepSeek V4 (escalation)</div>
+            </div>
+          </sc-if>
+
+          <sc-if value="{{ isSettingsBrowserOS }}">
+            <div style="font-size:15px;font-weight:600;margin-bottom:4px;">BrowserOS</div>
+            <div style="font-size:12.5px;color:#9296a3;margin-bottom:16px;">MCP client into a Chromium browser on the host. Off by default; each chat must also opt in — consequential actions.</div>
+            <div style="display:flex;align-items:center;justify-content:space-between;background:#1a1b22;border:1px solid #2a2b35;border-radius:10px;padding:14px 16px;margin-bottom:10px;">
+              <div style="font-size:13px;">Enable BrowserOS globally</div>
+              <div style="{{ browserosEnabledTrackStyle }}" onClick="{{ toggleBrowserosEnabled }}"><div style="{{ browserosEnabledThumbStyle }}"></div></div>
+            </div>
+            <div style="background:#1a1b22;border:1px solid #2a2b35;border-radius:10px;padding:14px 16px;margin-bottom:10px;">
+              <div style="font-size:12.5px;margin-bottom:8px;color:#9296a3;">MCP server URL</div>
+              <div style="display:flex;gap:8px;">
+                <input value="{{ browserosUrl }}" onInput="{{ onBrowserosUrlInput }}" style="flex:1;background:#0e0f13;border:1px solid #2a2b35;border-radius:6px;padding:7px 10px;color:#eceef2;font-family:'IBM Plex Mono',monospace;font-size:12px;outline:none;"></input>
+                <div style="{{ saveBtnStyle }}" onClick="{{ saveBrowserosUrl }}">Save</div>
+                <div style="{{ testConnectionBtnStyle }}" onClick="{{ testBrowserosConnection }}">Test connection</div>
+              </div>
+            </div>
+            <div style="font-size:12px;color:#5c606d;text-transform:uppercase;letter-spacing:.3px;margin:16px 0 8px 0;">Discovered tools (31+)</div>
+            <div style="display:flex;flex-wrap:wrap;gap:6px;">
+              <sc-for list="{{ browserTools }}" as="bt" hint-placeholder-count="6">
+                <span style="font-size:11px;font-family:'IBM Plex Mono',monospace;color:#9296a3;background:#1a1b22;border:1px solid #2a2b35;border-radius:5px;padding:3px 8px;">{{ bt }}</span>
+              </sc-for>
+            </div>
+          </sc-if>
+
+          <sc-if value="{{ isSettingsMemory }}">
+            <div style="font-size:15px;font-weight:600;margin-bottom:4px;">Memory</div>
+            <div style="font-size:12.5px;color:#9296a3;margin-bottom:16px;">User preferences always inject. Nothing is invisible — review before it lands.</div>
+            <div style="font-size:12px;color:#5c606d;text-transform:uppercase;letter-spacing:.3px;margin-bottom:8px;">Review queue</div>
+            <sc-for list="{{ reviewQueue }}" as="rq" hint-placeholder-count="2">
+              <div style="background:#1a1b22;border:1px solid #2a2b35;border-radius:10px;padding:12px 16px;margin-bottom:8px;">
+                <div style="font-size:13px;margin-bottom:6px;">{{ rq.proposed }}</div>
+                <div style="display:flex;align-items:center;gap:10px;">
+                  <span style="font-size:11px;color:#5c606d;">{{ rq.scope }} · {{ rq.rationale }}</span>
+                  <span style="margin-left:auto;color:#3ecf8e;cursor:pointer;font-size:12px;" onClick="{{ rq.onAccept }}">Accept</span>
+                  <span style="color:#f0576a;cursor:pointer;font-size:12px;" onClick="{{ rq.onReject }}">Reject</span>
+                </div>
+              </div>
+            </sc-for>
+            <div style="font-size:12px;color:#5c606d;text-transform:uppercase;letter-spacing:.3px;margin:16px 0 8px 0;">Add memory</div>
+            <div style="display:flex;gap:8px;margin-bottom:16px;align-items:center;">
+              <sc-for list="{{ memoryScopeOptions }}" as="so" hint-placeholder-count="3">
+                <div style="{{ so.style }}" onClick="{{ so.onClick }}">{{ so.label }}</div>
+              </sc-for>
+              <input placeholder="New memory fact…" value="{{ newMemoryText }}" onInput="{{ onNewMemoryText }}" style="flex:1;background:#1a1b22;border:1px solid #2a2b35;border-radius:6px;padding:8px 10px;color:#eceef2;font-size:12.5px;outline:none;"></input>
+              <div style="{{ addMemoryBtnStyle }}" onClick="{{ addMemory }}">Add</div>
+            </div>
+            <div style="font-size:12px;color:#5c606d;text-transform:uppercase;letter-spacing:.3px;margin:16px 0 8px 0;">Active memories</div>
+            <sc-for list="{{ memoryFacts }}" as="mf" hint-placeholder-count="3">
+              <div style="display:flex;gap:8px;align-items:center;font-size:12.5px;padding:8px 0;border-bottom:1px solid #1e1f28;">
+                <span style="{{ mf.scopeChipStyle }}">{{ mf.scope }}</span>
+                <span style="color:#c9cbd4;flex:1;">{{ mf.content }}</span>
+                <span style="color:#5c606d;cursor:pointer;font-size:13px;" onClick="{{ mf.onDelete }}">✕</span>
+              </div>
+            </sc-for>
+          </sc-if>
+
+          <sc-if value="{{ isSettingsDebug }}">
+            <div style="font-size:15px;font-weight:600;margin-bottom:4px;">Debug</div>
+            <div style="font-size:12.5px;color:#9296a3;margin-bottom:16px;">Master toggle for tracing. Failures here never block chat.</div>
+            <div style="display:flex;align-items:center;justify-content:space-between;background:#1a1b22;border:1px solid #2a2b35;border-radius:10px;padding:14px 16px;margin-bottom:10px;">
+              <div style="font-size:13px;">Debug window enabled</div>
+              <div style="{{ debugEnabledToggleTrackStyle }}" onClick="{{ toggleDebugEnabled }}"><div style="{{ debugEnabledToggleThumbStyle }}"></div></div>
+            </div>
+            <div style="display:flex;align-items:center;justify-content:space-between;background:#1a1b22;border:1px solid #2a2b35;border-radius:10px;padding:14px 16px;margin-bottom:10px;">
+              <div><div style="font-size:13px;">Store full prompts</div><div style="font-size:11.5px;color:#5c606d;">Raw prompt/response text kept on each span</div></div>
+              <div style="{{ storePromptsToggleTrackStyle }}" onClick="{{ toggleStorePrompts }}"><div style="{{ storePromptsToggleThumbStyle }}"></div></div>
+            </div>
+            <div style="background:#1a1b22;border:1px solid #2a2b35;border-radius:10px;padding:14px 16px;">
+              <div style="font-size:13px;margin-bottom:2px;">Retention — {{ retentionDays }} days</div>
+              <input type="range" min="1" max="60" value="{{ retentionDays }}" onInput="{{ onRetentionInput }}" style="width:100%;accent-color:#6e6afd;"></input>
+            </div>
+          </sc-if>
+
+          <sc-if value="{{ isSettingsAppearance }}">
+            <div style="font-size:15px;font-weight:600;margin-bottom:4px;">Appearance</div>
+            <div style="display:flex;align-items:center;justify-content:space-between;background:#1a1b22;border:1px solid #2a2b35;border-radius:10px;padding:14px 16px;margin-top:12px;">
+              <div style="font-size:13px;">Show thinking tokens</div>
+              <div style="{{ showThinkingToggleTrackStyle }}" onClick="{{ toggleShowThinking }}"><div style="{{ showThinkingToggleThumbStyle }}"></div></div>
+            </div>
+          </sc-if>
+
+        </div>
+      </div>
+    </sc-if>
+
+    <sc-if value="{{ toastVisible }}">
+      <div style="position:fixed;bottom:24px;left:50%;transform:translateX(-50%);background:#22232c;border:1px solid #2a2b35;color:#eceef2;font-size:13px;padding:10px 18px;border-radius:8px;box-shadow:0 8px 24px rgba(0,0,0,.4);z-index:200;">{{ toastMessage }}</div>
+    </sc-if>
+
+    <sc-if value="{{ modalOpen }}">
+      <div style="position:fixed;inset:0;background:rgba(0,0,0,.6);display:flex;align-items:center;justify-content:center;z-index:100;" onClick="{{ closeModal }}">
+        <div style="background:#1a1b22;border:1px solid #2a2b35;border-radius:12px;padding:22px;width:380px;" onClick="{{ stopPropagation }}">
+          <div style="font-size:15px;font-weight:600;margin-bottom:8px;">{{ modalTitle }}</div>
+          <div style="font-size:13px;color:#9296a3;line-height:1.6;margin-bottom:18px;">{{ modalBody }}</div>
+          <div style="display:flex;gap:8px;justify-content:flex-end;">
+            <div style="font-size:13px;padding:8px 14px;border-radius:8px;cursor:pointer;color:#9296a3;" onClick="{{ closeModal }}">Cancel</div>
+            <div style="font-size:13px;padding:8px 14px;border-radius:8px;cursor:pointer;background:#6e6afd;color:#fff;" onClick="{{ modalConfirm }}">{{ modalConfirmLabel }}</div>
+          </div>
+        </div>
+      </div>
+    </sc-if>
+
+    <sc-if value="{{ isDebugView }}">
+      <div style="padding:12px 20px;border-bottom:1px solid #2a2b35;display:flex;align-items:center;gap:20px;">
+        <div style="font-weight:600;font-size:14px;">Debug</div>
+        <div style="display:flex;align-items:center;gap:14px;margin-left:auto;">
+          <sc-for list="{{ gpuBars }}" as="gb" hint-placeholder-count="2">
+            <div style="display:flex;align-items:center;gap:8px;font-size:11px;font-family:'IBM Plex Mono',monospace;">
+              <span style="color:#5c606d;">{{ gb.label }}</span>
+              <div style="width:100px;height:6px;background:#22232c;border-radius:3px;overflow:hidden;">
+                <div style="{{ gb.fillStyle }}"></div>
+              </div>
+              <span style="color:#9296a3;">{{ gb.text }}</span>
+            </div>
+          </sc-for>
+          <div style="display:flex;align-items:center;gap:6px;font-size:11px;font-family:'IBM Plex Mono',monospace;color:#9296a3;">
+            <span style="width:6px;height:6px;border-radius:50%;background:#3ecf8e;"></span>
+            <span>swap: {{ swapStateLabel }}</span>
+          </div>
+        </div>
+      </div>
+      <div style="flex:1;display:flex;min-height:0;">
+        <div style="width:260px;flex-shrink:0;border-right:1px solid #2a2b35;overflow-y:auto;">
+          <sc-for list="{{ traceRows }}" as="tr" hint-placeholder-count="3">
+            <div style="{{ tr.style }}" onClick="{{ tr.onSelect }}">
+              <div style="display:flex;align-items:center;gap:6px;">
+                <span style="{{ tr.routeDotStyle }}"></span>
+                <span style="font-size:12.5px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">{{ tr.chatTitle }}</span>
+              </div>
+              <div style="font-size:10.5px;color:#5c606d;font-family:'IBM Plex Mono',monospace;margin-top:3px;">{{ tr.summary }}</div>
+            </div>
+          </sc-for>
+        </div>
+        <div style="flex:1;overflow-y:auto;padding:18px 22px;">
+          <sc-if value="{{ selectedTrace }}" hint-placeholder-val="{{ true }}">
+            <div style="display:flex;align-items:center;gap:10px;margin-bottom:4px;">
+              <span style="{{ selectedTraceRouteChipStyle }}">{{ selectedTraceRouteLabel }}</span>
+              <span style="font-family:'IBM Plex Mono',monospace;font-size:12.5px;color:#c9cbd4;">{{ selectedTraceModel }}</span>
+              <span style="font-size:11.5px;color:#5c606d;">{{ selectedTraceConfidence }}</span>
+              <span style="margin-left:auto;font-size:11.5px;color:#5c606d;font-family:'IBM Plex Mono',monospace;">{{ selectedTraceTokens }}</span>
+            </div>
+            <div style="font-size:11px;color:#5c606d;margin-bottom:16px;">trace_id: {{ selectedTraceId }}</div>
+            <div style="display:flex;flex-direction:column;gap:1px;margin-bottom:20px;">
+              <sc-for list="{{ selectedTraceSpans }}" as="sp" hint-placeholder-count="5">
+                <div style="display:flex;align-items:center;gap:10px;padding:6px 0;cursor:pointer;" onClick="{{ sp.onSelect }}">
+                  <span style="width:120px;flex-shrink:0;font-size:11.5px;font-family:'IBM Plex Mono',monospace;color:#9296a3;">{{ sp.name }}</span>
+                  <div style="flex:1;height:18px;background:#1a1b22;border-radius:3px;position:relative;">
+                    <div style="{{ sp.barStyle }}"></div>
+                  </div>
+                  <span style="width:56px;flex-shrink:0;text-align:right;font-size:11px;font-family:'IBM Plex Mono',monospace;color:#5c606d;">{{ sp.msLabel }}</span>
+                </div>
+              </sc-for>
+            </div>
+            <sc-if value="{{ selectedSpanDetail }}">
+              <div style="background:#1a1b22;border:1px solid #2a2b35;border-radius:10px;padding:14px 16px;">
+                <div style="font-size:12.5px;font-weight:500;margin-bottom:8px;font-family:'IBM Plex Mono',monospace;color:#6e6afd;">{{ selectedSpanDetail.name }}</div>
+                <pre style="margin:0;font-family:'IBM Plex Mono',monospace;font-size:11.5px;color:#9296a3;white-space:pre-wrap;line-height:1.6;">{{ selectedSpanDetail.detail }}</pre>
+              </div>
+            </sc-if>
+          </sc-if>
+        </div>
+      </div>
+    </sc-if>
+
+  </div>
+</div>
+
+</x-dc>
+<script type="text/x-dc" data-dc-script>
+const ROSTER = [
+  {name:'chat-default', cls:'General', device:'GPU0', resident:false, ctx:32768, desc:'Qwen3.6-35B-A3B — general chat + native tools'},
+  {name:'reasoner', cls:'Reasoning', device:'GPU0', resident:false, ctx:32768, desc:'Same weights as chat-default, thinking on'},
+  {name:'reasoner-alt', cls:'Reasoning', device:'GPU0', resident:false, ctx:8192, desc:'DeepSeek-R1-Distill-32B, off by default'},
+  {name:'coder', cls:'Coding', device:'GPU0', resident:false, ctx:16384, desc:'Qwen3-Coder-30B-A3B Q5_K_M'},
+  {name:'coder-small', cls:'Coding', device:'GPU0', resident:false, ctx:16384, desc:'Qwen2.5-Coder-7B fast fallback'},
+  {name:'vision', cls:'Vision', device:'GPU0', resident:false, ctx:8192, desc:'Qwen3-VL-32B-Instruct'},
+  {name:'dispatcher', cls:'System', device:'GPU1', resident:true, ctx:4096, desc:'Hammer2.1-1.5b — tool calls + titles'},
+  {name:'classifier', cls:'System', device:'CPU', resident:true, ctx:4096, desc:'Qwen3-1.7B — router classifier'},
+  {name:'utility', cls:'System', device:'CPU', resident:true, ctx:8192, desc:'Qwen3-8B — summaries, compaction'},
+  {name:'embed', cls:'System', device:'CPU', resident:true, ctx:2048, desc:'nomic-embed-text-v2-moe'},
+];
+
+const ROUTE_COLORS = {override:'#e8b339', rule:'#3ecf8e', classifier:'#6e6afd', fallback:'#5c606d'};
+
+const RESPONSES = {
+  reasoner: {model:'reasoner', source:'rule', intent:'reasoning_task', text:"The 52.9% throughput drop at 32k isn't a KV-cache size problem — GQA keeps that small on this MoE. It's attention compute scaling with sequence length: at 32k the model is doing roughly 8x the attention FLOPs it does at 4k for every generated token, while active-parameter compute per token stays flat. Recall stays correct the whole way, so this reads as a speed problem, not an accuracy one — the fix is compaction triggering earlier, tuned against this measured curve, not shrinking the context window itself."},
+  coder: {model:'coder', source:'classifier', intent:'code_task', confidence:0.94, text:"Here's the swapgen fix — the missing piece was the groups: block; without it every model falls into llama-swap's implicit default group and swaps.", artifact:{title:'swapgen_groups.py', preview:'groups:\n  resident:\n    swap: false\n    members: [classifier, utility, embed, dispatcher]\n  gpu0-main:\n    swap: true\n    members: [chat-default, coder, vision]', source:'def render_groups(cfg):\n    resident = [m.name for m in cfg.models if m.resident]\n    swap_pool = [m.name for m in cfg.models if not m.resident]\n    return {\n        "resident": {"swap": False, "members": resident},\n        "gpu0-main": {"swap": True, "members": swap_pool},\n    }\n\n# regression test: groups block must always be non-empty\nassert render_groups(cfg)["resident"]["members"], "residents cannot be empty"'}},
+  vision: {model:'vision', source:'rule', intent:'vision_task', text:"From the attached diagram: GPU0 carries the swap slot (one big model at a time via CUDA_VISIBLE_DEVICES=0), GPU1 stays a dedicated resident lane for the dispatcher, and the CPU column holds classifier/utility/embed — matches the Config B placement exactly."},
+  tool: {model:'chat-default', source:'classifier', intent:'tool_call_needed', confidence:0.81, tool:'web_search', toolLabel:'web_search — "llama-swap v201 changelog"', text:"llama-swap v201 (Apr 2026) is the release this plan pins — group semantics and TTL auto-unload are stable as of that build, per the changelog."},
+  delegate: {model:'chat-default', source:'rule', intent:'delegate_suggested', text:"That touches a real file in a registered repo, not a pasted snippet — this is opencode territory rather than a one-off chat completion. I can hand this off to a session scoped to that directory; nothing runs until you confirm.", delegateDir:'/home/john/llm-stack'},
+  default: {model:'chat-default', source:'classifier', intent:'chat', confidence:0.97, text:"Confirmed — the resident group holds classifier, utility, embed and dispatcher; the GPU0 swap slot holds whichever big model the router picked last. Ask me anything about the roster, routing, or a specific trace."},
+};
+
+function pickCategory(text){
+  const t = text.toLowerCase();
+  if(/\brepo\b|repository|codebase|\/home\/|directory/.test(t)) return 'delegate';
+  if(/image|diagram|screenshot|photo|picture/.test(t)) return 'vision';
+  if(/fix|bug|refactor|implement|write.*(script|function|code)|swapgen/.test(t)) return 'coder';
+  if(/why|explain|reason|trade[- ]?off|root cause|throughput/.test(t)) return 'reasoner';
+  if(/search|latest|news|changelog|price|weather/.test(t)) return 'tool';
+  return 'default';
+}
+
+let uid = 100;
+function nid(){ return 'id' + (uid++); }
+
+class Component extends DCLogic {
+  state = {
+    view: 'chat',
+    sidebarCollapsed: false,
+    chats: [
+      {id:'c1', title:'Phase 1.5 search memories'},
+      {id:'c2', title:'Debug router regression'},
+      {id:'c3', title:'Swapgen golden yaml tests'},
+    ],
+    activeChatId: 'c1',
+    messagesByChat: {
+      c1: [
+        {id:'m1', role:'user', content:'Why is chat-default losing throughput at 32k context?'},
+        {id:'m2', role:'assistant', content:RESPONSES.reasoner.text, model:'reasoner', source:'rule', intent:'reasoning_task', tokIn:812, tokOut:246, tokPerSec:118},
+      ],
+      c2: [
+        {id:'m3', role:'user', content:'The classifier keeps returning empty content on structured calls, why?'},
+        {id:'m4', role:'assistant', content:"It's spending its whole completion budget inside <think> — a /no_think prompt suffix isn't a substitute for --reasoning off at the server level. Set reasoning_off: true on that alias in config; swapgen already emits the flag for entries tagged that way.", model:'chat-default', source:'classifier', intent:'chat', confidence:0.97, tokIn:340, tokOut:98, tokPerSec:129},
+      ],
+      c3: [],
+    },
+    composerText: '',
+    isStreaming: false,
+    modelLoading: null,
+    toolToggles: {web_search:true, browser:false, file_ops:true},
+    modelOverride: null,
+    modelPickerOpen: false,
+    artifactOpen: false,
+    artifactTab: 'preview',
+    artifact: null,
+    settingsTab: 'models',
+    modelEnabled: Object.fromEntries(ROSTER.map(r => [r.name, true])),
+    classifierEnabled: true,
+    confidenceThreshold: 0.5,
+    toolsState: {
+      web_search:{enabled:true, consequential:false}, fetch_url:{enabled:true, consequential:false},
+      file_ops:{enabled:true, consequential:false}, run_code:{enabled:true, consequential:false},
+      browser:{enabled:false, consequential:true}, memory_save:{enabled:true, consequential:false}, memory_search:{enabled:true, consequential:false},
+    },
+    debugSettingsEnabled: true,
+    storePrompts: true,
+    retentionDays: 14,
+    showThinking: true,
+    reviewQueue: [
+      {id:'rq1', proposed:'User prefers concise answers with code over prose.', scope:'user', rationale:'observed across 6 turns'},
+      {id:'rq2', proposed:'Project mega-app: tsc only, no bundler, no React.', scope:'project', rationale:'stated explicitly in chat'},
+    ],
+    traces: [],
+    selectedTraceId: null,
+    selectedSpanId: null,
+    gpu0Used: 900, gpu1Used: 1303,
+    swapLoaded: null,
+    projects: [
+      {id:'p1', name:'llm-stack infra', instructions:'You are assisting on the llm-stack infra repo. Prefer editing config.yaml over hand-editing generated files. Always cite the measured numbers in phase0-measurements.md when relevant.',
+        files:[{path:'docs/architecture.md', ingested:true, chunks:42},{path:'docs/phase0-measurements.md', ingested:true, chunks:88},{path:'scripts/bench_models.py', ingested:false, chunks:0}],
+        chats:['Swapgen golden yaml tests'], memories:['Uses CUDA_VISIBLE_DEVICES, never --tensor-split.', 'Qdrant collections: chunks, messages — dim 768.']},
+      {id:'p2', name:'router eval', instructions:'Router taxonomy: chat, chit_chat, code_task, tool_call_needed, reasoning_task, vision_task. Scorer must match longest-label-first.',
+        files:[{path:'eval/router_eval.csv', ingested:true, chunks:12}], chats:[], memories:['tool_call_needed sits at 78.9% — weakest class, watch for regressions.']},
+      {id:'p3', name:'opencode migration', instructions:'opencode.json points at llama-swap /v1. Zen is the escalation profile, not default.',
+        files:[{path:'opencode.json', ingested:true, chunks:3}], chats:[], memories:[]},
+    ],
+    activeProjectId: null,
+    projectTab: 'instructions',
+    codeSessions: [
+      {id:'s1', directory:'/home/john/llm-stack', host:'ubuntu', status:'active', lastEvent:'agent: reading app/gpu/swapgen.py'},
+      {id:'s2', directory:'/home/user/repos/router-eval', host:'ubuntu', status:'idle', lastEvent:'session closed — 14 tool calls, 0 errors'},
+    ],
+    modal: null,
+    toast: null,
+    providerKeys: {tavily:'', anthropic:'', opencode_zen:''},
+    opencodeHostsState: {ubuntu:true, windows:false},
+    confgenMode: 'local',
+    browserosEnabled: false,
+    browserosUrl: 'http://192.168.1.42:9222',
+    connectionTestResult: null,
+    rosterOverrides: {},
+    editingModelName: null,
+    editDraft: {},
+    endpointMap: '127.0.0.1:8080',
+    memoryFactsState: [
+      {id:'mf1', scope:'user', content:'Prefers concise answers with code over prose.'},
+      {id:'mf2', scope:'project', content:'mega-app: tsc only, no bundler, no React.'},
+      {id:'mf3', scope:'global', content:'Runs a dual-GPU box: RTX 3090 (GPU0) + RTX 3070 (GPU1).'},
+    ],
+    newMemoryText: '',
+    newMemoryScope: 'user',
+  };
+
+  componentDidMount(){
+    this.state.traces = [
+      this.makeTrace('c1', {model:'reasoner', source:'rule', intent:'reasoning_task'}, [
+        {name:'route', ms:2, detail:'source=rule\nintent=reasoning_task\nmatched keyword: "throughput"'},
+        {name:'swap_wait', ms:1180, detail:'GPU0 slot swapped chat-default -> reasoner (same blob, thinking flag flipped at request layer — no actual reload)'},
+        {name:'llm_request', ms:96, detail:'model=reasoner\nprompt_tokens=812\nreasoning_off=false\nmax_tokens=4096'},
+        {name:'llm_stream', ms:2080, detail:'tokens_out=246\ntok/s=118.3\nfirst_token_ms=612'},
+        {name:'sse_emit', ms:4, detail:'events=249\nterminal=done'},
+      ], {tokIn:812, tokOut:246}),
+      this.makeTrace('c2', {model:'chat-default', source:'classifier', intent:'chat', confidence:0.97}, [
+        {name:'route', ms:283, detail:'source=classifier\nclass=chat\nconfidence=0.97\nraw={"class":"chat","confidence":0.97}'},
+        {name:'llm_request', ms:112, detail:'model=chat-default\nprompt_tokens=340\nmax_tokens=2048'},
+        {name:'llm_stream', ms:760, detail:'tokens_out=98\ntok/s=129.0\nfirst_token_ms=201'},
+        {name:'sse_emit', ms:3, detail:'events=101\nterminal=done'},
+      ], {tokIn:340, tokOut:98}),
+    ];
+    this.state.selectedTraceId = this.state.traces[0].id;
+    this.state.swapLoaded = 'chat-default';
+    this.forceUpdate();
+  }
+
+  makeTrace(chatId, route, spans, usage){
+    return {id:nid(), chatId, route, spans, tokIn:usage.tokIn, tokOut:usage.tokOut, tokPerSec:(spans.find(s=>s.name==='llm_stream')||{}).ms ? Math.round(usage.tokOut/((spans.find(s=>s.name==='llm_stream').ms)/1000)) : 0};
+  }
+
+  toggleSidebar = () => this.setState(s => ({sidebarCollapsed: !s.sidebarCollapsed}));
+  goChat = () => this.setState({view:'chat'});
+  goProjects = () => this.setState({view:'projects'});
+  goCode = () => this.setState({view:'code'});
+  goSettings = () => this.setState({view:'settings'});
+  goDebug = () => this.setState({view:'debug'});
+
+  newChat = () => {
+    const id = nid();
+    this.setState(s => ({
+      chats:[{id, title:'New chat'}, ...s.chats],
+      messagesByChat: {...s.messagesByChat, [id]: []},
+      activeChatId: id, view:'chat', artifactOpen:false,
+    }));
+  };
+  selectChat = (id) => this.setState({activeChatId:id, view:'chat', artifactOpen:false});
+
+  onComposerInput = (e) => this.setState({composerText: e.target.value});
+  onComposerKeyDown = (e) => { if(e.key === 'Enter' && !e.shiftKey){ e.preventDefault(); this.sendMessage(); } };
+
+  toggleModelPicker = () => this.setState(s => ({modelPickerOpen: !s.modelPickerOpen}));
+  selectAutoModel = () => this.setState({modelOverride:null, modelPickerOpen:false});
+  selectModel = (name) => this.setState({modelOverride:name, modelPickerOpen:false});
+
+  toggleTool = (key) => this.setState(s => ({toolToggles:{...s.toolToggles, [key]: !s.toolToggles[key]}}));
+
+  sendMessage = () => {
+    const text = (this.state.composerText || '').trim();
+    if(!text || this.state.isStreaming) return;
+    const chatId = this.state.activeChatId;
+    const userMsg = {id:nid(), role:'user', content:text};
+    const cat = pickCategory(text);
+    const resp = RESPONSES[cat];
+    const targetModel = this.state.modelOverride || resp.model;
+    const source = this.state.modelOverride ? 'override' : resp.source;
+
+    this.setState(s => ({
+      composerText:'', isStreaming:true,
+      messagesByChat: {...s.messagesByChat, [chatId]: [...(s.messagesByChat[chatId]||[]), userMsg]},
+    }));
+
+    const startStream = () => {
+      const assistantId = nid();
+      const words = resp.text.split(' ');
+      let i = 0;
+      const asMsg = {id:assistantId, role:'assistant', content:'', streaming:true, model:targetModel, source, intent:resp.intent, confidence:resp.confidence, tool: cat==='tool' ? resp.tool : null, toolLabel: cat==='tool' ? resp.toolLabel : null, delegateDir: resp.delegateDir || null};
+      this.setState(s => ({messagesByChat: {...s.messagesByChat, [chatId]: [...s.messagesByChat[chatId], asMsg]}}));
+
+      const startMs = Date.now();
+      const pushWord = () => {
+        i++;
+        this.setState(s => {
+          const list = s.messagesByChat[chatId].map(m => m.id === assistantId ? {...m, content: words.slice(0,i).join(' ')} : m);
+          return {messagesByChat: {...s.messagesByChat, [chatId]: list}};
+        });
+        if(i < words.length){
+          this._streamTimer = setTimeout(pushWord, 28 + Math.random()*35);
+        } else {
+          const streamMs = Date.now() - startMs;
+          const tokOut = Math.round(words.length * 1.3);
+          const tokIn = 200 + Math.round(text.length*0.6);
+          const artifact = resp.artifact ? {title:resp.artifact.title, preview:resp.artifact.preview, source:resp.artifact.source} : null;
+          this.setState(s => {
+            const list = s.messagesByChat[chatId].map(m => m.id === assistantId ? {...m, streaming:false, tokIn, tokOut, tokPerSec: Math.round(tokOut/(streamMs/1000)), hasArtifact: !!artifact, artifact} : m);
+            const spans = [
+              {name:'route', ms: source==='classifier'?280:2, detail:`source=${source}\nintent=${resp.intent}` + (resp.confidence?`\nconfidence=${resp.confidence}`:'')},
+              ...(s.swapLoaded !== targetModel ? [{name:'swap_wait', ms:1150, detail:`GPU0 slot: ${s.swapLoaded||'none'} -> ${targetModel}`}] : []),
+              {name:'llm_request', ms:100+Math.round(Math.random()*60), detail:`model=${targetModel}\nprompt_tokens=${tokIn}`},
+              ...(cat==='tool' ? [{name:'tool', ms:220, detail:`name=web_search\nargs={"query":"llama-swap v201 changelog"}\nresult=ok`}] : []),
+              {name:'llm_stream', ms:streamMs, detail:`tokens_out=${tokOut}\ntok/s=${Math.round(tokOut/(streamMs/1000))}`},
+              {name:'sse_emit', ms:3, detail:'terminal=done'},
+            ];
+            const trace = this.makeTrace(chatId, {model:targetModel, source, intent:resp.intent, confidence:resp.confidence}, spans, {tokIn, tokOut});
+            return {
+              messagesByChat: {...s.messagesByChat, [chatId]: list},
+              isStreaming:false, artifactOpen: !!artifact, artifact, artifactTab:'preview',
+              traces: [trace, ...s.traces], selectedTraceId: trace.id,
+              swapLoaded: targetModel,
+              gpu0Used: targetModel==='chat-default'||targetModel==='reasoner' ? 21908 : (targetModel==='coder'?24500:(targetModel==='vision'?25100:6000)),
+            };
+          });
+        }
+      };
+      pushWord();
+    };
+
+    if(this.state.swapLoaded && this.state.swapLoaded !== targetModel){
+      this.setState({modelLoading: `loading ${targetModel}…`});
+      setTimeout(() => { this.setState({modelLoading:null}); startStream(); }, 900);
+    } else {
+      startStream();
+    }
+  };
+
+  setArtifactTabPreview = () => this.setState({artifactTab:'preview'});
+  setArtifactTabSource = () => this.setState({artifactTab:'source'});
+  closeArtifact = () => this.setState({artifactOpen:false});
+  openArtifactFor = (msg) => this.setState({artifactOpen:true, artifact:msg.artifact, artifactTab:'preview'});
+
+  showToast = (msg) => {
+    this.setState({toast:msg});
+    clearTimeout(this._toastTimer);
+    this._toastTimer = setTimeout(() => this.setState({toast:null}), 2200);
+  };
+
+  startEditModel = (name) => {
+    const r = ROSTER.find(m => m.name===name);
+    const cur = this.state.rosterOverrides[name] || {};
+    this.setState({editingModelName:name, editDraft:{device:cur.device||r.device, ctx:cur.ctx||r.ctx, endpoint:cur.endpoint||'127.0.0.1:8080'}});
+  };
+  cancelEditModel = () => this.setState({editingModelName:null});
+  onEditDraftChange = (field, e) => this.setState(s => ({editDraft:{...s.editDraft, [field]: e.target.value}}));
+  saveModelEdit = (name) => {
+    const draft = this.state.editDraft;
+    this.setState(s => ({rosterOverrides:{...s.rosterOverrides, [name]: {device:draft.device, ctx:parseInt(draft.ctx,10)||draft.ctx, endpoint:draft.endpoint}}, editingModelName:null}));
+    this.showToast(`Saved ${name} — regenerating llama-swap.yaml…`);
+  };
+
+  saveEndpointMap = () => this.showToast('Endpoint map saved.');
+  saveBrowserosUrl = () => this.showToast('BrowserOS URL saved.');
+  saveInstructions = () => this.showToast('Instructions saved.');
+
+  onNewMemoryText = (e) => this.setState({newMemoryText: e.target.value});
+  setNewMemoryScope = (scope) => this.setState({newMemoryScope: scope});
+  addMemory = () => {
+    const text = (this.state.newMemoryText||'').trim();
+    if(!text) return;
+    this.setState(s => ({memoryFactsState:[...s.memoryFactsState, {id:nid(), scope:s.newMemoryScope, content:text}], newMemoryText:''}));
+    this.showToast('Memory added.');
+  };
+  deleteMemory = (id) => { this.setState(s => ({memoryFactsState: s.memoryFactsState.filter(m => m.id!==id)})); this.showToast('Memory deleted.'); };
+
+  openModal = (title, body, confirmLabel, onConfirm) => this.setState({modal:{title, body, confirmLabel, onConfirm}});
+  closeModal = () => this.setState({modal:null});
+  stopPropagation = (e) => e.stopPropagation();
+  modalConfirm = () => { const m = this.state.modal; this.setState({modal:null}); if(m && m.onConfirm) m.onConfirm(); };
+
+  confirmDelegate = (dir) => {
+    this.openModal('Delegate to opencode?', `Creates a new opencode session scoped to ${dir}. The agent will read/edit files there directly — nothing runs until you confirm.`, 'Delegate', () => {
+      const id = nid();
+      this.setState(s => ({
+        codeSessions: [{id, directory:dir, host:'ubuntu', status:'active', lastEvent:'session created from chat delegation'}, ...s.codeSessions],
+        view:'code',
+      }));
+    });
+  };
+
+  confirmEnableBrowserTool = () => {
+    this.openModal('Enable Browser tool?', 'Browser actions are consequential — the agent can click, submit forms, and navigate a real logged-in browser on your host. Still requires a per-chat opt-in after this.', 'Enable', () => {
+      this.toggleToolEnabled('browser');
+    });
+  };
+
+  saveProviderKey = (key) => this.openModal('Key saved', `Written to .env as ${key.toUpperCase()}_API_KEY, redacted on read-back. Never stored in config.yaml.`, 'OK', () => {});
+  onProviderKeyInput = (key, e) => this.setState(s => ({providerKeys:{...s.providerKeys, [key]: e.target.value}}));
+  toggleOpencodeHost = (name) => this.setState(s => ({opencodeHostsState:{...s.opencodeHostsState, [name]: !s.opencodeHostsState[name]}}));
+  setConfgenLocal = () => this.setState({confgenMode:'local'});
+  setConfgenZen = () => this.setState({confgenMode:'zen'});
+  toggleBrowserosEnabled = () => this.setState(s => ({browserosEnabled: !s.browserosEnabled}));
+  onBrowserosUrlInput = (e) => this.setState({browserosUrl: e.target.value});
+  testBrowserosConnection = () => {
+    this.openModal('Connection test', `Reached BrowserOS MCP server at ${this.state.browserosUrl} — 31 tools discovered (navigate, click, scrape, screenshot, …). Still off until enabled + opted into per-chat.`, 'OK', () => {});
+  };
+
+  openProject = (id) => this.setState({activeProjectId:id, projectTab:'instructions'});
+  backToProjects = () => this.setState({activeProjectId:null});
+  setProjectTab = (tab) => this.setState({projectTab:tab});
+  onInstructionsInput = (e) => {
+    const val = e.target.value;
+    this.setState(s => ({projects: s.projects.map(p => p.id===s.activeProjectId ? {...p, instructions:val} : p)}));
+  };
+
+  newCodeSession = () => {
+    this.setState(s => ({codeSessions: [{id:nid(), directory:'/home/user/repos/new-task', host:'ubuntu', status:'active', lastEvent:'session created — awaiting first prompt'}, ...s.codeSessions]}));
+  };
+
+  setSettingsTab = (tab) => this.setState({settingsTab:tab});
+  toggleModelEnabled = (name) => this.setState(s => ({modelEnabled:{...s.modelEnabled, [name]: !s.modelEnabled[name]}}));
+  toggleClassifier = () => this.setState(s => ({classifierEnabled: !s.classifierEnabled}));
+  onConfidenceInput = (e) => this.setState({confidenceThreshold: parseFloat(e.target.value)});
+  toggleToolEnabled = (name) => this.setState(s => ({toolsState:{...s.toolsState, [name]: {...s.toolsState[name], enabled: !s.toolsState[name].enabled}}}));
+  toggleDebugEnabled = () => this.setState(s => ({debugSettingsEnabled: !s.debugSettingsEnabled}));
+  toggleStorePrompts = () => this.setState(s => ({storePrompts: !s.storePrompts}));
+  onRetentionInput = (e) => this.setState({retentionDays: parseInt(e.target.value,10)});
+  toggleShowThinking = () => this.setState(s => ({showThinking: !s.showThinking}));
+  acceptReview = (id) => this.setState(s => ({reviewQueue: s.reviewQueue.filter(r => r.id!==id)}));
+  rejectReview = (id) => this.setState(s => ({reviewQueue: s.reviewQueue.filter(r => r.id!==id)}));
+
+  selectTrace = (id) => this.setState({selectedTraceId:id, selectedSpanId:null});
+  selectSpan = (id) => this.setState({selectedSpanId:id});
+
+  toggle(on){
+    return {track:{width:34,height:19,borderRadius:10,background:on?'#6e6afd':'#2a2b35',position:'relative',cursor:'pointer',flexShrink:0,transition:'background .15s'},
+            thumb:{width:15,height:15,borderRadius:'50%',background:'#fff',position:'absolute',top:2,left:on?17:2,transition:'left .15s'}};
+  }
+  styleStr(o){
+    const unitless = new Set(['lineHeight','fontWeight','opacity','zIndex','flex','flexGrow','flexShrink','order','gridColumn','gridRow']);
+    return Object.entries(o).map(([k,v]) => k.replace(/[A-Z]/g,m=>'-'+m.toLowerCase())+':'+(typeof v==='number' && !unitless.has(k)?v+'px':v)).join(';');
+  }
+
+  renderVals(){
+    const s = this.state;
+    const navItem = (active) => this.styleStr({display:'flex',alignItems:'center',gap:10,padding:'8px 10px',borderRadius:8,cursor:'pointer',fontSize:13,color: active?'#eceef2':'#9296a3',background: active?'rgba(110,106,253,.12)':'transparent'});
+
+    const activeMsgsRaw = s.messagesByChat[s.activeChatId] || [];
+    const activeMessages = activeMsgsRaw.map(m => {
+      if(m.role === 'user'){
+        return {align:'flex-end', bubbleStyle:this.styleStr({background:'#22232c',borderRadius:'14px 14px 4px 14px',padding:'10px 14px',fontSize:14,lineHeight:1.55,maxWidth:'560px'}), content:m.content, showCursor:false, hasMeta:false, hasToolChip:false};
+      }
+      const routeColor = ROUTE_COLORS[m.source] || '#5c606d';
+      const confTxt = m.confidence ? ` ${Math.round(m.confidence*100)}%` : '';
+      return {
+        align:'flex-start',
+        bubbleStyle:this.styleStr({background:'transparent',padding:'2px 0',fontSize:14,lineHeight:1.65,maxWidth:'680px',color:'#eceef2'}),
+        content:m.content, showCursor: !!m.streaming,
+        hasToolChip: !!m.toolLabel,
+        toolChipStyle: this.styleStr({display:'flex',alignItems:'center',gap:6,fontSize:11.5,color:'#9296a3',background:'#1a1b22',border:'1px solid #2a2b35',borderRadius:8,padding:'5px 10px',width:'fit-content'}),
+        toolLabel: m.toolLabel,
+        hasMeta: !m.streaming && !!m.model,
+        model: m.model,
+        routeChipStyle: this.styleStr({color:routeColor, background:'transparent', border:`1px solid ${routeColor}55`, borderRadius:5, padding:'1px 6px'}),
+        routeLabel: `${m.source}${confTxt}`,
+        tokLabel: m.tokIn ? `${m.tokIn}→${m.tokOut} tok · ${m.tokPerSec} tok/s` : '',
+        hasArtifact: !!m.hasArtifact,
+        openArtifact: () => this.openArtifactFor(m),
+        hasDelegateChip: !m.streaming && !!m.delegateDir,
+        delegateLabel: m.delegateDir ? `Delegate to opencode → ${m.delegateDir}` : '',
+        onDelegate: () => this.confirmDelegate(m.delegateDir),
+      };
+    });
+
+    const roster = ROSTER.map(r => ({...r, ...(s.rosterOverrides[r.name]||{})}));
+    const modelPickerGroups = ['General','Reasoning','Coding','Vision'].map(cls => ({
+      name: cls,
+      items: roster.filter(r => r.cls===cls).map(r => ({
+        name:r.name, desc:r.desc, device:r.device,
+        rowStyle:this.styleStr({display:'flex',alignItems:'center',justifyContent:'space-between',padding:'8px 10px',borderRadius:6,cursor:'pointer'}),
+        badgeStyle:this.styleStr({fontSize:10,fontFamily:"'IBM Plex Mono',monospace",color:'#5c606d',background:'#22232c',padding:'2px 6px',borderRadius:4}),
+        onSelect: () => this.selectModel(r.name),
+      })),
+    }));
+
+    const currentModel = s.modelOverride || 'Auto';
+    const chats = s.chats.map(c => ({
+      title:c.title,
+      rowStyle: this.styleStr({padding:'7px 10px',borderRadius:7,cursor:'pointer',fontSize:13,color: c.id===s.activeChatId?'#eceef2':'#9296a3', background: c.id===s.activeChatId?'#1a1b22':'transparent'}),
+      onSelect: () => this.selectChat(c.id),
+    }));
+
+    const toolMeta = {web_search:'Search', browser:'Browser', file_ops:'Files'};
+    const toolChips = Object.keys(s.toolToggles).map(k => ({
+      label: (s.toolToggles[k] ? '✓ ' : '') + toolMeta[k],
+      style: this.styleStr({fontSize:11.5,padding:'4px 10px',borderRadius:20,cursor:'pointer',whiteSpace:'nowrap',border:'1px solid '+(s.toolToggles[k]?'#6e6afd':'#2a2b35'),color: s.toolToggles[k]?'#6e6afd':'#5c606d', background: s.toolToggles[k]?'rgba(110,106,253,.1)':'transparent'}),
+      onToggle: () => this.toggleTool(k),
+    }));
+
+    // Debug
+    const activeTrace = s.traces.find(t => t.id===s.selectedTraceId) || null;
+    const maxSpanMs = activeTrace ? Math.max(...activeTrace.spans.map(sp=>sp.ms)) : 1;
+    const selectedTraceSpans = activeTrace ? activeTrace.spans.map(sp => ({
+      name:sp.name, msLabel: sp.ms+'ms',
+      barStyle: this.styleStr({position:'absolute',left:0,top:0,bottom:0,borderRadius:3,background:'#6e6afd', width: Math.max(4,Math.round(sp.ms/maxSpanMs*100))+'%'}),
+      onSelect: () => this.selectSpan(sp.name+activeTrace.id),
+      _detail: sp.detail, _id: sp.name+activeTrace.id,
+    })) : [];
+    const selectedSpanObj = activeTrace ? activeTrace.spans.find(sp => (sp.name+activeTrace.id)===s.selectedSpanId) : null;
+
+    const traceRows = s.traces.map(t => ({
+      chatTitle: (s.chats.find(c=>c.id===t.chatId)||{}).title || t.chatId,
+      summary: `${t.route.model} · ${t.tokIn}→${t.tokOut} tok`,
+      style: this.styleStr({padding:'10px 14px',cursor:'pointer',borderLeft: t.id===s.selectedTraceId?'2px solid #6e6afd':'2px solid transparent', background: t.id===s.selectedTraceId?'#1a1b22':'transparent'}),
+      routeDotStyle: this.styleStr({width:6,height:6,borderRadius:'50%',background:ROUTE_COLORS[t.route.source]||'#5c606d',flexShrink:0}),
+      onSelect: () => this.selectTrace(t.id),
+    }));
+
+    const gpu0Total=24576, gpu1Total=8192;
+    const gpuBars = [
+      {label:'GPU0', text:`${(s.gpu0Used/1024).toFixed(1)}/${(gpu0Total/1024).toFixed(0)}GB`, fillStyle:this.styleStr({height:'100%',background:'#6e6afd',width:Math.round(s.gpu0Used/gpu0Total*100)+'%'})},
+      {label:'GPU1', text:`${(s.gpu1Used/1024).toFixed(1)}/${(gpu1Total/1024).toFixed(0)}GB`, fillStyle:this.styleStr({height:'100%',background:'#3ecf8e',width:Math.round(s.gpu1Used/gpu1Total*100)+'%'})},
+    ];
+
+    // Settings
+    const rosterRows = roster.map(r => {
+      const t = this.toggle(s.modelEnabled[r.name]);
+      const editing = s.editingModelName === r.name;
+      return {name:r.name, class:r.cls, device:r.device, ctx:r.ctx,
+        endpoint: (s.rosterOverrides[r.name]||{}).endpoint || '127.0.0.1:8080',
+        residentLabel: r.resident?'yes':'no', residentColor: r.resident?'#3ecf8e':'#5c606d',
+        toggleTrackStyle:this.styleStr(t.track), toggleThumbStyle:this.styleStr(t.thumb),
+        onToggle: () => this.toggleModelEnabled(r.name),
+        editing, onEdit: () => this.startEditModel(r.name),
+        draftDevice: s.editDraft.device, draftCtx: s.editDraft.ctx, draftEndpoint: s.editDraft.endpoint,
+        onDraftDevice: (e) => this.onEditDraftChange('device', e), onDraftCtx: (e) => this.onEditDraftChange('ctx', e), onDraftEndpoint: (e) => this.onEditDraftChange('endpoint', e),
+        onSaveEdit: () => this.saveModelEdit(r.name), onCancelEdit: this.cancelEditModel,
+      };
+    });
+    const toolRows = Object.entries(s.toolsState).map(([name,cfg]) => {
+      const t = this.toggle(cfg.enabled);
+      return {name, consequential:cfg.consequential, toggleTrackStyle:this.styleStr(t.track), toggleThumbStyle:this.styleStr(t.thumb),
+        onToggle: () => (name==='browser' && !cfg.enabled) ? this.confirmEnableBrowserTool() : this.toggleToolEnabled(name)};
+    });
+    const classifierT = this.toggle(s.classifierEnabled);
+    const debugT = this.toggle(s.debugSettingsEnabled);
+    const promptsT = this.toggle(s.storePrompts);
+    const thinkT = this.toggle(s.showThinking);
+
+    const settingsTabDefs = [['models','Models'],['providers','Providers'],['routing','Routing'],['tools','Tools'],['opencode','opencode'],['browseros','BrowserOS'],['memory','Memory'],['debug','Debug'],['appearance','Appearance']];
+    const settingsTabs = settingsTabDefs.map(([key,label]) => ({
+      label, style:navItem(s.settingsTab===key), onClick: () => this.setSettingsTab(key),
+    }));
+
+    const memoryFacts = s.memoryFactsState.map(m => ({...m,
+      scopeChipStyle: this.styleStr({fontSize:10,textTransform:'uppercase',color:'#5c606d',background:'#1a1b22',border:'1px solid #2a2b35',borderRadius:4,padding:'2px 6px',height:'fit-content'}),
+      onDelete: () => this.deleteMemory(m.id),
+    }));
+    const memoryScopeOptions = ['user','project','global'].map(sc => ({
+      label:sc, style: this.styleStr({fontSize:11.5,padding:'6px 10px',borderRadius:6,cursor:'pointer',border:'1px solid '+(s.newMemoryScope===sc?'#6e6afd':'#2a2b35'),color: s.newMemoryScope===sc?'#eceef2':'#9296a3', background: s.newMemoryScope===sc?'rgba(110,106,253,.12)':'transparent'}),
+      onClick: () => this.setNewMemoryScope(sc),
+    }));
+
+    const reviewQueue = s.reviewQueue.map(rq => ({...rq, onAccept: () => this.acceptReview(rq.id), onReject: () => this.rejectReview(rq.id)}));
+
+    // Projects
+    const activeProject = s.projects.find(p => p.id===s.activeProjectId) || null;
+    const projects = s.projects.map(p => ({name:p.name, fileCount:p.files.length, chatCount:p.chats.length, onOpen: () => this.openProject(p.id)}));
+    const projectTabDefs = [['instructions','Instructions'],['files','Files'],['chats','Chats'],['memory','Memory']];
+    const projectTabs = projectTabDefs.map(([key,label]) => ({
+      label, style: this.styleStr({padding:'8px 14px',fontSize:13,cursor:'pointer',color: s.projectTab===key?'#eceef2':'#9296a3',borderBottom: s.projectTab===key?'2px solid #6e6afd':'2px solid transparent'}),
+      onClick: () => this.setProjectTab(key),
+    }));
+    const activeProjectFiles = activeProject ? activeProject.files.map(f => ({
+      path:f.path, statusLabel: f.ingested?`ingested · ${f.chunks} chunks`:'pending',
+      statusStyle: this.styleStr({fontSize:11,color: f.ingested?'#3ecf8e':'#e8b339'}),
+    })) : [];
+    const activeProjectChats = activeProject ? activeProject.chats.map(t => ({title:t, onOpen: () => {}})) : [];
+
+    // Code
+    const codeSessions = s.codeSessions.map(cs => ({...cs, statusColor: cs.status==='active'?'#3ecf8e':'#5c606d'}));
+
+    // Artifact
+    const artifact = s.artifact || {title:'', preview:'', source:''};
+
+    return {
+      sidebarStyle: this.styleStr({width: s.sidebarCollapsed?60:224, flexShrink:0, height:'100%', background:'#131419', borderRight:'1px solid #2a2b35', display:'flex', flexDirection:'column', transition:'width .15s'}),
+      sidebarCollapsed: s.sidebarCollapsed, toggleSidebar: this.toggleSidebar,
+      navBtnStyle: this.styleStr({display:'flex',alignItems:'center',gap:10,padding:'9px 10px',borderRadius:8,cursor:'pointer',fontSize:13,color:'#eceef2',border:'1px solid #2a2b35',background:'#1a1b22'}),
+      newChat: this.newChat,
+      goChat:this.goChat, goProjects:this.goProjects, goCode:this.goCode, goSettings:this.goSettings, goDebug:this.goDebug,
+      navItemStyle_chat: navItem(s.view==='chat'), navItemStyle_projects: navItem(s.view==='projects'), navItemStyle_code: navItem(s.view==='code'), navItemStyle_settings: navItem(s.view==='settings'), navItemStyle_debug: navItem(s.view==='debug'),
+      chats,
+      isChatView: s.view==='chat', isProjectsView: s.view==='projects', isCodeView: s.view==='code', isSettingsView: s.view==='settings', isDebugView: s.view==='debug',
+      activeChatTitle: (s.chats.find(c=>c.id===s.activeChatId)||{}).title || 'New chat',
+      activeMessages,
+      modelLoadingLabel: s.modelLoading,
+      toolChips,
+      composerText: s.composerText, onComposerInput: this.onComposerInput, onComposerKeyDown: this.onComposerKeyDown,
+      modelPickerBtnStyle: this.styleStr({display:'flex',alignItems:'center',gap:6,fontSize:12,color:'#9296a3',cursor:'pointer',padding:'5px 8px',borderRadius:6,fontFamily:"'IBM Plex Mono',monospace"}),
+      modelPickerDotColor: s.modelOverride ? ROUTE_COLORS.override : '#6e6afd',
+      selectedModelLabel: currentModel,
+      toggleModelPicker: this.toggleModelPicker, modelPickerOpen: s.modelPickerOpen,
+      autoModelRowStyle: this.styleStr({display:'flex',justifyContent:'space-between',padding:'8px 10px',borderRadius:6,cursor:'pointer',fontSize:13,marginBottom:4,background: !s.modelOverride?'rgba(110,106,253,.12)':'transparent'}),
+      selectAutoModel: this.selectAutoModel,
+      modelPickerGroups,
+      sendBtnStyle: this.styleStr({width:28,height:28,borderRadius:8,background:'#6e6afd',color:'#fff',display:'flex',alignItems:'center',justifyContent:'center',cursor:'pointer'}),
+      sendMessage: this.sendMessage,
+      artifactOpen: s.artifactOpen,
+      artifactTabPreviewStyle: this.styleStr({fontSize:12.5,padding:'5px 10px',borderRadius:6,cursor:'pointer',color: s.artifactTab==='preview'?'#eceef2':'#5c606d', background: s.artifactTab==='preview'?'#22232c':'transparent'}),
+      artifactTabSourceStyle: this.styleStr({fontSize:12.5,padding:'5px 10px',borderRadius:6,cursor:'pointer',color: s.artifactTab==='source'?'#eceef2':'#5c606d', background: s.artifactTab==='source'?'#22232c':'transparent'}),
+      setArtifactTabPreview: this.setArtifactTabPreview, setArtifactTabSource: this.setArtifactTabSource, closeArtifact: this.closeArtifact,
+      artifactTitle: artifact.title,
+      artifactIsPreviewTab: s.artifactTab==='preview',
+      artifactPreviewStyle: this.styleStr({fontFamily:"'IBM Plex Mono',monospace",fontSize:12,color:'#c9cbd4',whiteSpace:'pre-wrap',lineHeight:1.6,background:'#0e0f13',border:'1px solid #2a2b35',borderRadius:8,padding:14}),
+      artifactPreviewContent: artifact.preview,
+      artifactSourceContent: artifact.source,
+
+      isProjectsView: s.view==='projects', activeProjectId: s.activeProjectId, projects,
+      activeProjectName: activeProject ? activeProject.name : '',
+      backToProjects: this.backToProjects,
+      projectTabs,
+      isProjectTabInstructions: s.projectTab==='instructions', isProjectTabFiles: s.projectTab==='files', isProjectTabChats: s.projectTab==='chats', isProjectTabMemory: s.projectTab==='memory',
+      activeProjectInstructions: activeProject ? activeProject.instructions : '',
+      onInstructionsInput: this.onInstructionsInput,
+      activeProjectFiles, activeProjectChats,
+      activeProjectMemories: activeProject ? activeProject.memories : [],
+
+      saveBtnStyle: this.styleStr({fontSize:12.5,color:'#eceef2',background:'#22232c',border:'1px solid #2a2b35',padding:'7px 14px',borderRadius:6,cursor:'pointer',width:'fit-content'}),
+      addMemoryBtnStyle: this.styleStr({fontSize:12.5,color:'#fff',background:'#6e6afd',padding:'8px 14px',borderRadius:6,cursor:'pointer',whiteSpace:'nowrap'}),
+      newSessionBtnStyle: this.styleStr({marginLeft:'auto',fontSize:12.5,color:'#eceef2',background:'#6e6afd',padding:'8px 14px',borderRadius:8,cursor:'pointer'}),
+      newCodeSession: this.newCodeSession, codeSessions,
+
+      settingsTabs,
+      isSettingsModels: s.settingsTab==='models', isSettingsRouting: s.settingsTab==='routing', isSettingsTools: s.settingsTab==='tools', isSettingsMemory: s.settingsTab==='memory', isSettingsDebug: s.settingsTab==='debug', isSettingsAppearance: s.settingsTab==='appearance',
+      isSettingsProviders: s.settingsTab==='providers', isSettingsOpencode: s.settingsTab==='opencode', isSettingsBrowserOS: s.settingsTab==='browseros',
+      saveKeyBtnStyle: this.styleStr({fontSize:12,color:'#eceef2',background:'#22232c',border:'1px solid #2a2b35',padding:'7px 14px',borderRadius:6,cursor:'pointer'}),
+      providerRows: [
+        {key:'tavily', name:'Tavily', placeholder:'tvly-••••••••', future:false},
+        {key:'anthropic', name:'Anthropic', placeholder:'sk-ant-••••••••', future:true},
+        {key:'opencode_zen', name:'opencode zen', placeholder:'zen-••••••••', future:false},
+      ].map(p => ({name:p.name, future:p.future, placeholder:p.placeholder, value:s.providerKeys[p.key],
+        statusLabel: s.providerKeys[p.key] ? 'configured' : 'not set', statusStyle: this.styleStr({fontSize:10,color: s.providerKeys[p.key]?'#3ecf8e':'#5c606d', background:'#22232c', padding:'2px 6px', borderRadius:4}),
+        onInput: (e) => this.onProviderKeyInput(p.key, e), onSave: () => this.saveProviderKey(p.key)})),
+      opencodeHosts: [
+        {name:'ubuntu', url:'http://127.0.0.1:4096'},
+        {name:'windows', url:'http://192.168.1.50:4097'},
+      ].map(h => { const t = this.toggle(s.opencodeHostsState[h.name]); return {name:h.name, url:h.url, toggleTrackStyle:this.styleStr(t.track), toggleThumbStyle:this.styleStr(t.thumb), onToggle: () => this.toggleOpencodeHost(h.name)}; }),
+      allowedRoots: ['/home/user/repos', '/home/user/AI-Mega-App/projects', '/home/john/llm-stack'],
+      confgenLocalStyle: this.styleStr({fontSize:12.5,padding:'8px 14px',borderRadius:8,cursor:'pointer',border:'1px solid '+(s.confgenMode==='local'?'#6e6afd':'#2a2b35'),color: s.confgenMode==='local'?'#eceef2':'#9296a3', background: s.confgenMode==='local'?'rgba(110,106,253,.12)':'transparent'}),
+      confgenZenStyle: this.styleStr({fontSize:12.5,padding:'8px 14px',borderRadius:8,cursor:'pointer',border:'1px solid '+(s.confgenMode==='zen'?'#6e6afd':'#2a2b35'),color: s.confgenMode==='zen'?'#eceef2':'#9296a3', background: s.confgenMode==='zen'?'rgba(110,106,253,.12)':'transparent'}),
+      setConfgenLocal: this.setConfgenLocal, setConfgenZen: this.setConfgenZen,
+      browserosEnabledTrackStyle: this.styleStr(this.toggle(s.browserosEnabled).track), browserosEnabledThumbStyle: this.styleStr(this.toggle(s.browserosEnabled).thumb), toggleBrowserosEnabled: this.toggleBrowserosEnabled,
+      browserosUrl: s.browserosUrl, onBrowserosUrlInput: this.onBrowserosUrlInput,
+      testConnectionBtnStyle: this.styleStr({fontSize:12,color:'#eceef2',background:'#6e6afd',padding:'7px 14px',borderRadius:6,cursor:'pointer',whiteSpace:'nowrap'}),
+      testBrowserosConnection: this.testBrowserosConnection,
+      browserTools: ['navigate','click','type','scrape','screenshot','get_dom','scroll','wait_for','extract_text','fill_form'],
+      modalOpen: !!s.modal, modalTitle: s.modal ? s.modal.title : '', modalBody: s.modal ? s.modal.body : '', modalConfirmLabel: s.modal ? s.modal.confirmLabel : 'OK',
+      closeModal: this.closeModal, stopPropagation: this.stopPropagation, modalConfirm: this.modalConfirm,
+      rosterRows,
+      classifierToggleTrackStyle: this.styleStr(classifierT.track), classifierToggleThumbStyle: this.styleStr(classifierT.thumb), toggleClassifier: this.toggleClassifier,
+      confidenceThresholdLabel: s.confidenceThreshold.toFixed(2), confidenceThreshold: s.confidenceThreshold, onConfidenceInput: this.onConfidenceInput,
+      routingRules: [{keywords:'write code, stack trace', intent:'code_task'},{keywords:'stock price, weather', intent:'tool_call_needed'},{keywords:'grep, find files', intent:'code_task'}],
+      toolRows,
+      reviewQueue, memoryFacts, memoryScopeOptions,
+      newMemoryText: s.newMemoryText, onNewMemoryText: this.onNewMemoryText, addMemory: this.addMemory,
+      endpointMap: s.endpointMap, onEndpointMapInput: (e) => this.setState({endpointMap:e.target.value}), saveEndpointMap: this.saveEndpointMap,
+      saveBrowserosUrl: this.saveBrowserosUrl, saveInstructions: this.saveInstructions,
+      toastVisible: !!s.toast, toastMessage: s.toast || '',
+      debugEnabledToggleTrackStyle: this.styleStr(debugT.track), debugEnabledToggleThumbStyle: this.styleStr(debugT.thumb), toggleDebugEnabled: this.toggleDebugEnabled,
+      storePromptsToggleTrackStyle: this.styleStr(promptsT.track), storePromptsToggleThumbStyle: this.styleStr(promptsT.thumb), toggleStorePrompts: this.toggleStorePrompts,
+      retentionDays: s.retentionDays, onRetentionInput: this.onRetentionInput,
+      showThinkingToggleTrackStyle: this.styleStr(thinkT.track), showThinkingToggleThumbStyle: this.styleStr(thinkT.thumb), toggleShowThinking: this.toggleShowThinking,
+
+      gpuBars, swapStateLabel: s.swapLoaded || 'none',
+      traceRows,
+      selectedTrace: activeTrace,
+      selectedTraceId: activeTrace ? activeTrace.id : '',
+      selectedTraceRouteChipStyle: activeTrace ? this.styleStr({color:ROUTE_COLORS[activeTrace.route.source], border:`1px solid ${ROUTE_COLORS[activeTrace.route.source]}55`, borderRadius:5, padding:'2px 8px', fontSize:11.5}) : '',
+      selectedTraceRouteLabel: activeTrace ? activeTrace.route.source + (activeTrace.route.confidence?` ${Math.round(activeTrace.route.confidence*100)}%`:'') : '',
+      selectedTraceModel: activeTrace ? activeTrace.route.model : '',
+      selectedTraceConfidence: activeTrace ? 'intent: '+activeTrace.route.intent : '',
+      selectedTraceTokens: activeTrace ? `${activeTrace.tokIn}→${activeTrace.tokOut} tok · ${activeTrace.tokPerSec} tok/s` : '',
+      selectedTraceSpans,
+      selectedSpanDetail: selectedSpanObj ? {name:selectedSpanObj.name, detail:selectedSpanObj.detail} : null,
+    };
+  }
+}
+
+</script>
+</body>
+</html>

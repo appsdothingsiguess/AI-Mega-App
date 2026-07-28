@@ -1,0 +1,18 @@
+{
+  "id": "thread-1784095938-010715",
+  "title": null,
+  "created_at": "2026-07-15T06:12:18.010715+00:00",
+  "messages": [
+    {
+      "role": "user",
+      "content": "list files in this project directory",
+      "created_at": "2026-07-15T06:12:22.755014+00:00"
+    },
+    {
+      "role": "assistant",
+      "content": "Here are the files and directories in the current project directory:\n\n**Directories:**\n- `.prompter`\n- `docs`\n\n**Files:**\n- `instructions.md` (151 bytes)\n- `project.yaml` (150 bytes)\n\nLet me know if you'd like details about any specific file!",
+      "created_at": "2026-07-15T06:12:45.809326+00:00",
+      "model": "local/tool-calling-medium"
+    }
+  ]
+}

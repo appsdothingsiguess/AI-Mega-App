@@ -1,0 +1,164 @@
+{
+  "timestamp": "20260715T010040Z",
+  "mode": "ids",
+  "variant": "local",
+  "gold_map": "gold_map.json",
+  "ollama_base_url": "http://192.168.0.240:11434",
+  "configured_classifier": "ollama/qwen2.5:1.5b-32k",
+  "models": [
+    {
+      "classifier_model": "qwen2.5:1.5b-32k",
+      "n": 33,
+      "composite": 0.8484848484848485,
+      "intent_acc": 0.8484848484848485,
+      "tools_acc": 0.8787878787878788,
+      "model_acc": 0.8484848484848485,
+      "tier_acc": 0.8484848484848485,
+      "latency_mean_ms": 1399.4,
+      "latency_median_ms": 1314.96,
+      "intent_confusion": {
+        "general_chat": {
+          "general_chat": 2,
+          "web_search": 1
+        },
+        "web_search": {
+          "web_search": 2,
+          "general_chat": 1
+        },
+        "deep_research": {
+          "deep_research": 3
+        },
+        "coding_basic": {
+          "coding_basic": 3
+        },
+        "coding_advanced": {
+          "coding_advanced": 3
+        },
+        "bash": {
+          "bash": 3
+        },
+        "pdf_gen": {
+          "pdf_gen": 3
+        },
+        "file_ops": {
+          "coding_basic": 2,
+          "file_ops": 1
+        },
+        "vision": {
+          "vision": 3
+        },
+        "reasoning_medium": {
+          "reasoning_medium": 2,
+          "reasoning_heavy": 1
+        },
+        "reasoning_heavy": {
+          "reasoning_heavy": 3
+        }
+      },
+      "model_confusion": {
+        "local/qwen3-8b": {
+          "local/qwen3-8b": 2,
+          "local/tool-calling-medium": 1
+        },
+        "local/tool-calling-medium": {
+          "local/tool-calling-medium": 9,
+          "local/qwen3-8b": 1,
+          "local/coding-light": 2
+        },
+        "local/reasoning-heavy": {
+          "local/reasoning-heavy": 6
+        },
+        "local/coding-light": {
+          "local/coding-light": 3
+        },
+        "local/coding-heavy": {
+          "local/coding-heavy": 3
+        },
+        "local/vision-medium": {
+          "local/vision-medium": 3
+        },
+        "local/reasoning-medium": {
+          "local/reasoning-medium": 2,
+          "local/reasoning-heavy": 1
+        }
+      }
+    }
+  ],
+  "best": {
+    "classifier_model": "qwen2.5:1.5b-32k",
+    "n": 33,
+    "composite": 0.8484848484848485,
+    "intent_acc": 0.8484848484848485,
+    "tools_acc": 0.8787878787878788,
+    "model_acc": 0.8484848484848485,
+    "tier_acc": 0.8484848484848485,
+    "latency_mean_ms": 1399.4,
+    "latency_median_ms": 1314.96,
+    "intent_confusion": {
+      "general_chat": {
+        "general_chat": 2,
+        "web_search": 1
+      },
+      "web_search": {
+        "web_search": 2,
+        "general_chat": 1
+      },
+      "deep_research": {
+        "deep_research": 3
+      },
+      "coding_basic": {
+        "coding_basic": 3
+      },
+      "coding_advanced": {
+        "coding_advanced": 3
+      },
+      "bash": {
+        "bash": 3
+      },
+      "pdf_gen": {
+        "pdf_gen": 3
+      },
+      "file_ops": {
+        "coding_basic": 2,
+        "file_ops": 1
+      },
+      "vision": {
+        "vision": 3
+      },
+      "reasoning_medium": {
+        "reasoning_medium": 2,
+        "reasoning_heavy": 1
+      },
+      "reasoning_heavy": {
+        "reasoning_heavy": 3
+      }
+    },
+    "model_confusion": {
+      "local/qwen3-8b": {
+        "local/qwen3-8b": 2,
+        "local/tool-calling-medium": 1
+      },
+      "local/tool-calling-medium": {
+        "local/tool-calling-medium": 9,
+        "local/qwen3-8b": 1,
+        "local/coding-light": 2
+      },
+      "local/reasoning-heavy": {
+        "local/reasoning-heavy": 6
+      },
+      "local/coding-light": {
+        "local/coding-light": 3
+      },
+      "local/coding-heavy": {
+        "local/coding-heavy": 3
+      },
+      "local/vision-medium": {
+        "local/vision-medium": 3
+      },
+      "local/reasoning-medium": {
+        "local/reasoning-medium": 2,
+        "local/reasoning-heavy": 1
+      }
+    }
+  }
+}

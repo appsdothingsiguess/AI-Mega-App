@@ -1,0 +1,146 @@
+{
+  "timestamp": "20260715T015040Z",
+  "mode": "ids",
+  "variant": "local",
+  "gold_map": "gold_map.json",
+  "ollama_base_url": "http://192.168.0.240:11434",
+  "configured_classifier": "ollama/qwen2.5:1.5b-32k",
+  "models": [
+    {
+      "classifier_model": "qwen2.5:3b",
+      "n": 30,
+      "composite": 0.8,
+      "intent_acc": 0.9,
+      "tools_acc": 0.8666666666666667,
+      "model_acc": 0.9,
+      "tier_acc": 0.9,
+      "latency_mean_ms": 316.3,
+      "latency_median_ms": 286.81,
+      "intent_confusion": {
+        "general_chat": {
+          "general_chat": 3
+        },
+        "web_search": {
+          "web_search": 3
+        },
+        "deep_research": {
+          "deep_research": 3
+        },
+        "coding_advanced": {
+          "coding_basic": 1,
+          "coding_advanced": 3
+        },
+        "bash": {
+          "bash": 3,
+          "coding_basic": 1
+        },
+        "pdf_gen": {
+          "pdf_gen": 2
+        },
+        "file_ops": {
+          "file_ops": 2
+        },
+        "vision": {
+          "vision": 5
+        },
+        "reasoning_medium": {
+          "reasoning_medium": 3
+        },
+        "reasoning_heavy": {
+          "reasoning_medium": 1
+        }
+      },
+      "model_confusion": {
+        "local/qwen3-8b": {
+          "local/qwen3-8b": 3
+        },
+        "local/tool-calling-medium": {
+          "local/tool-calling-medium": 10,
+          "local/coding-light": 1
+        },
+        "local/reasoning-heavy": {
+          "local/reasoning-heavy": 3,
+          "local/reasoning-medium": 1
+        },
+        "local/coding-heavy": {
+          "local/coding-light": 1,
+          "local/coding-heavy": 3
+        },
+        "local/vision-medium": {
+          "local/vision-medium": 5
+        },
+        "local/reasoning-medium": {
+          "local/reasoning-medium": 3
+        }
+      }
+    }
+  ],
+  "best": {
+    "classifier_model": "qwen2.5:3b",
+    "n": 30,
+    "composite": 0.8,
+    "intent_acc": 0.9,
+    "tools_acc": 0.8666666666666667,
+    "model_acc": 0.9,
+    "tier_acc": 0.9,
+    "latency_mean_ms": 316.3,
+    "latency_median_ms": 286.81,
+    "intent_confusion": {
+      "general_chat": {
+        "general_chat": 3
+      },
+      "web_search": {
+        "web_search": 3
+      },
+      "deep_research": {
+        "deep_research": 3
+      },
+      "coding_advanced": {
+        "coding_basic": 1,
+        "coding_advanced": 3
+      },
+      "bash": {
+        "bash": 3,
+        "coding_basic": 1
+      },
+      "pdf_gen": {
+        "pdf_gen": 2
+      },
+      "file_ops": {
+        "file_ops": 2
+      },
+      "vision": {
+        "vision": 5
+      },
+      "reasoning_medium": {
+        "reasoning_medium": 3
+      },
+      "reasoning_heavy": {
+        "reasoning_medium": 1
+      }
+    },
+    "model_confusion": {
+      "local/qwen3-8b": {
+        "local/qwen3-8b": 3
+      },
+      "local/tool-calling-medium": {
+        "local/tool-calling-medium": 10,
+        "local/coding-light": 1
+      },
+      "local/reasoning-heavy": {
+        "local/reasoning-heavy": 3,
+        "local/reasoning-medium": 1
+      },
+      "local/coding-heavy": {
+        "local/coding-light": 1,
+        "local/coding-heavy": 3
+      },
+      "local/vision-medium": {
+        "local/vision-medium": 5
+      },
+      "local/reasoning-medium": {
+        "local/reasoning-medium": 3
+      }
+    }
+  }
+}

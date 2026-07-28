@@ -1,0 +1,172 @@
+{
+  "timestamp": "20260715T020452Z",
+  "mode": "full",
+  "variant": "local",
+  "gold_map": "gold_map.json",
+  "ollama_base_url": "http://192.168.0.240:11434",
+  "configured_classifier": "ollama/qwen2.5:1.5b-32k",
+  "models": [
+    {
+      "classifier_model": "qwen2.5:3b",
+      "n": 253,
+      "composite": 0.8616600790513834,
+      "intent_acc": 0.9446640316205533,
+      "tools_acc": 0.8853754940711462,
+      "model_acc": 0.9525691699604744,
+      "tier_acc": 0.9525691699604744,
+      "latency_mean_ms": 313.85,
+      "latency_median_ms": 300.05,
+      "intent_confusion": {
+        "general_chat": {
+          "general_chat": 23
+        },
+        "web_search": {
+          "web_search": 23
+        },
+        "deep_research": {
+          "deep_research": 23
+        },
+        "coding_basic": {
+          "coding_basic": 23
+        },
+        "coding_advanced": {
+          "coding_advanced": 23
+        },
+        "bash": {
+          "bash": 18,
+          "file_ops": 2,
+          "coding_advanced": 2,
+          "coding_basic": 1
+        },
+        "pdf_gen": {
+          "pdf_gen": 23
+        },
+        "file_ops": {
+          "file_ops": 22,
+          "coding_basic": 1
+        },
+        "vision": {
+          "vision": 21,
+          "general_chat": 2
+        },
+        "reasoning_medium": {
+          "reasoning_medium": 17,
+          "reasoning_heavy": 4,
+          "general_chat": 2
+        },
+        "reasoning_heavy": {
+          "reasoning_heavy": 23
+        }
+      },
+      "model_confusion": {
+        "local/qwen3-8b": {
+          "local/qwen3-8b": 23
+        },
+        "local/tool-calling-medium": {
+          "local/tool-calling-medium": 88,
+          "local/coding-heavy": 2,
+          "local/coding-light": 2
+        },
+        "local/reasoning-heavy": {
+          "local/reasoning-heavy": 46
+        },
+        "local/coding-light": {
+          "local/coding-light": 23
+        },
+        "local/coding-heavy": {
+          "local/coding-heavy": 23
+        },
+        "local/vision-medium": {
+          "local/vision-medium": 21,
+          "local/qwen3-8b": 2
+        },
+        "local/reasoning-medium": {
+          "local/reasoning-medium": 17,
+          "local/reasoning-heavy": 4,
+          "local/qwen3-8b": 2
+        }
+      }
+    }
+  ],
+  "best": {
+    "classifier_model": "qwen2.5:3b",
+    "n": 253,
+    "composite": 0.8616600790513834,
+    "intent_acc": 0.9446640316205533,
+    "tools_acc": 0.8853754940711462,
+    "model_acc": 0.9525691699604744,
+    "tier_acc": 0.9525691699604744,
+    "latency_mean_ms": 313.85,
+    "latency_median_ms": 300.05,
+    "intent_confusion": {
+      "general_chat": {
+        "general_chat": 23
+      },
+      "web_search": {
+        "web_search": 23
+      },
+      "deep_research": {
+        "deep_research": 23
+      },
+      "coding_basic": {
+        "coding_basic": 23
+      },
+      "coding_advanced": {
+        "coding_advanced": 23
+      },
+      "bash": {
+        "bash": 18,
+        "file_ops": 2,
+        "coding_advanced": 2,
+        "coding_basic": 1
+      },
+      "pdf_gen": {
+        "pdf_gen": 23
+      },
+      "file_ops": {
+        "file_ops": 22,
+        "coding_basic": 1
+      },
+      "vision": {
+        "vision": 21,
+        "general_chat": 2
+      },
+      "reasoning_medium": {
+        "reasoning_medium": 17,
+        "reasoning_heavy": 4,
+        "general_chat": 2
+      },
+      "reasoning_heavy": {
+        "reasoning_heavy": 23
+      }
+    },
+    "model_confusion": {
+      "local/qwen3-8b": {
+        "local/qwen3-8b": 23
+      },
+      "local/tool-calling-medium": {
+        "local/tool-calling-medium": 88,
+        "local/coding-heavy": 2,
+        "local/coding-light": 2
+      },
+      "local/reasoning-heavy": {
+        "local/reasoning-heavy": 46
+      },
+      "local/coding-light": {
+        "local/coding-light": 23
+      },
+      "local/coding-heavy": {
+        "local/coding-heavy": 23
+      },
+      "local/vision-medium": {
+        "local/vision-medium": 21,
+        "local/qwen3-8b": 2
+      },
+      "local/reasoning-medium": {
+        "local/reasoning-medium": 17,
+        "local/reasoning-heavy": 4,
+        "local/qwen3-8b": 2
+      }
+    }
+  }
+}

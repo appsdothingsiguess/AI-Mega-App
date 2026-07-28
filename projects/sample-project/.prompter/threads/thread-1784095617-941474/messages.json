@@ -1,0 +1,18 @@
+{
+  "id": "thread-1784095617-941474",
+  "title": null,
+  "created_at": "2026-07-15T06:06:57.942477+00:00",
+  "messages": [
+    {
+      "role": "user",
+      "content": "fetch https://example.com and summarize",
+      "created_at": "2026-07-15T06:07:06.982370+00:00"
+    },
+    {
+      "role": "assistant",
+      "content": "I cannot fetch the content of https://example.com directly, as the provided tools only include a web search function (web_search) that is designed for searching the web, not retrieving specific webpage content. The task requires a tool to fetch webpage data (e.g., via HTTP GET), which is not available here. Let me know if you'd like assistance with other tasks!",
+      "created_at": "2026-07-15T06:07:18.219378+00:00",
+      "model": "local/tool-calling-medium"
+    }
+  ]
+}

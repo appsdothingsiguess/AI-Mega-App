@@ -1,0 +1,160 @@
+{
+  "timestamp": "20260715T012603Z",
+  "mode": "ids",
+  "variant": "local",
+  "gold_map": "gold_map.json",
+  "ollama_base_url": "http://192.168.0.240:11434",
+  "configured_classifier": "ollama/qwen2.5:1.5b-32k",
+  "models": [
+    {
+      "classifier_model": "qwen2.5:1.5b-32k",
+      "n": 33,
+      "composite": 0.8787878787878788,
+      "intent_acc": 0.9090909090909091,
+      "tools_acc": 0.9090909090909091,
+      "model_acc": 0.9090909090909091,
+      "tier_acc": 0.9090909090909091,
+      "latency_mean_ms": 1477.75,
+      "latency_median_ms": 1526.25,
+      "intent_confusion": {
+        "general_chat": {
+          "general_chat": 3
+        },
+        "web_search": {
+          "web_search": 3
+        },
+        "deep_research": {
+          "deep_research": 2
+        },
+        "coding_basic": {
+          "coding_basic": 1
+        },
+        "coding_advanced": {
+          "coding_advanced": 4,
+          "coding_basic": 1
+        },
+        "bash": {
+          "bash": 1
+        },
+        "pdf_gen": {
+          "pdf_gen": 3
+        },
+        "file_ops": {
+          "general_chat": 1,
+          "file_ops": 2
+        },
+        "vision": {
+          "vision": 3
+        },
+        "reasoning_medium": {
+          "reasoning_medium": 4,
+          "coding_advanced": 1
+        },
+        "reasoning_heavy": {
+          "reasoning_heavy": 4
+        }
+      },
+      "model_confusion": {
+        "local/qwen3-8b": {
+          "local/qwen3-8b": 3
+        },
+        "local/tool-calling-medium": {
+          "local/tool-calling-medium": 9,
+          "local/qwen3-8b": 1
+        },
+        "local/reasoning-heavy": {
+          "local/reasoning-heavy": 6
+        },
+        "local/coding-light": {
+          "local/coding-light": 1
+        },
+        "local/coding-heavy": {
+          "local/coding-heavy": 4,
+          "local/coding-light": 1
+        },
+        "local/vision-medium": {
+          "local/vision-medium": 3
+        },
+        "local/reasoning-medium": {
+          "local/reasoning-medium": 4,
+          "local/coding-heavy": 1
+        }
+      }
+    }
+  ],
+  "best": {
+    "classifier_model": "qwen2.5:1.5b-32k",
+    "n": 33,
+    "composite": 0.8787878787878788,
+    "intent_acc": 0.9090909090909091,
+    "tools_acc": 0.9090909090909091,
+    "model_acc": 0.9090909090909091,
+    "tier_acc": 0.9090909090909091,
+    "latency_mean_ms": 1477.75,
+    "latency_median_ms": 1526.25,
+    "intent_confusion": {
+      "general_chat": {
+        "general_chat": 3
+      },
+      "web_search": {
+        "web_search": 3
+      },
+      "deep_research": {
+        "deep_research": 2
+      },
+      "coding_basic": {
+        "coding_basic": 1
+      },
+      "coding_advanced": {
+        "coding_advanced": 4,
+        "coding_basic": 1
+      },
+      "bash": {
+        "bash": 1
+      },
+      "pdf_gen": {
+        "pdf_gen": 3
+      },
+      "file_ops": {
+        "general_chat": 1,
+        "file_ops": 2
+      },
+      "vision": {
+        "vision": 3
+      },
+      "reasoning_medium": {
+        "reasoning_medium": 4,
+        "coding_advanced": 1
+      },
+      "reasoning_heavy": {
+        "reasoning_heavy": 4
+      }
+    },
+    "model_confusion": {
+      "local/qwen3-8b": {
+        "local/qwen3-8b": 3
+      },
+      "local/tool-calling-medium": {
+        "local/tool-calling-medium": 9,
+        "local/qwen3-8b": 1
+      },
+      "local/reasoning-heavy": {
+        "local/reasoning-heavy": 6
+      },
+      "local/coding-light": {
+        "local/coding-light": 1
+      },
+      "local/coding-heavy": {
+        "local/coding-heavy": 4,
+        "local/coding-light": 1
+      },
+      "local/vision-medium": {
+        "local/vision-medium": 3
+      },
+      "local/reasoning-medium": {
+        "local/reasoning-medium": 4,
+        "local/coding-heavy": 1
+      }
+    }
+  }
+}

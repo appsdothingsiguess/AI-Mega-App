@@ -1,0 +1,208 @@
+{
+  "timestamp": "20260715T002731Z",
+  "mode": "full",
+  "variant": "remote",
+  "gold_map": "gold_map.remote.json",
+  "ollama_base_url": "http://192.168.0.240:11434",
+  "configured_classifier": "ollama/qwen2.5:1.5b-32k",
+  "models": [
+    {
+      "classifier_model": "qwen2.5:1.5b-32k",
+      "n": 253,
+      "composite": 0.8023715415019763,
+      "intent_acc": 0.8932806324110671,
+      "tools_acc": 0.8300395256916996,
+      "model_acc": 0.8932806324110671,
+      "tier_acc": 0.9090909090909091,
+      "latency_mean_ms": 1428.51,
+      "latency_median_ms": 1453.1,
+      "intent_confusion": {
+        "general_chat": {
+          "general_chat": 21,
+          "reasoning_heavy": 1,
+          "web_search": 1
+        },
+        "web_search": {
+          "web_search": 22,
+          "vision": 1
+        },
+        "deep_research": {
+          "deep_research": 23
+        },
+        "coding_basic": {
+          "coding_basic": 21,
+          "bash": 1,
+          "general_chat": 1
+        },
+        "coding_advanced": {
+          "coding_advanced": 20,
+          "web_search": 3
+        },
+        "bash": {
+          "bash": 23
+        },
+        "pdf_gen": {
+          "pdf_gen": 21,
+          "general_chat": 1,
+          "file_ops": 1
+        },
+        "file_ops": {
+          "file_ops": 20,
+          "general_chat": 2,
+          "coding_basic": 1
+        },
+        "vision": {
+          "vision": 21,
+          "web_search": 1,
+          "general_chat": 1
+        },
+        "reasoning_medium": {
+          "reasoning_medium": 14,
+          "general_chat": 6,
+          "reasoning_heavy": 3
+        },
+        "reasoning_heavy": {
+          "reasoning_heavy": 20,
+          "general_chat": 2,
+          "deep_research": 1
+        }
+      },
+      "model_confusion": {
+        "remote/deepseek-v4-pro": {
+          "remote/deepseek-v4-pro": 41,
+          "local/reasoning-heavy": 1,
+          "remote/kimi-k2-6": 4
+        },
+        "remote/kimi-k2-6": {
+          "remote/kimi-k2-6": 45,
+          "local/vision-medium": 1
+        },
+        "local/coding-light": {
+          "local/coding-light": 21,
+          "local/tool-calling-medium": 1,
+          "remote/deepseek-v4-pro": 1
+        },
+        "local/tool-calling-medium": {
+          "local/tool-calling-medium": 64,
+          "remote/kimi-k2-6": 1,
+          "remote/deepseek-v4-pro": 3,
+          "local/coding-light": 1
+        },
+        "local/vision-medium": {
+          "local/vision-medium": 21,
+          "remote/kimi-k2-6": 1,
+          "remote/deepseek-v4-pro": 1
+        },
+        "local/reasoning-medium": {
+          "local/reasoning-medium": 14,
+          "remote/deepseek-v4-pro": 6,
+          "local/reasoning-heavy": 3
+        },
+        "local/reasoning-heavy": {
+          "local/reasoning-heavy": 20,
+          "remote/deepseek-v4-pro": 2,
+          "remote/kimi-k2-6": 1
+        }
+      }
+    }
+  ],
+  "best": {
+    "classifier_model": "qwen2.5:1.5b-32k",
+    "n": 253,
+    "composite": 0.8023715415019763,
+    "intent_acc": 0.8932806324110671,
+    "tools_acc": 0.8300395256916996,
+    "model_acc": 0.8932806324110671,
+    "tier_acc": 0.9090909090909091,
+    "latency_mean_ms": 1428.51,
+    "latency_median_ms": 1453.1,
+    "intent_confusion": {
+      "general_chat": {
+        "general_chat": 21,
+        "reasoning_heavy": 1,
+        "web_search": 1
+      },
+      "web_search": {
+        "web_search": 22,
+        "vision": 1
+      },
+      "deep_research": {
+        "deep_research": 23
+      },
+      "coding_basic": {
+        "coding_basic": 21,
+        "bash": 1,
+        "general_chat": 1
+      },
+      "coding_advanced": {
+        "coding_advanced": 20,
+        "web_search": 3
+      },
+      "bash": {
+        "bash": 23
+      },
+      "pdf_gen": {
+        "pdf_gen": 21,
+        "general_chat": 1,
+        "file_ops": 1
+      },
+      "file_ops": {
+        "file_ops": 20,
+        "general_chat": 2,
+        "coding_basic": 1
+      },
+      "vision": {
+        "vision": 21,
+        "web_search": 1,
+        "general_chat": 1
+      },
+      "reasoning_medium": {
+        "reasoning_medium": 14,
+        "general_chat": 6,
+        "reasoning_heavy": 3
+      },
+      "reasoning_heavy": {
+        "reasoning_heavy": 20,
+        "general_chat": 2,
+        "deep_research": 1
+      }
+    },
+    "model_confusion": {
+      "remote/deepseek-v4-pro": {
+        "remote/deepseek-v4-pro": 41,
+        "local/reasoning-heavy": 1,
+        "remote/kimi-k2-6": 4
+      },
+      "remote/kimi-k2-6": {
+        "remote/kimi-k2-6": 45,
+        "local/vision-medium": 1
+      },
+      "local/coding-light": {
+        "local/coding-light": 21,
+        "local/tool-calling-medium": 1,
+        "remote/deepseek-v4-pro": 1
+      },
+      "local/tool-calling-medium": {
+        "local/tool-calling-medium": 64,
+        "remote/kimi-k2-6": 1,
+        "remote/deepseek-v4-pro": 3,
+        "local/coding-light": 1
+      },
+      "local/vision-medium": {
+        "local/vision-medium": 21,
+        "remote/kimi-k2-6": 1,
+        "remote/deepseek-v4-pro": 1
+      },
+      "local/reasoning-medium": {
+        "local/reasoning-medium": 14,
+        "remote/deepseek-v4-pro": 6,
+        "local/reasoning-heavy": 3
+      },
+      "local/reasoning-heavy": {
+        "local/reasoning-heavy": 20,
+        "remote/deepseek-v4-pro": 2,
+        "remote/kimi-k2-6": 1
+      }
+    }
+  }
+}

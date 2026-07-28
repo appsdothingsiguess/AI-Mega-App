@@ -1,0 +1,48 @@
+{
+  "timestamp": "20260714T224136Z",
+  "mode": "ids",
+  "variant": "remote",
+  "gold_map": "gold_map.remote.json",
+  "ollama_base_url": "http://192.168.0.240:11434",
+  "configured_classifier": "ollama/qwen2.5:1.5b-32k",
+  "models": [
+    {
+      "classifier_model": "qwen2.5:1.5b-32k",
+      "n": 1,
+      "composite": 1.0,
+      "intent_acc": 1.0,
+      "tools_acc": 1.0,
+      "model_acc": 1.0,
+      "tier_acc": 1.0,
+      "intent_confusion": {
+        "coding_advanced": {
+          "coding_advanced": 1
+        }
+      },
+      "model_confusion": {
+        "remote/deepseek-v4-pro": {
+          "remote/deepseek-v4-pro": 1
+        }
+      }
+    }
+  ],
+  "best": {
+    "classifier_model": "qwen2.5:1.5b-32k",
+    "n": 1,
+    "composite": 1.0,
+    "intent_acc": 1.0,
+    "tools_acc": 1.0,
+    "model_acc": 1.0,
+    "tier_acc": 1.0,
+    "intent_confusion": {
+      "coding_advanced": {
+        "coding_advanced": 1
+      }
+    },
+    "model_confusion": {
+      "remote/deepseek-v4-pro": {
+        "remote/deepseek-v4-pro": 1
+      }
+    }
+  }
+}

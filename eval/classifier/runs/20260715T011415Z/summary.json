@@ -1,0 +1,170 @@
+{
+  "timestamp": "20260715T011415Z",
+  "mode": "ids",
+  "variant": "remote",
+  "gold_map": "gold_map.remote.json",
+  "ollama_base_url": "http://192.168.0.240:11434",
+  "configured_classifier": "ollama/qwen2.5:1.5b-32k",
+  "models": [
+    {
+      "classifier_model": "qwen2.5:1.5b-32k",
+      "n": 33,
+      "composite": 0.696969696969697,
+      "intent_acc": 0.7878787878787878,
+      "tools_acc": 0.7575757575757576,
+      "model_acc": 0.7878787878787878,
+      "tier_acc": 0.7878787878787878,
+      "latency_mean_ms": 1280.5,
+      "latency_median_ms": 1272.57,
+      "intent_confusion": {
+        "general_chat": {
+          "general_chat": 3
+        },
+        "web_search": {
+          "web_search": 3
+        },
+        "deep_research": {
+          "deep_research": 3
+        },
+        "coding_basic": {
+          "coding_basic": 2,
+          "general_chat": 1
+        },
+        "coding_advanced": {
+          "coding_advanced": 3
+        },
+        "bash": {
+          "bash": 2,
+          "coding_advanced": 1
+        },
+        "pdf_gen": {
+          "pdf_gen": 3
+        },
+        "file_ops": {
+          "general_chat": 1,
+          "coding_basic": 1,
+          "file_ops": 1
+        },
+        "vision": {
+          "vision": 2,
+          "general_chat": 1
+        },
+        "reasoning_medium": {
+          "general_chat": 2,
+          "reasoning_medium": 1
+        },
+        "reasoning_heavy": {
+          "reasoning_heavy": 3
+        }
+      },
+      "model_confusion": {
+        "remote/deepseek-v4-pro": {
+          "remote/deepseek-v4-pro": 6
+        },
+        "remote/kimi-k2-6": {
+          "remote/kimi-k2-6": 6
+        },
+        "local/coding-light": {
+          "local/coding-light": 2,
+          "<empty>": 1
+        },
+        "local/tool-calling-medium": {
+          "local/tool-calling-medium": 6,
+          "remote/deepseek-v4-pro": 2,
+          "local/coding-light": 1
+        },
+        "local/vision-medium": {
+          "local/vision-medium": 2,
+          "remote/deepseek-v4-pro": 1
+        },
+        "local/reasoning-medium": {
+          "remote/deepseek-v4-pro": 2,
+          "local/reasoning-medium": 1
+        },
+        "local/reasoning-heavy": {
+          "local/reasoning-heavy": 3
+        }
+      }
+    }
+  ],
+  "best": {
+    "classifier_model": "qwen2.5:1.5b-32k",
+    "n": 33,
+    "composite": 0.696969696969697,
+    "intent_acc": 0.7878787878787878,
+    "tools_acc": 0.7575757575757576,
+    "model_acc": 0.7878787878787878,
+    "tier_acc": 0.7878787878787878,
+    "latency_mean_ms": 1280.5,
+    "latency_median_ms": 1272.57,
+    "intent_confusion": {
+      "general_chat": {
+        "general_chat": 3
+      },
+      "web_search": {
+        "web_search": 3
+      },
+      "deep_research": {
+        "deep_research": 3
+      },
+      "coding_basic": {
+        "coding_basic": 2,
+        "general_chat": 1
+      },
+      "coding_advanced": {
+        "coding_advanced": 3
+      },
+      "bash": {
+        "bash": 2,
+        "coding_advanced": 1
+      },
+      "pdf_gen": {
+        "pdf_gen": 3
+      },
+      "file_ops": {
+        "general_chat": 1,
+        "coding_basic": 1,
+        "file_ops": 1
+      },
+      "vision": {
+        "vision": 2,
+        "general_chat": 1
+      },
+      "reasoning_medium": {
+        "general_chat": 2,
+        "reasoning_medium": 1
+      },
+      "reasoning_heavy": {
+        "reasoning_heavy": 3
+      }
+    },
+    "model_confusion": {
+      "remote/deepseek-v4-pro": {
+        "remote/deepseek-v4-pro": 6
+      },
+      "remote/kimi-k2-6": {
+        "remote/kimi-k2-6": 6
+      },
+      "local/coding-light": {
+        "local/coding-light": 2,
+        "<empty>": 1
+      },
+      "local/tool-calling-medium": {
+        "local/tool-calling-medium": 6,
+        "remote/deepseek-v4-pro": 2,
+        "local/coding-light": 1
+      },
+      "local/vision-medium": {
+        "local/vision-medium": 2,
+        "remote/deepseek-v4-pro": 1
+      },
+      "local/reasoning-medium": {
+        "remote/deepseek-v4-pro": 2,
+        "local/reasoning-medium": 1
+      },
+      "local/reasoning-heavy": {
+        "local/reasoning-heavy": 3
+      }
+    }
+  }
+}

@@ -1,0 +1,82 @@
+{
+  "timestamp": "20260715T014623Z",
+  "mode": "ids",
+  "variant": "local",
+  "gold_map": "gold_map.json",
+  "ollama_base_url": "http://192.168.0.240:11434",
+  "configured_classifier": "ollama/qwen2.5:1.5b-32k",
+  "models": [
+    {
+      "classifier_model": "qwen3:4b",
+      "n": 5,
+      "composite": 0.0,
+      "intent_acc": 0.0,
+      "tools_acc": 0.0,
+      "model_acc": 0.0,
+      "tier_acc": 0.0,
+      "latency_mean_ms": 820.36,
+      "latency_median_ms": 825.82,
+      "intent_confusion": {
+        "web_search": {
+          "general_chat": 1
+        },
+        "pdf_gen": {
+          "general_chat": 1
+        },
+        "vision": {
+          "general_chat": 2
+        },
+        "reasoning_medium": {
+          "general_chat": 1
+        }
+      },
+      "model_confusion": {
+        "local/tool-calling-medium": {
+          "<empty>": 2
+        },
+        "local/vision-medium": {
+          "<empty>": 2
+        },
+        "local/reasoning-medium": {
+          "<empty>": 1
+        }
+      }
+    }
+  ],
+  "best": {
+    "classifier_model": "qwen3:4b",
+    "n": 5,
+    "composite": 0.0,
+    "intent_acc": 0.0,
+    "tools_acc": 0.0,
+    "model_acc": 0.0,
+    "tier_acc": 0.0,
+    "latency_mean_ms": 820.36,
+    "latency_median_ms": 825.82,
+    "intent_confusion": {
+      "web_search": {
+        "general_chat": 1
+      },
+      "pdf_gen": {
+        "general_chat": 1
+      },
+      "vision": {
+        "general_chat": 2
+      },
+      "reasoning_medium": {
+        "general_chat": 1
+      }
+    },
+    "model_confusion": {
+      "local/tool-calling-medium": {
+        "<empty>": 2
+      },
+      "local/vision-medium": {
+        "<empty>": 2
+      },
+      "local/reasoning-medium": {
+        "<empty>": 1
+      }
+    }
+  }
+}

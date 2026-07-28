@@ -1,0 +1,18 @@
+{
+  "id": "thread-1784095781-158006",
+  "title": null,
+  "created_at": "2026-07-15T06:09:41.160004+00:00",
+  "messages": [
+    {
+      "role": "user",
+      "content": "run `echo hi`",
+      "created_at": "2026-07-15T06:09:47.877006+00:00"
+    },
+    {
+      "role": "assistant",
+      "content": "The command `echo hi` output: hi",
+      "created_at": "2026-07-15T06:10:06.168735+00:00",
+      "model": "local/coding-medium"
+    }
+  ]
+}
