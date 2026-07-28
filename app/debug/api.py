@@ -113,23 +113,47 @@ async def stream(request: Request) -> StreamingResponse:
     connection out during quiet periods."""
 
     async def event_source():
-        async with bus.subscribe() as queue:
-            # Flush an immediate comment so the response starts streaming
-            # right away (some clients/proxies wait on the first byte
-            # before considering the connection open) rather than sitting
-            # silent until the first real span or the first heartbeat.
-            yield ": connected\n\n"
-            while True:
+        # Poll disconnect while waiting on the queue so a client abort
+        # (pagehide / tab close) ends the generator within ~0.5s instead of
+        # blocking up to HEARTBEAT_INTERVAL_S — otherwise uvicorn graceful
+        # shutdown hangs on the open SSE connection.
+        poll_s = 0.5
+
+        async def _next_event(queue: asyncio.Queue[Any]) -> Any | None:
+            """Return a queued event, None on client disconnect, or raise
+            TimeoutError after HEARTBEAT_INTERVAL_S with no event."""
+            waited = 0.0
+            while waited < HEARTBEAT_INTERVAL_S:
                 if await request.is_disconnected():
-                    break
+                    return None
                 try:
-                    event = await asyncio.wait_for(
-                        queue.get(), timeout=HEARTBEAT_INTERVAL_S
-                    )
+                    return await asyncio.wait_for(queue.get(), timeout=poll_s)
                 except TimeoutError:
-                    yield "event: heartbeat\ndata: {}\n\n"
-                    continue
-                payload = json.dumps(event, separators=(",", ":"), default=str)
-                yield f"event: span\ndata: {payload}\n\n"
+                    waited += poll_s
+            raise TimeoutError
+
+        try:
+            async with bus.subscribe() as queue:
+                # Flush an immediate comment so the response starts streaming
+                # right away (some clients/proxies wait on the first byte
+                # before considering the connection open) rather than sitting
+                # silent until the first real span or the first heartbeat.
+                yield ": connected\n\n"
+                while True:
+                    if await request.is_disconnected():
+                        break
+                    try:
+                        event = await _next_event(queue)
+                    except TimeoutError:
+                        yield "event: heartbeat\ndata: {}\n\n"
+                        continue
+                    except asyncio.CancelledError:
+                        break
+                    if event is None:
+                        break
+                    payload = json.dumps(event, separators=(",", ":"), default=str)
+                    yield f"event: span\ndata: {payload}\n\n"
+        except asyncio.CancelledError:
+            return
 
     return StreamingResponse(event_source(), media_type="text/event-stream")
