@@ -7,7 +7,7 @@ import {
   streamMessage,
 } from "../api.js";
 import { escapeHtml, renderMarkdown } from "../markdown.js";
-import { navigate, type Route, type ViewHandle } from "../router.js";
+import { navigate, replaceHash, type Route, type ViewHandle } from "../router.js";
 import { get, set } from "../store.js";
 import type { DoneEvent, Message } from "../types.js";
 import {
@@ -130,8 +130,13 @@ export function createChatView(): ViewHandle {
     if (route?.chatId) return route.chatId;
     try {
       const { id } = await createChat();
+      // replaceHash (not navigate): navigate remounts the view and aborts the
+      // in-flight AbortController / SSE started by send() right after this.
+      route = { name: "chat", chatId: id, traceId: null };
       set({ chats: await listChats(), activeChatId: id });
-      navigate(`#/chat/${id}`);
+      replaceHash(`#/chat/${id}`);
+      const title = root?.querySelector(".chat-header-title");
+      if (title) title.textContent = "Chat";
       return id;
     } catch (err) {
       bannerError = err instanceof Error ? err.message : "Could not create chat";

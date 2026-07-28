@@ -48,6 +48,14 @@ export function navigate(hash: string): void {
   location.hash = next;
 }
 
+/** Update the hash URL without remounting (no hashchange). Use when the
+ *  active view must keep running — e.g. create-chat mid-send before SSE. */
+export function replaceHash(hash: string): void {
+  const next = hash.startsWith("#") ? hash : `#${hash}`;
+  if (location.hash === next) return;
+  history.replaceState(null, "", next);
+}
+
 async function applyRoute(route: Route): Promise<void> {
   if (!host) return;
   if (current) {

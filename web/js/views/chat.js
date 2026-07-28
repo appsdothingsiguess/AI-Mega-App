@@ -1,7 +1,7 @@
 /** Chat view: history, SSE stream, model_loading, picker from /health.models. */
 import { createChat, getMessages, listChats, streamMessage, } from "../api.js";
 import { escapeHtml, renderMarkdown } from "../markdown.js";
-import { navigate } from "../router.js";
+import { navigate, replaceHash } from "../router.js";
 import { get, set } from "../store.js";
 import { applyModelPick, renderPickerMenu, selectedModelLabel, } from "./composer.js";
 export function createChatView() {
@@ -121,8 +121,14 @@ export function createChatView() {
             return route.chatId;
         try {
             const { id } = await createChat();
+            // replaceHash (not navigate): navigate remounts the view and aborts the
+            // in-flight AbortController / SSE started by send() right after this.
+            route = { name: "chat", chatId: id, traceId: null };
             set({ chats: await listChats(), activeChatId: id });
-            navigate(`#/chat/${id}`);
+            replaceHash(`#/chat/${id}`);
+            const title = root?.querySelector(".chat-header-title");
+            if (title)
+                title.textContent = "Chat";
             return id;
         }
         catch (err) {
