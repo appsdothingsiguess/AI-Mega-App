@@ -36,7 +36,12 @@ GOLDEN_DIR = Path(__file__).parent / "golden"
 
 class FakeLLMClient:
     """Matches LLMClient's declared `chat()` signature exactly. Yields a
-    fixed set of content chunks, optionally delayed, optionally raising."""
+    fixed set of content chunks, optionally delayed, optionally raising.
+
+    `raise_error` is raised after `delay_before_first` (if any), so tests
+    can reproduce the race where the connection fails after the model_loading
+    warn window has already fired.
+    """
 
     def __init__(
         self,
@@ -63,10 +68,10 @@ class FakeLLMClient:
     ) -> AsyncIterator[ChatDelta]:
         import asyncio
 
-        if self.raise_error is not None:
-            raise self.raise_error
         if self.delay_before_first:
             await asyncio.sleep(self.delay_before_first)
+        if self.raise_error is not None:
+            raise self.raise_error
         for i, chunk in enumerate(self.chunks):
             is_last = i == len(self.chunks) - 1
             yield ChatDelta(
@@ -196,6 +201,38 @@ def test_model_loading_emitted_when_first_token_is_slow(tmp_path: Path, monkeypa
     assert kinds[-1] == "done"
     loading_data = next(data for ev, data in events if ev == "model_loading")
     assert loading_data == {"model": "chat-default"}
+
+
+def test_connection_error_after_loading_warn_is_terminal_error(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """Regression: if the backend fails after the model_loading warn window
+    has fired, the stream must end with SSE `error`, not a silent empty `done`.
+
+    Before the fix, asyncio.wait_for cancelled the in-flight __anext__ at the
+    warn boundary, leaving the async generator exhausted (StopAsyncIteration)
+    so the turn ended as a phantom `done` with zero tokens.
+    """
+    import app.chat.orchestrator as orchestrator_mod
+
+    # Warn window is very short; backend "fails" after the warn has already fired.
+    monkeypatch.setattr(orchestrator_mod, "FIRST_TOKEN_WARN_S", 0.02)
+    fake = FakeLLMClient(
+        delay_before_first=0.1,
+        raise_error=LLMError("connection", "backend killed"),
+    )
+    client = _make_client(tmp_path, fake, first_token_timeout_s=5)
+
+    chat_id = client.post("/api/chats", json={}).json()["id"]
+    resp = client.post(f"/api/chats/{chat_id}/messages", json={"content": "hi"})
+
+    events = _parse_sse(resp.text)
+    kinds = [e for e, _ in events]
+    # model_loading fires first (warn window elapsed), then error (not done).
+    assert "model_loading" in kinds, f"expected model_loading in {kinds}"
+    assert kinds[-1] == "error", f"expected terminal error, got {kinds}"
+    error_data = next(data for ev, data in events if ev == "error")
+    assert error_data["kind"] == "connection"
 
 
 def test_send_message_to_unknown_chat_returns_404(tmp_path: Path) -> None:
