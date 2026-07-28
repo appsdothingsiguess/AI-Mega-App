@@ -73,11 +73,25 @@ async function applyRoute(route: Route): Promise<void> {
   onRoute?.(route);
 }
 
+/** Abort in-flight SSE / views. Call on pagehide/beforeunload so long-lived
+ *  streams (debug tap, chat) release the server connection before uvicorn
+ *  graceful shutdown waits forever. */
+export function teardownRouter(): void {
+  if (current) {
+    current.unmount();
+    current = null;
+  }
+}
+
 export function startRouter(el: HTMLElement, opts?: { onRoute?: (r: Route) => void }): void {
   host = el;
   onRoute = opts?.onRoute ?? null;
   window.addEventListener("hashchange", () => {
     void applyRoute(parseHash());
   });
+  // pagehide covers tab close, refresh, and mobile; beforeunload is a
+  // belt-and-suspenders for desktop browsers that abort fetch late.
+  window.addEventListener("pagehide", teardownRouter);
+  window.addEventListener("beforeunload", teardownRouter);
   void applyRoute(parseHash());
 }

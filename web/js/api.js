@@ -74,6 +74,12 @@ async function readSseStream(res, handlers, opts) {
     const decoder = new TextDecoder();
     let buf = "";
     let terminal = null;
+    const onAbort = () => {
+        void reader.cancel();
+    };
+    handlers.signal?.addEventListener("abort", onAbort);
+    if (handlers.signal?.aborted)
+        onAbort();
     try {
         while (true) {
             if (handlers.signal?.aborted)
@@ -113,6 +119,9 @@ async function readSseStream(res, handlers, opts) {
         }
         return terminal ?? "lost";
     }
+    finally {
+        handlers.signal?.removeEventListener("abort", onAbort);
+    }
     if (opts.requireTerminal && !terminal) {
         handlers.onConnectionLost?.();
         return "lost";
@@ -150,16 +159,23 @@ export async function streamMessage(chatId, body, handlers) {
 export function streamDebugSpans(onSpan, opts) {
     let stopped = false;
     let attempt = 0;
+    let reconnectTimer = null;
     const ctrl = new AbortController();
-    const onAbort = () => ctrl.abort();
+    const onAbort = () => {
+        ctrl.abort();
+        if (reconnectTimer != null) {
+            clearTimeout(reconnectTimer);
+            reconnectTimer = null;
+        }
+    };
     opts?.signal?.addEventListener("abort", onAbort);
     const stop = () => {
         stopped = true;
-        ctrl.abort();
+        onAbort();
         opts?.signal?.removeEventListener("abort", onAbort);
     };
     const loop = async () => {
-        while (!stopped) {
+        while (!stopped && !ctrl.signal.aborted) {
             try {
                 const res = await fetch("/api/debug/stream", {
                     headers: { Accept: "text/event-stream" },
@@ -181,7 +197,12 @@ export function streamDebugSpans(onSpan, opts) {
                 break;
             attempt += 1;
             const delay = Math.min(15_000, 500 * 2 ** Math.min(attempt, 5));
-            await new Promise((r) => setTimeout(r, delay));
+            await new Promise((resolve) => {
+                reconnectTimer = setTimeout(() => {
+                    reconnectTimer = null;
+                    resolve();
+                }, delay);
+            });
         }
     };
     void loop();
