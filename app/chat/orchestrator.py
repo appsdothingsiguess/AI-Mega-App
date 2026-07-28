@@ -49,35 +49,63 @@ async def _stream_with_loading(
     PLAN.md §4.1 measured up to 12.47s cold), then ("delta", delta) for each
     chunk. Raises TimeoutError if no first token arrives within `timeout_s`
     (config.llm.first_token_timeout_s). No timeout is applied once the first
-    token has arrived — only the cold-load wait is bounded here."""
+    token has arrived — only the cold-load wait is bounded here.
+
+    Implementation note: the pending __anext__ Task is kept alive across the
+    warn window rather than cancelled. asyncio.wait_for cancels the inner task
+    when its timeout fires, which aborts the in-flight httpx connection before
+    LLMClient can surface the real error — producing a silent StopAsyncIteration
+    instead of an LLMError. asyncio.wait() leaves the task running so a late
+    connection failure propagates correctly as an LLMError (→ SSE error event).
+    """
     start = time.monotonic()
     warned = False
-    seen_first = False
-    while True:
-        if seen_first:
+
+    # Hold the pending first-token task across warn windows so it is never
+    # cancelled prematurely (see implementation note above).
+    pending_task: asyncio.Task[ChatDelta] | None = None
+    try:
+        while True:
+            remaining = timeout_s - (time.monotonic() - start)
+            if remaining <= 0:
+                raise TimeoutError("first_token_timeout")
+
+            if pending_task is None:
+                pending_task = asyncio.create_task(agen.__anext__())  # type: ignore[arg-type]
+
+            wait = remaining if warned else min(warn_s, remaining)
+            done, _ = await asyncio.wait({pending_task}, timeout=wait)
+
+            if not done:
+                # Warn window elapsed; task still in flight.
+                if warned:
+                    raise TimeoutError("first_token_timeout")
+                warned = True
+                yield ("loading", None)
+                continue
+
+            # Task completed (success, StopAsyncIteration, or exception).
+            pending_task = None
             try:
-                delta = await agen.__anext__()
+                delta = done.pop().result()
             except StopAsyncIteration:
                 return
+            # LLMError and any other exception propagate to orchestrator's
+            # outer try/except, which emits the terminal SSE error event.
             yield ("delta", delta)
-            continue
+            break  # first token received; hand off to the simple loop below
 
-        remaining = timeout_s - (time.monotonic() - start)
-        if remaining <= 0:
-            raise TimeoutError("first_token_timeout")
-        wait = remaining if warned else min(warn_s, remaining)
-        try:
-            delta = await asyncio.wait_for(agen.__anext__(), timeout=wait)
-        except StopAsyncIteration:
-            return
-        except TimeoutError:
-            if warned:
-                raise TimeoutError("first_token_timeout") from None
-            warned = True
-            yield ("loading", None)
-            continue
-        seen_first = True
-        yield ("delta", delta)
+        # After first token the stream is flowing — no need for task wrappers.
+        async for delta in agen:
+            yield ("delta", delta)
+
+    finally:
+        if pending_task is not None and not pending_task.done():
+            pending_task.cancel()
+            try:
+                await pending_task
+            except (asyncio.CancelledError, Exception):
+                pass
 
 
 class ChatOrchestrator:
