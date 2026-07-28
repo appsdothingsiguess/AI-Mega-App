@@ -8,13 +8,12 @@
 `app_client`  — factory `(config: Config | None = None) -> TestClient` wired
                 to `app.main.create_app`; defaults to `test_config`.
 
-NOTE for the integrator: `tests/fakes/fake_llama_swap.py` (p1/llm-client's
-richer fake with `X-Fake-Script` script selection) does not exist on this
-branch. `test_config` imports it lazily; if absent, it falls back to this
-branch's own minimal stub at `e2e/fake_backend.py` so tests here stay green
-in isolation. Once llm-client merges, re-point the primary import if its
-fake's ASGI app name/module path differs, and consider whether e2e/dev
-should also switch over to it for parity.
+NOTE for the integrator: primary path is `FakeLlamaSwap().app` from
+`tests/fakes/fake_llama_swap.py`. Import is lazy with a fallback to
+`e2e/fake_backend.py` (same FakeLlamaSwap, plus GET /health for socket
+probes) so this harness stays green if the fake module is absent in an
+isolated checkout. `tests/test_debug_trace.py` defines its own `db_conn`
+fixture that shadows this one — reconcile in the integrator, not here.
 """
 
 from __future__ import annotations
@@ -50,12 +49,11 @@ def _free_port() -> int:
 
 
 def _load_fake_asgi_app():
-    """Prefer p1/llm-client's real fake once it exists; fall back to this
-    branch's minimal e2e stub so tests are green before that branch merges."""
+    """Prefer FakeLlamaSwap().app; fall back to e2e wrapper if absent."""
     try:
-        from tests.fakes.fake_llama_swap import app as fake_app  # type: ignore
+        from tests.fakes.fake_llama_swap import FakeLlamaSwap
 
-        return fake_app
+        return FakeLlamaSwap().app
     except ImportError:
         from e2e.fake_backend import app as fake_app
 
