@@ -759,9 +759,14 @@ the schema verbatim.
 ```
 CONTEXT
 AI-Mega-App, Phase 2 wave 2. config.yaml now has full model entries (file,
-gpu, resident, ttl_s, mmproj, extra_flags), plus (owner decision
-2026-07-30) gpu.enabled, gpu.swap_yaml_path, gpu.reload_on_change,
-gpu.vram_guard alongside the existing gpu.rewarm_default_after_min.
+gpu, resident, ttl_s, mmproj, extra_flags). p2/config-schema still owns
+adding gpu.enabled, gpu.swap_yaml_path, gpu.reload_on_change,
+gpu.vram_guard alongside the existing gpu.rewarm_default_after_min — key
+names + defaults decided by the owner 2026-07-30, but NOT YET LANDED in
+config.yaml/GpuConfig as of this prompt. Confirm they exist (pull latest
+main / check with p2/config-schema) before writing code that reads them;
+if still missing, that is p2/config-schema's gap to close, not something to
+add yourself (still outside this task's file scope).
 llama-swap v237 runs as systemd on :8080. CORRECTION to an earlier draft of
 this prompt: docs/phase0-measurements.md does NOT record a reload endpoint
 or an --embedding/--embeddings flag spelling — checked directly against the
