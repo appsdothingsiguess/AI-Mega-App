@@ -188,8 +188,15 @@ debug:
 
 # chat-default is re-warmed after this many minutes of GPU0 idle on another
 # model — keeps warm 0.67s first-token vs cold 12.47s (PLAN.md §4.1).
+# swap_yaml_path is the live, already-fixed llama-swap config (PLAN §4.1);
+# swapgen writes it and llama-swap picks it up via its own -watch-config
+# flag — there is no reload REST endpoint (verified live, llama-swap v237).
 gpu:
   rewarm_default_after_min: 10
+  enabled: true
+  swap_yaml_path: /home/john/llm-stack/serving/llama-swap/config.yaml
+  reload_on_change: true
+  vram_guard: true
 
 # Smart router: manual override → keyword rules → grammar-constrained
 # classifier (PLAN.md §4.3). chit_chat intentionally routes to chat-default

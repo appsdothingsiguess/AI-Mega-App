@@ -177,6 +177,12 @@ def test_model_entry_defaults_for_optional_fields(tmp_path: Path) -> None:
 def test_repo_config_gpu_section(tmp_path: Path) -> None:
     cfg = load_config(config_mod.CONFIG_PATH)
     assert cfg.gpu.rewarm_default_after_min == 10
+    assert cfg.gpu.enabled is True
+    assert cfg.gpu.swap_yaml_path == (
+        "/home/john/llm-stack/serving/llama-swap/config.yaml"
+    )
+    assert cfg.gpu.reload_on_change is True
+    assert cfg.gpu.vram_guard is True
 
 
 def test_gpu_defaults_when_absent(tmp_path: Path) -> None:
@@ -184,6 +190,9 @@ def test_gpu_defaults_when_absent(tmp_path: Path) -> None:
     write_yaml(base_path, MINIMAL_CONFIG)
     cfg = load_config(base_path)
     assert cfg.gpu.rewarm_default_after_min == 10
+    assert cfg.gpu.enabled is True
+    assert cfg.gpu.reload_on_change is True
+    assert cfg.gpu.vram_guard is True
 
 
 # ---------------------------------------------------------------------------
@@ -211,8 +220,8 @@ def test_repo_config_routing_classifier(tmp_path: Path) -> None:
 def test_repo_config_routing_rules_and_attachments(tmp_path: Path) -> None:
     cfg = load_config(config_mod.CONFIG_PATH)
     assert len(cfg.routing.rules) >= 1
-    assert cfg.routing.attachments["image"] == "vision"
-    assert cfg.routing.attachments["code_file"] == "coding"
+    assert cfg.routing.attachments["image"] == "vision_task"
+    assert cfg.routing.attachments["code_file"] == "code_task"
 
 
 def test_routing_defaults_when_absent(tmp_path: Path) -> None:

@@ -92,6 +92,10 @@ class DebugConfig(_Strict):
 
 class GpuConfig(_Strict):
     rewarm_default_after_min: int = 10
+    enabled: bool = True
+    swap_yaml_path: str = "/home/john/llm-stack/serving/llama-swap/config.yaml"
+    reload_on_change: bool = True
+    vram_guard: bool = True
 
 
 class RoutingRule(_Strict):
