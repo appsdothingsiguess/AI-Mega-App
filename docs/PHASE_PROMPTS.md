@@ -698,6 +698,12 @@ settings-ui.
 ## Prompt: `p2/config-schema`
 
 ```
+BRANCH: work only on branch `p2/config-schema` in worktree
+`../AI-Mega-App-p2-config` (from the main checkout: `git worktree add
+../AI-Mega-App-p2-config -b p2/config-schema main` if it doesn't exist yet).
+Run `git branch --show-current` and confirm it prints `p2/config-schema`
+before editing anything — never commit on `main`.
+
 CONTEXT
 AI-Mega-App, Phase 2 wave 1. Phase 1 shipped: config loader, SQLite, LLM
 client + fake, chat SSE with debug spans, claude.ai-shell UI, CI. Six
@@ -757,6 +763,12 @@ the schema verbatim.
 ## Prompt: `p2/gpu-swapgen`
 
 ```
+BRANCH: work only on branch `p2/gpu-swapgen` in worktree
+`../AI-Mega-App-p2-gpu` (from the main checkout: `git worktree add
+../AI-Mega-App-p2-gpu -b p2/gpu-swapgen main` if it doesn't exist yet). Run
+`git branch --show-current` and confirm it prints `p2/gpu-swapgen` before
+editing anything — never commit on `main`.
+
 CONTEXT
 AI-Mega-App, Phase 2 wave 2. config.yaml now has full model entries (file,
 gpu, resident, ttl_s, mmproj, extra_flags) plus, as of commit 322d246
@@ -852,6 +864,12 @@ Report generated-YAML sample and endpoints.
 ## Prompt: `p2/router-classifier`
 
 ```
+BRANCH: work only on branch `p2/router-classifier` in worktree
+`../AI-Mega-App-p2-router` (from the main checkout: `git worktree add
+../AI-Mega-App-p2-router -b p2/router-classifier main` if it doesn't exist
+yet). Run `git branch --show-current` and confirm it prints
+`p2/router-classifier` before editing anything — never commit on `main`.
+
 CONTEXT
 AI-Mega-App, Phase 2 wave 2. The old build's classifier failed as free-text
 JSON from a 4.4k-token prompt; the fix is llama.cpp grammar-constrained
@@ -943,6 +961,12 @@ Report the route() signature, JSON schema, and prompt token count.
 ## Prompt: `p2/router-eval`
 
 ```
+BRANCH: work only on branch `p2/router-eval` in worktree
+`../AI-Mega-App-p2-eval` (from the main checkout: `git worktree add
+../AI-Mega-App-p2-eval -b p2/router-eval main` if it doesn't exist yet). Run
+`git branch --show-current` and confirm it prints `p2/router-eval` before
+editing anything — never commit on `main`.
+
 CONTEXT
 AI-Mega-App, Phase 2 wave 2. A parallel agent ships app/router with
 `async def route(chat, text, attachments) -> RouteResult` (source, intent,
@@ -1001,6 +1025,12 @@ command line for the box run.
 ## Prompt: `p2/settings-api`
 
 ```
+BRANCH: work only on branch `p2/settings-api` in worktree
+`../AI-Mega-App-p2-settings` (from the main checkout: `git worktree add
+../AI-Mega-App-p2-settings -b p2/settings-api main` if it doesn't exist yet).
+Run `git branch --show-current` and confirm it prints `p2/settings-api`
+before editing anything — never commit on `main`.
+
 CONTEXT
 AI-Mega-App, Phase 2 wave 2. You own the shared wiring files this wave:
 app/main.py and the model-resolution seam in app/chat/orchestrator.py left
@@ -1071,6 +1101,12 @@ Report endpoints, wiring performed, drift observed.
 ## Prompt: `p2/background-utility`
 
 ```
+BRANCH: work only on branch `p2/background-utility` in worktree
+`../AI-Mega-App-p2-utility` (from the main checkout: `git worktree add
+../AI-Mega-App-p2-utility -b p2/background-utility main` if it doesn't exist
+yet). Run `git branch --show-current` and confirm it prints
+`p2/background-utility` before editing anything — never commit on `main`.
+
 CONTEXT
 AI-Mega-App, Phase 2 wave 2. Background jobs are split across two models by
 who waits on the result (PLAN.md §4.15, Phase-0 §12): TITLES go to
@@ -1140,6 +1176,12 @@ Report exported hooks and which model each job resolved to.
 ## Prompt: `p2/settings-ui`
 
 ```
+BRANCH: work only on branch `p2/settings-ui` in worktree
+`../AI-Mega-App-p2-ui` (from the main checkout: `git worktree add
+../AI-Mega-App-p2-ui -b p2/settings-ui main` if it doesn't exist yet). Run
+`git branch --show-current` and confirm it prints `p2/settings-ui` before
+editing anything — never commit on `main`.
+
 CONTEXT
 AI-Mega-App, Phase 2 wave 2. Frontend shell exists (hash router, store,
 api.ts SSE client, chat + debug views), tsc-only TS, claude.ai-parity
