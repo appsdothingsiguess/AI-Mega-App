@@ -201,8 +201,8 @@ routing:
     - keywords: ["write code", "stack trace"]
       intent: code_task
   attachments:
-    image: vision
-    code_file: coding
+    image: vision_task
+    code_file: code_task
   intents:
     chat: chat-default
     chit_chat: chat-default

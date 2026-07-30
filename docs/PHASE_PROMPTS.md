@@ -759,12 +759,20 @@ the schema verbatim.
 ```
 CONTEXT
 AI-Mega-App, Phase 2 wave 2. config.yaml now has full model entries (file,
-gpu, resident, ttl_s, mmproj, extra_flags). llama-swap runs as systemd on
-:8080; the hand-written llama-swap.yaml from Phase 0 is about to be replaced
-by generated config. Exact llama-server flag spellings + llama-swap reload
-endpoint are RECORDED in docs/phase0-measurements.md — use those, never
-guess. Source of truth: PLAN.md §4.1 (GPU delegation + generated YAML
-example), §6 guardrail; docs/FEATURES.md §gpu.
+gpu, resident, ttl_s, mmproj, extra_flags), plus (owner decision
+2026-07-30) gpu.enabled, gpu.swap_yaml_path, gpu.reload_on_change,
+gpu.vram_guard alongside the existing gpu.rewarm_default_after_min.
+llama-swap v237 runs as systemd on :8080. CORRECTION to an earlier draft of
+this prompt: docs/phase0-measurements.md does NOT record a reload endpoint
+or an --embedding/--embeddings flag spelling — checked directly against the
+installed binary instead (owner, 2026-07-30): llama-swap v237 has no REST
+reload endpoint (`/api/reload` → 404); reload is via the `-watch-config` CLI
+flag (file-watch → auto reload), which the systemd unit does not currently
+pass. Do not add a reload_url config key. The hand-written llama-swap.yaml
+from Phase 0 is about to be replaced by generated config. Source of truth:
+PLAN.md §4.1 (GPU delegation + generated YAML example, uses --embedding
+singular — that's the correct llama-server flag, not --embeddings), §6
+guardrail; docs/FEATURES.md §gpu.
 
 GOAL
 1. app/gpu/inventory.py — async run of `nvidia-smi --query-gpu=index,name,
@@ -773,18 +781,26 @@ GOAL
 2. app/gpu/swapgen.py — DETERMINISTIC generator (hand-written code, no AI,
    no templating beyond f-strings): generate(config: Config) -> str renders
    llama-swap.yaml exactly in the PLAN.md §4.1 shape: macros.llama, one
-   models entry per config model (CPU → --device none -ngl 0; GPU → device
-   flag per phase-0 spelling; --embeddings for class embed; --mmproj for
-   vision; --jinja globally; ctx from config), groups: resident
-   (swap:false, exclusive:false, members = resident models) and gpu0-main
-   (swap:true, the 3090 slot). Header comment: "# generated — do not
-   hand-edit".
+   models entry per config model (CPU → --device none -ngl 0; GPU →
+   CUDA_VISIBLE_DEVICES env, never --tensor-split; --embedding (singular —
+   PLAN.md §4.1's own sample) for class embed; --mmproj for vision; --jinja
+   globally; ctx from config), groups: resident (swap:false,
+   exclusive:false, members = resident models) and gpu0-main (swap:true,
+   the 3090 slot). Header comment: "# generated — do not hand-edit".
 3. app/gpu/api.py — APIRouter:
      GET  /api/gpu/inventory
      GET  /api/gpu/swap-config            (current generated YAML, text)
-     POST /api/gpu/apply                  (write file to configured path +
-                                           call llama-swap reload endpoint;
-                                           returns llama-swap's response)
+     POST /api/gpu/apply                  (write file to
+                                           config.gpu.swap_yaml_path, then
+                                           poll GET http://localhost:8080/health
+                                           until it returns "OK" again —
+                                           there is no reload REST call;
+                                           llama-swap picks up the file via
+                                           its own -watch-config flag once
+                                           that's enabled on the systemd
+                                           unit (separate, owner-approved
+                                           sudo change, tracked outside this
+                                           task). Return the health result.)
    Each handler wrapped in a debug span (stage: gpu_inventory, swapgen).
 4. Rewarm policy (PLAN.md §4.1 default-model paragraph): app/gpu/rewarm.py —
    ~20-line asyncio task: if the 3090 slot has served a non-default model
@@ -807,8 +823,9 @@ READ-ONLY: app/config.py, config.yaml, app/debug/**, app/llm_client.py.
 
 INTERFACES
 `router = APIRouter()` in api.py; `generate(config) -> str`;
-`start_rewarm(app) -> None`. Output path + reload URL from config (add
-nothing to config — the keys exist; if one is missing, STOP and ask).
+`start_rewarm(app) -> None`. Output path from config.gpu.swap_yaml_path (now
+present, see CONTEXT). There is no reload URL config key — apply polls
+llama-swap's own `/health` after writing the file, per api.py above.
 
 CONSTRAINTS
 Plan Mode first. Files under 300 lines. Generated YAML is byte-stable for a
@@ -857,9 +874,11 @@ Re-deriving any of these re-opens a solved problem. Read
 
 GOAL
 app/router/ package, three strictly ordered layers, every decision traced:
-1. app/router/rules.py — layer 2: attachment forcing (image→vision,
-   code_file→coding) then keyword rules from config (word-boundary regex,
-   2+ word phrases). Returns intent | None. Pure, synchronous, no model.
+1. app/router/rules.py — layer 2: attachment forcing (image→vision_task,
+   code_file→code_task, per config.routing.attachments — values are
+   RoutingIntents keys directly, no normalization needed) then keyword
+   rules from config (word-boundary regex, 2+ word phrases). Returns
+   intent | None. Pure, synchronous, no model.
 2. app/router/classifier.py — layer 3: calls the classifier model via
    LLMClient with response_format json_schema enforcing EXACTLY
    {"class": "chat|chit_chat|code_task|tool_call_needed|reasoning_task|
@@ -870,8 +889,13 @@ app/router/ package, three strictly ordered layers, every decision traced:
    Prompt ≤ ~600 tokens + the Phase-0 few-shots, in a module-level constant.
    The classifier NEVER sees or names model aliases. Weakest class is
    `tool_call_needed` at 78.9% — if accuracy regresses, look there first. Timeout
-   config.routing.classifier.timeout_s → fallback. Confidence below
-   threshold → fallback, flagged.
+   config.routing.classifier.timeout_s → fallback (RouteResult.source stays
+   "classifier", model=fallback_model, confidence=None). Confidence below
+   threshold → fallback (source stays "classifier", model=fallback_model,
+   confidence=the actual returned value) — flag the reason on the route
+   span's meta_json (e.g. {"fallback_reason": "timeout"|"low_confidence"}),
+   not as a new source value (owner decision 2026-07-30: types.py stays
+   frozen, no "fallback" source).
 3. app/router/router.py — async route(chat, text, attachments) ->
    RouteResult: layer 1 manual override (chat.model_override) → layer 2
    rules → layer 3 classifier → fallback_model. Resolves class+effort to a
@@ -893,7 +917,8 @@ READ-ONLY: app/config.py, app/types.py, app/llm_client.py, app/debug/**.
 INTERFACES
 `async def route(chat, text: str, attachments: list) -> RouteResult` exported
 from app/router/__init__.py — settings-api and eval both import exactly this.
-RouteResult.source ∈ {"override","rule","classifier","fallback"}.
+RouteResult.source ∈ {"override","rule","classifier"} (frozen, types.py —
+fallback cases still report source="classifier", see layer 3 above).
 
 CONSTRAINTS
 Plan Mode first; show the JSON schema + prompt skeleton for approval. Files
