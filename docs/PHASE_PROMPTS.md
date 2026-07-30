@@ -759,25 +759,23 @@ the schema verbatim.
 ```
 CONTEXT
 AI-Mega-App, Phase 2 wave 2. config.yaml now has full model entries (file,
-gpu, resident, ttl_s, mmproj, extra_flags). p2/config-schema still owns
-adding gpu.enabled, gpu.swap_yaml_path, gpu.reload_on_change,
-gpu.vram_guard alongside the existing gpu.rewarm_default_after_min — key
-names + defaults decided by the owner 2026-07-30, but NOT YET LANDED in
-config.yaml/GpuConfig as of this prompt. Confirm they exist (pull latest
-main / check with p2/config-schema) before writing code that reads them;
-if still missing, that is p2/config-schema's gap to close, not something to
-add yourself (still outside this task's file scope).
-llama-swap v237 runs as systemd on :8080. CORRECTION to an earlier draft of
-this prompt: docs/phase0-measurements.md does NOT record a reload endpoint
-or an --embedding/--embeddings flag spelling — checked directly against the
-installed binary instead (owner, 2026-07-30): llama-swap v237 has no REST
-reload endpoint (`/api/reload` → 404); reload is via the `-watch-config` CLI
-flag (file-watch → auto reload), which the systemd unit does not currently
-pass. Do not add a reload_url config key. The hand-written llama-swap.yaml
-from Phase 0 is about to be replaced by generated config. Source of truth:
-PLAN.md §4.1 (GPU delegation + generated YAML example, uses --embedding
-singular — that's the correct llama-server flag, not --embeddings), §6
-guardrail; docs/FEATURES.md §gpu.
+gpu, resident, ttl_s, mmproj, extra_flags) plus, as of commit 322d246
+(owner, 2026-07-30), gpu.enabled, gpu.swap_yaml_path, gpu.reload_on_change,
+gpu.vram_guard alongside the existing gpu.rewarm_default_after_min — pull
+latest main, these are landed in config.yaml/GpuConfig now, p2/config-schema
+work is done. swap_yaml_path defaults to the real, already-fixed live
+llama-swap config path on ailab. llama-swap v237 runs as systemd on :8080,
+now with -watch-config on the unit (owner, 2026-07-30, verified live via
+`systemctl cat llama-swap`) so it auto-reloads when swapgen writes
+swap_yaml_path. There is still no REST reload endpoint (`/api/reload` →
+404, verified against the installed binary), so /api/gpu/apply must write
+the file then poll llama-swap's own `/health` until it returns "OK" again,
+not call a reload URL (there is no reload_url config key, and none should
+be added). The hand-written
+llama-swap.yaml from Phase 0 is about to be replaced by generated config.
+Source of truth: PLAN.md §4.1 (GPU delegation + generated YAML example,
+uses --embedding singular — that's the correct llama-server flag, not
+--embeddings), §6 guardrail; docs/FEATURES.md §gpu.
 
 GOAL
 1. app/gpu/inventory.py — async run of `nvidia-smi --query-gpu=index,name,
