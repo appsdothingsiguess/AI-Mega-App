@@ -39,6 +39,8 @@ TEST_MODEL = ModelEntry(
     gpu=0,
     tool_call="native",
     max_tokens=1024,
+    file="/models/chat-default.gguf",
+    quant="Q4_K_M",
 )
 
 

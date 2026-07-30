@@ -18,6 +18,8 @@ db:
 # model/provider name lives here and only here — never as a Python literal.
 # gpu: 0 | 1 | "cpu" — placement mechanism is always CUDA_VISIBLE_DEVICES,
 # never --tensor-split (measured ~3x slower, PLAN.md §4.1).
+# file: absolute path to GGUF on the box (/home/john/llm-stack/models/gguf/).
+# resident: true = ttl 0, stays loaded; false = swapped on demand.
 models:
   - name: chat-default
     class: general
@@ -28,6 +30,12 @@ models:
     reasoning_off: false
     max_tokens: 4096
     enabled: true
+    file: "/home/john/llm-stack/models/gguf/Qwen3.6-35B-A3B-UD-Q4_K_M.gguf"
+    quant: Q4_K_M
+    mmproj: null
+    resident: true
+    ttl_s: 0
+    extra_flags: []
   - name: reasoner
     # Same blob as chat-default, thinking enabled at the request layer —
     # not a separate swap entry (PLAN.md §4.1).
@@ -39,6 +47,12 @@ models:
     reasoning_off: false
     max_tokens: 8192
     enabled: true
+    file: "/home/john/llm-stack/models/gguf/Qwen3.6-35B-A3B-UD-Q4_K_M.gguf"
+    quant: Q4_K_M
+    mmproj: null
+    resident: false
+    ttl_s: null
+    extra_flags: []
   - name: reasoner-alt
     class: reasoning
     ctx: 8192
@@ -48,6 +62,12 @@ models:
     reasoning_off: false
     max_tokens: 8192
     enabled: false
+    file: "/home/john/llm-stack/models/gguf/DeepSeek-R1-Distill-Qwen-32B-Q4_K_M.gguf"
+    quant: Q4_K_M
+    mmproj: null
+    resident: false
+    ttl_s: null
+    extra_flags: []
   - name: coder
     class: coding
     ctx: 16384
@@ -57,6 +77,12 @@ models:
     reasoning_off: false
     max_tokens: 4096
     enabled: true
+    file: "/home/john/llm-stack/models/gguf/Qwen3-Coder-30B-A3B-Instruct-Q5_K_M.gguf"
+    quant: Q5_K_M
+    mmproj: null
+    resident: false
+    ttl_s: null
+    extra_flags: []
   - name: coder-small
     class: coding
     ctx: 8192
@@ -66,6 +92,12 @@ models:
     reasoning_off: false
     max_tokens: 2048
     enabled: true
+    file: "/home/john/llm-stack/models/gguf/qwen2.5-coder-7b.gguf"
+    quant: Q4_K_M
+    mmproj: null
+    resident: false
+    ttl_s: null
+    extra_flags: []
   - name: vision
     class: vision
     ctx: 8192
@@ -75,6 +107,12 @@ models:
     reasoning_off: false
     max_tokens: 2048
     enabled: true
+    file: "/home/john/llm-stack/models/gguf/Qwen3-VL-32B-Instruct-Q4_K_M.gguf"
+    quant: Q4_K_M
+    mmproj: "/home/john/llm-stack/models/gguf/Qwen3-VL-32B-Instruct-mmproj-BF16.gguf"
+    resident: false
+    ttl_s: null
+    extra_flags: []
   - name: dispatcher
     class: dispatcher
     ctx: 4096
@@ -84,6 +122,12 @@ models:
     reasoning_off: false
     max_tokens: 256
     enabled: true
+    file: "/home/john/llm-stack/models/gguf/Hammer2.1-1.5b-Q4_K_M.gguf"
+    quant: Q4_K_M
+    mmproj: null
+    resident: true
+    ttl_s: 0
+    extra_flags: []
   - name: utility
     class: utility
     ctx: 8192
@@ -93,6 +137,12 @@ models:
     reasoning_off: false
     max_tokens: 1024
     enabled: true
+    file: "/home/john/llm-stack/models/gguf/qwen3-8b.gguf"
+    quant: Q4_K_M
+    mmproj: null
+    resident: true
+    ttl_s: 0
+    extra_flags: []
   - name: embed
     class: embed
     ctx: 2048
@@ -102,6 +152,12 @@ models:
     reasoning_off: false
     max_tokens: 256
     enabled: true
+    file: "/home/john/llm-stack/models/gguf/nomic-embed-text-v2-moe.Q4_K_M.gguf"
+    quant: Q4_K_M
+    mmproj: null
+    resident: true
+    ttl_s: 0
+    extra_flags: []
   - name: classifier
     class: classifier
     ctx: 4096
@@ -111,6 +167,12 @@ models:
     reasoning_off: true
     max_tokens: 64
     enabled: true
+    file: "/home/john/llm-stack/models/gguf/Qwen3-1.7B-Q8_0.gguf"
+    quant: Q8_0
+    mmproj: null
+    resident: true
+    ttl_s: 0
+    extra_flags: []
 
 defaults:
   chat_model: "chat-default"
@@ -123,3 +185,38 @@ llm:
 
 debug:
   store_prompts: true
+
+# chat-default is re-warmed after this many minutes of GPU0 idle on another
+# model — keeps warm 0.67s first-token vs cold 12.47s (PLAN.md §4.1).
+gpu:
+  rewarm_default_after_min: 10
+
+# Smart router: manual override → keyword rules → grammar-constrained
+# classifier (PLAN.md §4.3). chit_chat intentionally routes to chat-default
+# not utility — utility is CPU-resident and costs ~18-22s/short gen (Phase 0
+# §8 Test 3). Titles go to dispatcher (0.042s, 8/8 rubric) not utility
+# (43.5s, 1/8) — Phase 0 §12.
+routing:
+  rules:
+    - keywords: ["write code", "stack trace"]
+      intent: code_task
+  attachments:
+    image: vision
+    code_file: coding
+  intents:
+    chat: chat-default
+    chit_chat: chat-default
+    code_task: coder
+    reasoning_task: reasoner
+    vision_task: vision
+    tool_call_needed: chat-default
+  classifier:
+    model: classifier
+    timeout_s: 2.0
+    confidence_threshold: 0.5
+    fallback_model: chat-default
+
+background:
+  title_model: dispatcher
+  summary_model: utility
+  summary_every_n_turns: 6

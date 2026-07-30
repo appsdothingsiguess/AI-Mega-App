@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import Any, Literal
 
 import yaml
-from pydantic import BaseModel, Field, ValidationError
+from pydantic import BaseModel, Field, ValidationError, field_validator
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 CONFIG_PATH = REPO_ROOT / "config.yaml"
@@ -66,6 +66,12 @@ class ModelEntry(_Strict):
     reasoning_off: bool = False
     max_tokens: int
     enabled: bool = True
+    file: str
+    quant: str
+    mmproj: str | None = None
+    resident: bool = False
+    ttl_s: int | None = None
+    extra_flags: list[str] = Field(default_factory=list)
 
     model_config = {"extra": "forbid", "populate_by_name": True}
 
@@ -84,14 +90,67 @@ class DebugConfig(_Strict):
     store_prompts: bool = True
 
 
+class GpuConfig(_Strict):
+    rewarm_default_after_min: int = 10
+
+
+class RoutingRule(_Strict):
+    keywords: list[str]
+    intent: str
+
+    @field_validator("keywords")
+    @classmethod
+    def _each_keyword_is_multi_word(cls, v: list[str]) -> list[str]:
+        for kw in v:
+            if len(kw.split()) < 2:
+                raise ValueError(
+                    f"keyword {kw!r} must be 2+ words (word-boundary rule)"
+                )
+        return v
+
+
+class RoutingIntents(_Strict):
+    chat: str = "chat-default"
+    chit_chat: str = "chat-default"
+    code_task: str = "coder"
+    reasoning_task: str = "reasoner"
+    vision_task: str = "vision"
+    tool_call_needed: str = "chat-default"
+
+
+class RoutingClassifierConfig(_Strict):
+    model: str = "classifier"
+    timeout_s: float = 2.0
+    confidence_threshold: float = 0.5
+    fallback_model: str = "chat-default"
+
+
+class RoutingConfig(_Strict):
+    rules: list[RoutingRule] = Field(default_factory=list)
+    attachments: dict[str, str] = Field(default_factory=dict)
+    intents: RoutingIntents = Field(default_factory=RoutingIntents)
+    classifier: RoutingClassifierConfig = Field(
+        default_factory=RoutingClassifierConfig
+    )
+
+
+class BackgroundConfig(_Strict):
+    title_model: str = "dispatcher"
+    summary_model: str = "utility"
+    summary_every_n_turns: int = 6
+
+
 class Config(_Strict):
-    server: ServerConfig = ServerConfig()
+    server: ServerConfig = Field(default_factory=ServerConfig)
     llama_swap: LlamaSwapConfig
-    db: DbConfig = DbConfig()
+    db: DbConfig = Field(default_factory=DbConfig)
     models: list[ModelEntry]
     defaults: DefaultsConfig
-    llm: LlmConfig = LlmConfig()
-    debug: DebugConfig = DebugConfig()
+    llm: LlmConfig = Field(default_factory=LlmConfig)
+    debug: DebugConfig = Field(default_factory=DebugConfig)
+    gpu: GpuConfig = Field(default_factory=GpuConfig)
+    routing: RoutingConfig = Field(default_factory=RoutingConfig)
+    background: BackgroundConfig = Field(default_factory=BackgroundConfig)
 
 
 def _read_yaml(path: Path) -> dict[str, Any]:
