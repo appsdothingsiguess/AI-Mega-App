@@ -689,11 +689,13 @@ restart.
 | router-eval | `p2/router-eval` | `../AI-Mega-App-p2-eval` | `eval/**`, `scripts/eval_router.py` | config-schema |
 | settings-api | `p2/settings-api` | `../AI-Mega-App-p2-settings` | `app/settings/**`, `app/main.py` (OWNER), `app/chat/orchestrator.py` (OWNER: router seam only), `tests/test_settings_api.py` | config-schema |
 | background-utility | `p2/background-utility` | `../AI-Mega-App-p2-utility` | `app/background/**`, `tests/test_background.py` | config-schema |
-| settings-ui | `p2/settings-ui` | `../AI-Mega-App-p2-ui` | `web/src/views/settings.ts`, `web/src/views/chat.ts`, `web/src/api.ts` (OWNER this wave), `web/css/settings.css` | config-schema |
+| settings-ui | `p2/settings-ui` | `../AI-Mega-App-p2-ui` | `web/src/views/settings.ts`(+splits), `web/src/views/composer.ts`, `web/src/views/chat.ts`, `web/src/router.ts`, `web/src/app.ts`, `web/index.html`, `web/src/api.ts` (OWNER this wave), `web/css/settings.css` | config-schema |
 
 Shared-file owners this wave: `config.yaml`/`app/config.py` frozen after wave
-1; `app/main.py` + orchestrator router-seam → settings-api; `web/src/api.ts` →
-settings-ui.
+1; `app/main.py` + orchestrator router-seam → settings-api; `web/src/api.ts`,
+`web/src/router.ts`, `web/src/app.ts`, `web/index.html`,
+`web/src/views/composer.ts`, `web/src/views/chat.ts` → settings-ui (full
+frontend wire for #/settings — no other Phase 2 agent touches `web/`).
 
 ## Prompt: `p2/config-schema`
 
@@ -1202,36 +1204,56 @@ GOAL
    table (name, class, GPU assignment dropdown fed by /api/gpu/inventory,
    resident toggle, ttl); Routing tab (keyword rules editor, intents map);
    Apply button → PUT then POST /api/gpu/apply, surfacing llama-swap's
-   reload result. Split into submodules if nearing 300 lines.
-2. web/src/views/chat.ts — composer model picker now fed from GET /api/models
-   (aliases + class grouping, "Auto (router)" default = clear override);
-   per-message model label shows route source on hover (e.g. "coder · via
-   classifier 0.92"); live title update on `title` event.
-3. web/src/api.ts — typed client additions for the endpoints above.
+   reload result. Split into settings_models.ts / settings_routing.ts (or
+   similar) if settings.ts nears 300 lines.
+2. web/src/router.ts — add `"settings"` to `Route["name"]` and hash parsing
+   (`#/settings`).
+3. web/src/app.ts — `registerView("settings", createSettingsView)`; enable
+   the sidebar nav item (see index.html) and wire its click to
+   `navigate("#/settings")`; keep `setNavActive` in sync.
+4. web/index.html — remove `disabled`/`placeholder`/`title="Phase 2"` from
+   the `data-nav="settings"` button now that the view exists.
+5. web/src/views/composer.ts — model picker fed from GET /api/models
+   (aliases + class grouping, "Auto (router)" default = clear override,
+   replacing the current "Auto" label/group source); per-message model
+   label shows route source on hover (e.g. "coder · via classifier 0.92").
+6. web/src/views/chat.ts — live title update on `title` SSE event only
+   (composer.ts owns the picker; do not grow chat.ts past 300 lines).
+7. web/src/api.ts — typed client additions for the endpoints above.
 
 NON-GOALS
 No backend edits, no debug view changes, no Projects/artifacts UI.
 
 FILE SCOPE (hard boundary)
-  web/src/views/settings.ts  web/src/views/chat.ts  web/src/api.ts  web/css/settings.css
+  web/src/views/settings.ts  web/src/views/settings_*.ts (only if split)
+  web/src/views/composer.ts  web/src/views/chat.ts  web/src/router.ts
+  web/src/app.ts  web/index.html  web/src/api.ts  web/css/settings.css
 READ-ONLY: all other web/src/**, web/**, everything backend.
 
 INTERFACES
 Endpoint list in CONTEXT, verbatim. Views keep the mount/unmount contract.
+`Route["name"]` grows to `"chat" | "debug" | "settings"` — additive only,
+do not touch chat/debug parsing branches.
 
 CONSTRAINTS
 Plan Mode first; show the Settings layout sketch (text) for approval. Files
-under 300 lines. All dynamic content DOMPurify'd. Model names render from
-API data only — zero literals.
+under 300 lines (chat.ts is already at 304 — trim rather than add if you
+touch it at all beyond the title-event line). All dynamic content
+DOMPurify'd. Model names render from API data only — zero literals.
 
 ACCEPTANCE
 tsc --noEmit clean. Wiring proof: with scripts/dev.sh (fake backend),
-reassign a model's GPU in Settings → Apply → the swap-config view shows the
-change; picking a model in the composer sets the override and the next
-message is labeled with it.
+navigating to #/settings via the sidebar mounts the Settings view; reassign
+a model's GPU in Settings → Apply → the swap-config view shows the change;
+picking a model in the composer sets the override and the next message is
+labeled with it.
 
 STOP CONDITION
-Missing/mismatched endpoint → stop and report; invent nothing.
+Missing/mismatched endpoint → stop and report; invent nothing. If
+scripts/dev.sh's fake backend lacks a route this prompt lists (e.g.
+/api/settings from sibling p2/settings-api, or a /api/gpu/* route from
+p2/gpu-swapgen) at verify time, stop and report the gap — do not invent a
+stub fake response.
 
 FINAL STEPS
 tsc --noEmit; python -m pytest -q (must stay green). Commit
