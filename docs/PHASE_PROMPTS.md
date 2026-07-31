@@ -1064,6 +1064,14 @@ GOAL
    event payload as {"route": {...}}.
 5. tests/test_settings_api.py — overlay round-trip, invalid write rejected,
    effective-config merge, orchestrator-uses-router test against fakes.
+6. This `done`-payload change is a deliberate, expected contract growth
+   (PLAN.md §4.2: `done` is a dict later stages add keys to) — but it breaks
+   the Phase 1 golden-transcript test, which is not in your FILE SCOPE by
+   default. You MUST update `tests/golden/basic_turn.txt` to include the new
+   `"route": {...}` key (and touch `tests/test_chat_sse.py` only if the fake
+   client/config fixture there needs a router-safe default, e.g. a
+   classifier-less fallback path — do not touch its other assertions). This
+   is expected, not scope creep; ship it in the same commit.
 
 NON-GOALS
 No router internals, no swapgen internals, no frontend, no background job
@@ -1072,6 +1080,7 @@ logic (you only call their start hooks).
 FILE SCOPE (hard boundary)
   app/settings/__init__.py  app/settings/store.py  app/settings/api.py
   app/main.py  app/chat/orchestrator.py  tests/test_settings_api.py
+  tests/golden/basic_turn.txt  tests/test_chat_sse.py (golden-fixture fallout only)
 READ-ONLY: app/config.py, config.yaml, app/router/**, app/gpu/**,
 app/background/**.
 
@@ -1097,7 +1106,9 @@ integrator; do not adapt their files.
 
 FINAL STEPS
 pytest -q; commit `feat(settings): overlay store, API, router+gpu wiring`.
-Report endpoints, wiring performed, drift observed.
+Uncommitted work is not done work — commit before reporting, even if you
+plan further changes; a verification pass diffs the branch tip, not your
+working tree. Report endpoints, wiring performed, drift observed.
 ```
 
 ## Prompt: `p2/background-utility`
