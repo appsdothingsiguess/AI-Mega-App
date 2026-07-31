@@ -1,0 +1,139 @@
+# Router eval set (PLAN.md §4.3 / §4.10). Classes, not model names.
+# Box: python scripts/eval_router.py --base-url http://127.0.0.1:8080 --min-accuracy 90
+# CI:  python scripts/eval_router.py --fake
+prompt,expected_class,attachment,notes
+What's the difference between a list and a tuple in Python?,chat,,chat1
+Can you explain how transformers use attention?,chat,,chat2
+Tell me a bit about how vector databases work.,chat,,chat3
+What's your opinion on tabs vs spaces?,chat,,chat4
+Give me a quick overview of the CAP theorem.,chat,,chat5
+What are the pros and cons of microservices?,chat,,chat6
+How does garbage collection work in Python?,chat,,chat7
+What's a good analogy for explaining recursion to a beginner?,chat,,chat8
+Summarize the plot of a typical heist movie in two sentences.,chat,,chat9
+What's the difference between REST and GraphQL?,chat,,chat10
+Explain what a race condition is.,chat,,chat11
+What's the healthiest way to structure a daily routine for focus?,chat,,chat12
+How would you describe the vibe of a cozy coffee shop in one paragraph?,chat,,chat13
+What's the difference between TCP and UDP?,chat,,chat14
+Give me three interesting facts about octopuses.,chat,,chat15
+Write a Python function to reverse a linked list.,code_task,,code1
+Refactor this function to use list comprehension instead of a for loop.,code_task,,code2
+Add type hints to this function signature.,code_task,,code3
+Write a SQL query that joins orders and customers and filters by region.,code_task,,code4
+Convert this callback-based code to use async/await.,code_task,,code5
+Write unit tests for this parsing function.,code_task,,code6
+Implement a binary search tree in TypeScript.,code_task,,code7
+Fix the off-by-one error in this loop.,code_task,,code8
+Write a bash script that backs up a directory nightly.,code_task,,code9
+Generate a regex that matches valid US phone numbers.,code_task,,code10
+"Optimize this SQL query, it's running too slowly on a large table.",code_task,,code11
+Write a Dockerfile for a FastAPI app with uvicorn.,code_task,,code12
+Diagnose why this Flask route returns a 500 error.,code_task,,code13
+Write a Makefile target that runs the test suite and lints the code.,code_task,,code14
+Add error handling around this file read so it doesn't crash on missing files.,code_task,,code15
+Search the web for the latest Node.js LTS version.,tool_call_needed,,tool1
+What's the current weather in Tokyo right now?,tool_call_needed,,tool2
+Fetch the contents of https://news.ycombinator.com and summarize the top story.,tool_call_needed,,tool3
+Grep the codebase for every occurrence of TODO.,tool_call_needed,,tool4
+Remember that I prefer 2-space indentation from now on.,tool_call_needed,,tool5
+Read the contents of config.yaml for me.,tool_call_needed,,tool6
+What's the current stock price of Nvidia?,tool_call_needed,,tool7
+Run this python snippet and tell me the output: print(sum(range(50))),tool_call_needed,,tool8
+Look up who won the last Formula 1 race.,tool_call_needed,,tool9
+"Save this fact for later: my project uses PostgreSQL, not MySQL.",tool_call_needed,,tool10
+Check if there's a new release of Python out yet.,tool_call_needed,,tool11
+Find every file in the app/ directory that imports os.,tool_call_needed,,tool12
+Pull up the README and tell me what it says.,tool_call_needed,,tool13
+What's the exchange rate between USD and EUR today?,tool_call_needed,,tool14
+Go read the docs page at https://docs.python.org/3/library/asyncio.html.,tool_call_needed,,tool15
+"A train leaves City A at 2pm going 60mph toward City B, 270 miles away. A second train leaves City B at 2:30pm going 90mph toward City A. When do they meet? Show your work.",reasoning_task,,reason1
+"If all bloops are razzies and all razzies are lazzies, are all bloops definitely lazzies? Explain step by step.",reasoning_task,,reason2
+Walk through the tradeoffs step by step before recommending whether we should use Qdrant or a hosted vector DB.,reasoning_task,,reason3
+A farmer has 17 sheep. All but 9 die. How many are left? Show your reasoning.,reasoning_task,,reason4
+Think through the second-order effects of moving the utility model onto GPU before answering.,reasoning_task,,reason5
+"Given these three candidate architectures, reason carefully about which one minimizes cross-service latency.",reasoning_task,,reason6
+"Prove, step by step, that the sum of the first n odd numbers is n squared.",reasoning_task,,reason7
+"Carefully reason through this logic puzzle: three boxes are labeled apples, oranges, and mixed, and every label is wrong -- figure out the correct labeling with one draw.",reasoning_task,,reason8
+Think step by step about why this deadlock could occur before suggesting a fix.,reasoning_task,,reason9
+Reason through the cost-benefit tradeoff of Config A vs Config B before deciding.,reasoning_task,,reason10
+"Given these five benchmark numbers, work through which model is the better pick and explain your chain of reasoning.",reasoning_task,,reason11
+"Think carefully step-by-step: if a train is delayed by 20% and normally takes 3 hours, how late does it arrive?",reasoning_task,,reason12
+How many objects are in this image?,vision_task,,vision1
+What does this screenshot say? [attached image],vision_task,,vision2
+Describe what's happening in this photo.,vision_task,,vision3
+Read the text out of this chart image and summarize the trend.,vision_task,,vision4
+Is there a bug visible in this error screenshot?,vision_task,,vision5
+Count how many red circles are in the attached picture.,vision_task,,vision6
+What's the relationship between the shapes in this diagram?,vision_task,,vision7
+Transcribe the handwriting in this image.,vision_task,,vision8
+Does this UI screenshot look broken to you?,vision_task,,vision9
+What brand of laptop is shown in this photo?,vision_task,,vision10
+"haha nice, thanks!",chit_chat,,chitchat1
+good morning!,chit_chat,,chitchat2
+"you're a lifesaver, appreciate it",chit_chat,,chitchat3
+lol ok that's fair,chit_chat,,chitchat4
+"cool, that all makes sense",chit_chat,,chitchat5
+"alright, talk soon",chit_chat,,chitchat6
+"no worries, take your time",chit_chat,,chitchat7
+yep exactly what I needed,chit_chat,,chitchat8
+haha yeah I figured,chit_chat,,chitchat9
+"sounds good, thanks again",chit_chat,,chitchat10
+can you check what this code does and also look up if there's a newer library version available?,tool_call_needed,,ambig1
+why is this function slow -- think it through before answering,reasoning_task,,ambig2
+write a function and then explain step by step why it's correct,code_task,,ambig3
+what does this diagram show and can you also write the SQL to reproduce it?,vision_task,,ambig4
+"thanks, one more thing -- can you grep for 'TODO' across the repo?",tool_call_needed,,ambig5
+haha ok but actually can you fetch that URL for me first,tool_call_needed,,ambig6
+"reason through whether we should refactor this file, then just go ahead and write the refactored version",code_task,,ambig7
+"cool, remember that preference and also tell me what a mutex is",tool_call_needed,,ambig8
+What is the difference between a stack and a queue?,chat,,ext_chat1
+Explain HTTP status codes 401 vs 403 in plain language.,chat,,ext_chat2
+What does eventual consistency mean for a distributed cache?,chat,,ext_chat3
+Give a short overview of how DNS resolution works.,chat,,ext_chat4
+What are the main tradeoffs of using Redis as a session store?,chat,,ext_chat5
+How is a bloom filter different from a hash set?,chat,,ext_chat6
+lol yeah fair enough,chit_chat,,ext_chit1
+morning! how are you?,chit_chat,,ext_chit2
+"thanks a ton, that helped",chit_chat,,ext_chit3
+"gotcha, makes sense",chit_chat,,ext_chit4
+"ok cool, later!",chit_chat,,ext_chit5
+haha true,chit_chat,,ext_chit6
+Write a Rust function that parses a CSV line into a Vec of strings.,code_task,,ext_code1
+Implement merge sort in Go with unit tests.,code_task,,ext_code2
+Fix the null pointer in this Java method and add a guard clause.,code_task,,ext_code3
+Write a React hook that debounces a search input value.,code_task,,ext_code4
+Add pagination to this FastAPI list endpoint.,code_task,,ext_code5
+Convert this Python script into a CLI with argparse.,code_task,,ext_code6
+Write a pytest fixture that spins up a temporary SQLite DB.,code_task,,ext_code7
+Refactor this class to use dependency injection.,code_task,code_file,ext_code8
+Search the web for the latest llama.cpp release notes.,tool_call_needed,,ext_tool1
+What is Bitcoin trading at right now?,tool_call_needed,,ext_tool2
+Fetch https://api.github.com/zen and tell me what it returns.,tool_call_needed,,ext_tool3
+Look up today's headlines from Hacker News.,tool_call_needed,,ext_tool4
+What is the current UTC time and date?,tool_call_needed,,ext_tool5
+Grep the repo for every use of VectorStore.,tool_call_needed,,ext_tool6
+Read package.json and list the dependencies.,tool_call_needed,,ext_tool7
+Check whether Qdrant 1.12 has been released yet.,tool_call_needed,,ext_tool8
+Three switches control three bulbs in another room. You may enter the room once. How do you identify each switch? Walk through the solution.,reasoning_task,,ext_reason1
+A bat and a ball cost $1.10. The bat costs $1 more than the ball. How much is the ball? Show your reasoning.,reasoning_task,,ext_reason2
+"Work through whether we should pin the big model solo to GPU0 or tensor-split, given VRAM and latency constraints.",reasoning_task,,ext_reason3
+"If you flip a fair coin until you get heads, what is the expected number of flips? Derive it step by step.",reasoning_task,,ext_reason4
+Carefully compare these two caching strategies and recommend one with a full chain of reasoning.,reasoning_task,,ext_reason5
+Prove that there are infinitely many primes; write the proof carefully.,reasoning_task,,ext_reason6
+What text appears on the sign in this photo?,vision_task,image,ext_vision1
+Describe the layout of this UI mockup screenshot.,vision_task,image,ext_vision2
+How many people are visible in this picture?,vision_task,image,ext_vision3
+Read the error message from this terminal screenshot.,vision_task,image,ext_vision4
+Is the chart in this image trending up or down?,vision_task,image,ext_vision5
+What color is the car in the attached photo?,vision_task,image,ext_vision6
+"I spent all weekend debugging my life choices, haha",chit_chat,,ext_adv1
+My brain needs a refactor after that meeting,chit_chat,,ext_adv2
+That party was a total stack overflow of people,chit_chat,,ext_adv3
+I need to push myself to hit the gym more often,chit_chat,,ext_adv4
+"Can you explain what people mean when they say ""ship it"" at work?",chat,,ext_adv5
+"What does ""technical debt"" mean metaphorically in project management?",chat,,ext_adv6
+"Is ""spaghetti code"" just a funny phrase or a real concept? Explain casually.",chat,,ext_adv7
+I told my friend their dating life needs better error handling — just joking around,chit_chat,,ext_adv8
+"Why do programmers say ""it works on my machine"" as a meme?",chat,,ext_adv9
+"Cool, my coffee compiler finished brewing",chit_chat,,ext_adv10
