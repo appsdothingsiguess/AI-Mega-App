@@ -1,7 +1,7 @@
-/** Hash router: #/ | #/chat/:id → chat; #/debug | #/debug?trace= → debug. */
+/** Hash router: #/ | #/chat/:id → chat; #/debug | #/debug?trace= → debug; #/settings → settings. */
 
 export interface Route {
-  name: "chat" | "debug";
+  name: "chat" | "debug" | "settings";
   chatId: string | null;
   traceId: string | null;
 }
@@ -32,6 +32,9 @@ export function parseHash(hash: string = location.hash): Route {
 
   if (parts[0] === "debug") {
     return { name: "debug", chatId: null, traceId: params.get("trace") };
+  }
+  if (parts[0] === "settings") {
+    return { name: "settings", chatId: null, traceId: null };
   }
   if (parts[0] === "chat" && parts[1]) {
     return { name: "chat", chatId: parts[1], traceId: null };

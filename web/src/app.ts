@@ -5,6 +5,7 @@ import { navigate, registerView, startRouter, type Route } from "./router.js";
 import { get, set, subscribe } from "./store.js";
 import { createChatView } from "./views/chat.js";
 import { createDebugView } from "./views/debug.js";
+import { createSettingsView } from "./views/settings.js";
 
 function $(id: string): HTMLElement {
   const el = document.getElementById(id);
@@ -30,8 +31,10 @@ function renderRecents(): void {
 function setNavActive(route: Route): void {
   const chats = document.getElementById("nav-chats");
   const debug = document.getElementById("nav-debug");
+  const settings = document.getElementById("nav-settings");
   chats?.classList.toggle("active", route.name === "chat");
   debug?.classList.toggle("active", route.name === "debug");
+  settings?.classList.toggle("active", route.name === "settings");
 }
 
 async function refreshChats(): Promise<void> {
@@ -64,11 +67,13 @@ async function boot(): Promise<void> {
   $("nav-new-chat").addEventListener("click", () => void onNewChat());
   $("nav-chats").addEventListener("click", () => navigate("#/"));
   $("nav-debug").addEventListener("click", () => navigate("#/debug"));
+  $("nav-settings").addEventListener("click", () => navigate("#/settings"));
 
   subscribe(() => renderRecents());
 
   registerView("chat", createChatView);
   registerView("debug", createDebugView);
+  registerView("settings", createSettingsView);
 
   try {
     const health = await getHealth();

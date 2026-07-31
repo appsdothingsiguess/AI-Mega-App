@@ -4,6 +4,7 @@ import type {
   ChatSseEvent,
   ChatSummary,
   Health,
+  HealthModel,
   Message,
   Span,
   Trace,
@@ -60,6 +61,73 @@ export async function setChatModel(
       body: JSON.stringify({ model }),
     }),
   );
+}
+
+export type GpuId = number | "cpu";
+
+export interface ModelSettingsBody {
+  gpu: GpuId; resident: boolean; ttl_s: number; enabled?: boolean;
+}
+export interface RoutingBody {
+  rules?: { keywords: string[]; intent: string }[];
+  intents?: Record<string, string>;
+  classifier?: Record<string, unknown>;
+}
+/** Effective GET /api/settings (secrets redacted). */
+export type AppSettings = Record<string, unknown> & {
+  models?: unknown[]; routing?: RoutingBody;
+};
+export interface RosterModel {
+  alias: string; class: string; device: string | number;
+  resident: boolean; loaded: boolean; ctx: number;
+}
+export interface GpuInfo {
+  index: number; name: string; mem_total_mb: number; mem_free_mb: number;
+}
+export interface GpuApplyResult { ok: boolean; health_url: string; path: string }
+
+async function text(res: Response): Promise<string> {
+  if (!res.ok) {
+    const body = await res.text().catch(() => "");
+    throw new ApiError(body || res.statusText, res.status);
+  }
+  return res.text();
+}
+
+export async function getSettings(): Promise<AppSettings> {
+  return json(await fetch("/api/settings"));
+}
+export async function putModelSettings(
+  name: string, body: ModelSettingsBody,
+): Promise<AppSettings> {
+  return json(await fetch(`/api/settings/models/${encodeURIComponent(name)}`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  }));
+}
+export async function putRouting(body: RoutingBody): Promise<AppSettings> {
+  return json(await fetch("/api/settings/routing", {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  }));
+}
+export async function listModels(): Promise<RosterModel[]> {
+  return json(await fetch("/api/models"));
+}
+/** Map roster -> HealthModel-like for store/picker reuse. */
+export function rosterToHealthModels(models: RosterModel[]): HealthModel[] {
+  return models.map((m) => ({ name: m.alias, class: m.class, enabled: true }));
+}
+export async function getGpuInventory(): Promise<GpuInfo[]> {
+  return json(await fetch("/api/gpu/inventory"));
+}
+export async function getSwapConfig(): Promise<string> {
+  return text(await fetch("/api/gpu/swap-config"));
+}
+export async function postGpuApply(): Promise<GpuApplyResult> {
+  return json(await fetch("/api/gpu/apply", { method: "POST" }));
 }
 
 export async function listTraces(opts?: {
