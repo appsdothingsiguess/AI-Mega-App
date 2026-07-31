@@ -37,6 +37,46 @@ export async function setChatModel(chatId, model) {
         body: JSON.stringify({ model }),
     }));
 }
+async function text(res) {
+    if (!res.ok) {
+        const body = await res.text().catch(() => "");
+        throw new ApiError(body || res.statusText, res.status);
+    }
+    return res.text();
+}
+export async function getSettings() {
+    return json(await fetch("/api/settings"));
+}
+export async function putModelSettings(name, body) {
+    return json(await fetch(`/api/settings/models/${encodeURIComponent(name)}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+    }));
+}
+export async function putRouting(body) {
+    return json(await fetch("/api/settings/routing", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+    }));
+}
+export async function listModels() {
+    return json(await fetch("/api/models"));
+}
+/** Map roster -> HealthModel-like for store/picker reuse. */
+export function rosterToHealthModels(models) {
+    return models.map((m) => ({ name: m.alias, class: m.class, enabled: true }));
+}
+export async function getGpuInventory() {
+    return json(await fetch("/api/gpu/inventory"));
+}
+export async function getSwapConfig() {
+    return text(await fetch("/api/gpu/swap-config"));
+}
+export async function postGpuApply() {
+    return json(await fetch("/api/gpu/apply", { method: "POST" }));
+}
 export async function listTraces(opts) {
     const q = new URLSearchParams();
     if (opts?.chatId)

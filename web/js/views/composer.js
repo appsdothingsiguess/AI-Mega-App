@@ -1,10 +1,32 @@
 /** Composer model picker helpers (split from chat.ts for size). */
-import { setChatModel } from "../api.js";
+import { listModels, rosterToHealthModels, setChatModel } from "../api.js";
 import { escapeHtml } from "../markdown.js";
 import { get, set } from "../store.js";
 import { PICKER_CLASSES, PICKER_GROUP_LABELS, } from "../types.js";
+const AUTO_LABEL = "Auto (router)";
 export function selectedModelLabel() {
-    return get().modelOverride ?? "Auto";
+    return get().modelOverride ?? AUTO_LABEL;
+}
+/** Hover title from done.route: "coder · via classifier 0.92". */
+export function routeHoverTitle(route, fallbackModel) {
+    if (!route)
+        return null;
+    const model = route.model ?? fallbackModel ?? "";
+    const source = route.source ?? "";
+    if (!model && !source)
+        return null;
+    const conf = typeof route.confidence === "number"
+        ? ` ${route.confidence.toFixed(2)}`
+        : "";
+    return `${model} · via ${source}${conf}`.replace(/^ · /, "").trim();
+}
+export async function refreshHealthModels() {
+    try {
+        set({ healthModels: rosterToHealthModels(await listModels()) });
+    }
+    catch {
+        /* keep prior */
+    }
 }
 export function pickerGroups() {
     const models = get().healthModels.filter((m) => PICKER_CLASSES.includes(m.class));
@@ -29,7 +51,7 @@ export function renderPickerMenu(menu, open, onPick) {
     auto.className =
         "model-menu-row" + (get().modelOverride == null ? " selected" : "");
     auto.innerHTML =
-        `<span>Auto</span><span class="muted" style="font-size:11px">router decides</span>`;
+        `<span>${AUTO_LABEL}</span><span class="muted" style="font-size:11px">router decides</span>`;
     auto.addEventListener("click", () => onPick(null));
     menu.appendChild(auto);
     for (const g of pickerGroups()) {
@@ -58,4 +80,43 @@ export async function applyModelPick(chatId, model) {
     catch (err) {
         console.error("setChatModel", err);
     }
+}
+export function applyTitleToStore(chatId, title, activeChatId, setHeader) {
+    set({
+        chats: get().chats.map((c) => (c.id === chatId ? { ...c, title } : c)),
+    });
+    if (activeChatId === chatId)
+        setHeader(title.trim() || "Chat");
+}
+/** Inner HTML for chat layout (keeps chat.ts under 300 lines). */
+export function chatLayoutHtml(label) {
+    return `<div class="chat-layout"><div class="chat-column">
+<div class="chat-header"><span class="chat-header-title">Chat</span></div>
+<div class="messages"><div class="messages-inner"></div></div>
+<div class="composer-wrap"><div class="composer-inner">
+<div class="tool-chips">
+<span class="tool-chip" title="Phase 3">web_search</span>
+<span class="tool-chip" title="Phase 5">browser</span>
+<span class="tool-chip" title="Phase 3">file_ops</span>
+</div>
+<div class="composer">
+<textarea rows="1" placeholder="Message Local LLM…"></textarea>
+<div class="composer-toolbar">
+<button type="button" class="attach-btn" disabled title="Attachments — later phase" aria-label="Attach">
+<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg>
+</button>
+<div class="model-picker">
+<button type="button" class="model-picker-btn" id="model-picker-btn">
+<span class="model-dot"></span>
+<span class="model-picker-label">${escapeHtml(label)}</span>
+<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"></polyline></svg>
+</button>
+<div class="model-menu" hidden></div>
+</div>
+<span class="send-hint">⏎ to send</span>
+<button type="button" class="send-btn" id="send-btn" aria-label="Send">
+<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="12" y1="19" x2="12" y2="5"></line><polyline points="5 12 12 5 19 12"></polyline></svg>
+</button>
+</div></div></div></div></div>
+<aside class="right-panel muted">Artifact panel — Phase 3</aside></div>`;
 }

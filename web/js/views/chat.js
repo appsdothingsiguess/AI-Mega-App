@@ -1,9 +1,9 @@
-/** Chat view: history, SSE stream, model_loading, picker from /health.models. */
-import { createChat, getMessages, listChats, streamMessage, } from "../api.js";
+/** Chat view: history, SSE stream, picker from /api/models, route/title. */
+import { createChat, getMessages, listChats, streamMessage } from "../api.js";
 import { escapeHtml, renderMarkdown } from "../markdown.js";
 import { navigate, replaceHash } from "../router.js";
 import { get, set } from "../store.js";
-import { applyModelPick, renderPickerMenu, selectedModelLabel, } from "./composer.js";
+import { applyModelPick, applyTitleToStore, chatLayoutHtml, refreshHealthModels, renderPickerMenu, routeHoverTitle, selectedModelLabel, } from "./composer.js";
 export function createChatView() {
     let root = null;
     let route = null;
@@ -36,6 +36,11 @@ export function createChatView() {
         if (label)
             label.textContent = selectedModelLabel();
         syncPicker();
+    }
+    function setHeaderTitle(text) {
+        const el = root?.querySelector(".chat-header-title");
+        if (el)
+            el.textContent = text;
     }
     function renderMessages(scroll) {
         const box = root?.querySelector(".messages-inner");
@@ -71,6 +76,9 @@ export function createChatView() {
                 if (m.model) {
                     const modelEl = document.createElement("span");
                     modelEl.textContent = m.model;
+                    const tip = routeHoverTitle(m.route, m.model);
+                    if (tip)
+                        modelEl.title = tip;
                     meta.appendChild(modelEl);
                 }
                 if (m.traceId) {
@@ -121,14 +129,11 @@ export function createChatView() {
             return route.chatId;
         try {
             const { id } = await createChat();
-            // replaceHash (not navigate): navigate remounts the view and aborts the
-            // in-flight AbortController / SSE started by send() right after this.
+            // replaceHash (not navigate): navigate remounts and aborts in-flight SSE.
             route = { name: "chat", chatId: id, traceId: null };
             set({ chats: await listChats(), activeChatId: id });
             replaceHash(`#/chat/${id}`);
-            const title = root?.querySelector(".chat-header-title");
-            if (title)
-                title.textContent = "Chat";
+            setHeaderTitle("Chat");
             return id;
         }
         catch (err) {
@@ -185,12 +190,20 @@ export function createChatView() {
                     loadingModel = ev.data.model ?? "model";
                     renderMessages(true);
                 }
+                else if (ev.event === "title") {
+                    const d = ev.data;
+                    if (d.chat_id && typeof d.title === "string") {
+                        applyTitleToStore(d.chat_id, d.title, route?.chatId, setHeaderTitle);
+                    }
+                }
                 else if (ev.event === "done") {
                     const d = ev.data;
                     loadingModel = null;
                     assistant.id = d.message_id ?? assistant.id;
                     assistant.model = d.model ?? assistant.model;
                     assistant.traceId = d.trace_id;
+                    if (d.route)
+                        assistant.route = d.route;
                     set({ lastTraceId: d.trace_id });
                     renderMessages(true);
                 }
@@ -213,51 +226,9 @@ export function createChatView() {
         catch { /* ignore */ }
     }
     function buildDom(el) {
-        el.innerHTML = `
-      <div class="chat-layout">
-        <div class="chat-column">
-          <div class="chat-header"><span class="chat-header-title">Chat</span></div>
-          <div class="messages"><div class="messages-inner"></div></div>
-          <div class="composer-wrap"><div class="composer-inner">
-            <div class="tool-chips">
-              <span class="tool-chip" title="Phase 3">web_search</span>
-              <span class="tool-chip" title="Phase 5">browser</span>
-              <span class="tool-chip" title="Phase 3">file_ops</span>
-            </div>
-            <div class="composer">
-              <textarea rows="1" placeholder="Message Local LLM…"></textarea>
-              <div class="composer-toolbar">
-                <button type="button" class="attach-btn" disabled title="Attachments — later phase" aria-label="Attach">
-                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                    <path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/>
-                  </svg>
-                </button>
-                <div class="model-picker">
-                  <button type="button" class="model-picker-btn" id="model-picker-btn">
-                    <span class="model-dot"></span>
-                    <span class="model-picker-label">${escapeHtml(selectedModelLabel())}</span>
-                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"></polyline></svg>
-                  </button>
-                  <div class="model-menu" hidden></div>
-                </div>
-                <span class="send-hint">⏎ to send</span>
-                <button type="button" class="send-btn" id="send-btn" aria-label="Send">
-                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
-                    <line x1="12" y1="19" x2="12" y2="5"></line>
-                    <polyline points="5 12 12 5 19 12"></polyline>
-                  </svg>
-                </button>
-              </div>
-            </div>
-          </div></div>
-        </div>
-        <aside class="right-panel muted">Artifact panel — Phase 3</aside>
-      </div>`;
-        const title = el.querySelector(".chat-header-title");
-        if (title) {
-            const chat = get().chats.find((c) => c.id === route?.chatId);
-            title.textContent = chat?.title?.trim() || (route?.chatId ? "Chat" : "New chat");
-        }
+        el.innerHTML = chatLayoutHtml(selectedModelLabel());
+        const chat = get().chats.find((c) => c.id === route?.chatId);
+        setHeaderTitle(chat?.title?.trim() || (route?.chatId ? "Chat" : "New chat"));
         el.querySelector("#model-picker-btn")?.addEventListener("click", (e) => {
             e.stopPropagation();
             pickerOpen = !pickerOpen;
@@ -274,8 +245,7 @@ export function createChatView() {
         onDocClick = (e) => {
             if (!pickerOpen)
                 return;
-            const t = e.target;
-            if (root?.querySelector(".model-picker")?.contains(t))
+            if (root?.querySelector(".model-picker")?.contains(e.target))
                 return;
             pickerOpen = false;
             syncPicker();
@@ -288,6 +258,7 @@ export function createChatView() {
             route = r;
             set({ activeChatId: r.chatId });
             buildDom(el);
+            await refreshHealthModels();
             syncPicker();
             if (r.chatId)
                 await loadHistory(r.chatId);

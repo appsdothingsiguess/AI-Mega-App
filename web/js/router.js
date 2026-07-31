@@ -1,4 +1,4 @@
-/** Hash router: #/ | #/chat/:id → chat; #/debug | #/debug?trace= → debug. */
+/** Hash router: #/ | #/chat/:id → chat; #/debug | #/debug?trace= → debug; #/settings → settings. */
 const views = new Map();
 let current = null;
 let host = null;
@@ -15,6 +15,9 @@ export function parseHash(hash = location.hash) {
     const parts = path.split("/").filter(Boolean);
     if (parts[0] === "debug") {
         return { name: "debug", chatId: null, traceId: params.get("trace") };
+    }
+    if (parts[0] === "settings") {
+        return { name: "settings", chatId: null, traceId: null };
     }
     if (parts[0] === "chat" && parts[1]) {
         return { name: "chat", chatId: parts[1], traceId: null };
