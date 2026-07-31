@@ -60,14 +60,14 @@ def create_app(config: Config | None = None) -> FastAPI:
         # (e.g. the next test) doesn't inherit a closed connection.
         reset_debug_connection(app.state.db)
         if background_start is not None:
-            background_start(app)
+            await background_start(app)
         if start_rewarm is not None:
             await start_rewarm(app)  # async when present (sibling drift)
         try:
             yield
         finally:
             if background_stop is not None:
-                background_stop(app)
+                await background_stop(app)
             reset_debug_connection(None)
             app.state.db.close()
 
