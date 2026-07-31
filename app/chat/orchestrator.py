@@ -1,7 +1,6 @@
-"""The turn loop (docs/FEATURES.md A4; PLAN.md §4.2). No tool logic, no
-routing logic — those are Phase 2/3 modules the orchestrator calls through
-marked seams; this module only resolves the model, streams a completion,
-and persists the turn.
+"""The turn loop (docs/FEATURES.md A4; PLAN.md §4.2). No tool logic —
+routing is delegated to app.router.route via a soft-imported seam; this
+module resolves the model, streams a completion, and persists the turn.
 """
 
 from __future__ import annotations
@@ -19,6 +18,19 @@ from app.llm_client import LLMClient, LLMError
 from app.types import ChatDelta, SSEEvent
 
 from . import history
+
+# Soft-import Phase-2 seams so this worktree merges cleanly before
+# app.router / app.background land. Tests monkeypatch `_route` /
+# `_on_turn_complete` on this module.
+try:
+    from app.router import route as _route
+except ImportError:  # BLOCKED: app.router absent — interface-gate
+    _route = None
+
+try:
+    from app.background import on_turn_complete as _on_turn_complete
+except ImportError:  # BLOCKED: app.background absent — interface-gate
+    _on_turn_complete = None
 
 
 class ChatCompleter(Protocol):
@@ -135,15 +147,21 @@ class ChatOrchestrator:
         return None
 
     async def handle_message(
-        self, chat_id: str, text: str, model: str | None = None
+        self,
+        chat_id: str,
+        text: str,
+        model: str | None = None,
+        attachments: list[str] | None = None,
     ) -> AsyncIterator[SSEEvent]:
-        """The Phase-1 turn: resolve model -> persist user msg -> stream
-        completion -> persist assistant msg. Every stage is a debug span.
-        Yields SSEEvent objects only — the finally-block terminal-event
-        guarantee lives in app/chat/api.py, which wraps this generator."""
+        """Resolve model -> persist user msg -> stream completion -> persist
+        assistant msg. Every stage is a debug span. Yields SSEEvent objects
+        only — the finally-block terminal-event guarantee lives in
+        app/chat/api.py, which wraps this generator."""
+        attachments = attachments or []
         trace_id = new_trace(chat_id)
         accumulated: list[str] = []
         usage_dict: dict[str, Any] | None = None
+        route_info: dict[str, Any]
 
         chat_row = await run_sync(history.get_chat, self.conn, chat_id)
         if chat_row is None:
@@ -155,23 +173,33 @@ class ChatOrchestrator:
 
         try:
             async with span(trace_id, "route", explicit_model=model) as sp:
-                # --- Phase 2 router seam ---
-                # Phase 2's smart router (PLAN.md §4.3: override > deterministic
-                # rules > classifier) replaces this three-way `or` with a call to
-                # `app.router.route(chat, text, attachments) -> RouteResult`.
-                # The explicit `model` param and `chat.model_override` must keep
-                # winning ahead of the classifier per the frozen layer ordering —
-                # this exact line is where that call slots in.
-                resolved_model = (
-                    model or chat_row["model_override"] or self.config.defaults.chat_model
-                )
-                if model:
-                    source = "explicit"
-                elif chat_row["model_override"]:
-                    source = "chat_override"
+                # PLAN.md §4.3: override > rules > classifier. Explicit
+                # `model` and `chat.model_override` both map to source
+                # "override" (frozen RouteResult.source set).
+                if model or chat_row["model_override"]:
+                    resolved_model = model or chat_row["model_override"]
+                    route_info = {
+                        "model": resolved_model,
+                        "source": "override",
+                        "intent": "manual",
+                        "confidence": None,
+                    }
+                elif _route is not None:
+                    result = await _route(chat_row, text, attachments)
+                    resolved_model = result.model
+                    route_info = result.model_dump()
                 else:
-                    source = "default"
-                sp.set(model=resolved_model, source=source)
+                    # BLOCKED: app.router absent — degraded path uses
+                    # defaults.chat_model with frozen-set source
+                    # "classifier" so tests can monkeypatch `_route`.
+                    resolved_model = self.config.defaults.chat_model
+                    route_info = {
+                        "model": resolved_model,
+                        "source": "classifier",
+                        "intent": "chat",
+                        "confidence": None,
+                    }
+                sp.set(**route_info)
 
             async with span(trace_id, "db", op="persist_user_message"):
                 await run_sync(history.insert_message, self.conn, chat_id, "user", text, None)
@@ -220,12 +248,21 @@ class ChatOrchestrator:
                 )
                 await run_sync(history.touch_chat, self.conn, chat_id)
 
-            # `done` is built as a dict later phases add keys to (route in
-            # Phase 2, citations/context in Phase 3) — never a fixed literal.
+            if _on_turn_complete is not None:
+                await _on_turn_complete(chat_id)
+
+            # `done` is built as a dict later phases add keys to (route,
+            # citations/context) — never a fixed literal.
             done_payload: dict[str, Any] = {
                 "message_id": message_row["id"],
                 "model": resolved_model,
                 "usage": usage_dict,
+                "route": {
+                    "source": route_info["source"],
+                    "intent": route_info["intent"],
+                    "model": resolved_model,
+                    "confidence": route_info.get("confidence"),
+                },
                 # Not in the frozen 3-field literal (PLAN.md §4.2) but the
                 # dict is explicitly meant for later stages to add keys to;
                 # trace_id is what makes the turn's spans discoverable via
