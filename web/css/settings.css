@@ -1,15 +1,18 @@
 /* Settings view — tab rail + Models / Routing panels */
 
-.settings-view {
+/* #view (app.css) sets flex-direction: column by ID; this view reuses that
+   same #view element, so the override needs #id+.class specificity to win. */
+#view.settings-view {
   flex: 1;
   min-height: 0;
   display: flex;
+  flex-direction: row;
   position: relative;
   background: var(--bg-app);
 }
 
 .settings-rail {
-  width: 160px;
+  width: 200px;
   flex-shrink: 0;
   display: flex;
   flex-direction: column;
@@ -18,6 +21,13 @@
   border-right: 1px solid var(--border);
   background: var(--bg-sidebar);
   overflow-y: auto;
+}
+
+.settings-rail-title {
+  font-size: 16px;
+  font-weight: 600;
+  padding: 0 10px 14px 10px;
+  color: var(--text);
 }
 
 .settings-tab {
@@ -76,6 +86,11 @@
   border-radius: 10px;
   overflow: hidden;
   background: var(--bg-panel);
+}
+
+.models-table-scroll {
+  overflow-x: auto;
+  overflow-y: visible;
 }
 
 .models-table {

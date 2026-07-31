@@ -4,8 +4,8 @@ import { mountModelsPanel } from "./settings_models.js";
 import { mountRoutingPanel } from "./settings_routing.js";
 const TABS = [
     { id: "models", key: "models", label: "Models", active: true },
-    { id: "routing", key: "routing", label: "Routing", active: true },
     { id: "stub", key: "providers", label: "Providers", active: false },
+    { id: "routing", key: "routing", label: "Routing", active: true },
     { id: "stub", key: "tools", label: "Tools", active: false },
     { id: "stub", key: "opencode", label: "opencode", active: false },
     { id: "stub", key: "browseros", label: "BrowserOS", active: false },
@@ -98,6 +98,10 @@ export function createSettingsView() {
         if (!rail || !panel)
             return;
         rail.replaceChildren();
+        const heading = document.createElement("div");
+        heading.className = "settings-rail-title";
+        heading.textContent = "Settings";
+        rail.appendChild(heading);
         for (const t of TABS) {
             const btn = document.createElement("button");
             btn.type = "button";

@@ -73,12 +73,14 @@ export function mountModelsPanel(panel, opts) {
         <p class="settings-lead">Roster, device placement, residency. Edits stay draft until Apply.</p>
       </div>
       <div class="models-table-wrap">
-        <table class="models-table">
-          <thead><tr>
-            <th>Alias</th><th>Class</th><th>Device</th><th>Resident</th><th>TTL</th>
-          </tr></thead>
-          <tbody>${rows || `<tr><td colspan="5" class="muted">No models from API.</td></tr>`}</tbody>
-        </table>
+        <div class="models-table-scroll">
+          <table class="models-table">
+            <thead><tr>
+              <th>Alias</th><th>Class</th><th>Device</th><th>Resident</th><th>TTL</th>
+            </tr></thead>
+            <tbody>${rows || `<tr><td colspan="5" class="muted">No models from API.</td></tr>`}</tbody>
+          </table>
+        </div>
       </div>
       <div class="settings-actions">
         <button type="button" class="btn-apply" ${applying || dirty.length === 0 ? "disabled" : ""}>
