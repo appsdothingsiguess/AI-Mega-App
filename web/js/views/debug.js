@@ -1,6 +1,19 @@
 /** Debug view: trace list, waterfall, span detail, live /api/debug/stream. */
 import { getTrace, listTraces, streamDebugSpans } from "../api.js";
 import { escapeHtml } from "../markdown.js";
+import { get } from "../store.js";
+function chatLabel(chatId) {
+    if (!chatId)
+        return "—";
+    const chat = get().chats.find((c) => c.id === chatId);
+    return chat?.title?.trim() || `chat ${chatId.slice(0, 8)}`;
+}
+/** Background jobs (e.g. title generation) get their own single-span trace
+ *  sharing the turn's chat_id — pick the substantive turn trace by default
+ *  so opening Debug doesn't land on a lone "title" span. */
+function isBackgroundOnly(t) {
+    return t.spans.length > 0 && t.spans.every((s) => s.stage === "title");
+}
 export function createDebugView() {
     let root = null;
     let traces = [];
@@ -67,7 +80,7 @@ export function createDebugView() {
             btn.innerHTML = `
         <div class="trace-row-title">
           <span class="trace-dot"></span>
-          <span>${escapeHtml(t.chat_id ?? "—")}</span>
+          <span>${escapeHtml(chatLabel(t.chat_id))}</span>
         </div>
         <div class="trace-summary">${escapeHtml(t.trace_id.slice(0, 8))} · ${escapeHtml(stages.slice(0, 48))}</div>`;
             btn.addEventListener("click", () => void selectTrace(t.trace_id));
@@ -258,8 +271,11 @@ export function createDebugView() {
             render();
             if (route.traceId)
                 await selectTrace(route.traceId);
-            else if (traces[0])
-                await selectTrace(traces[0].trace_id);
+            else {
+                const initial = traces.find((t) => !isBackgroundOnly(t)) ?? traces[0];
+                if (initial)
+                    await selectTrace(initial.trace_id);
+            }
             live = streamDebugSpans((span) => mergeSpan(span), { signal: abort.signal });
         },
         unmount,
