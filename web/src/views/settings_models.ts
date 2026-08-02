@@ -62,7 +62,7 @@ function deviceOptions(
   for (const g of inv.slice().sort((a, b) => a.index - b.index)) {
     const v = String(g.index);
     seen.add(v);
-    opts.push({ value: v, label: `GPU${g.index}` });
+    opts.push({ value: v, label: `GPU${g.index} — ${g.name}` });
   }
   if (!seen.has("cpu")) {
     seen.add("cpu");

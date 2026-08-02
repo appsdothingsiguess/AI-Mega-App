@@ -134,7 +134,10 @@ def test_reset_config_cache_forces_reload(monkeypatch: pytest.MonkeyPatch) -> No
 # New fields on ModelEntry
 # ---------------------------------------------------------------------------
 
-def test_model_entry_new_fields_round_trip(tmp_path: Path) -> None:
+def test_model_entry_new_fields_round_trip(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(config_mod, "OVERLAY_PATH", tmp_path / "no-such-overlay.yaml")
     cfg_data = dict(MINIMAL_CONFIG)
     cfg_data["models"] = [
         {
@@ -159,7 +162,10 @@ def test_model_entry_new_fields_round_trip(tmp_path: Path) -> None:
     assert m.extra_flags == ["--cache-type-k", "q8_0"]
 
 
-def test_model_entry_defaults_for_optional_fields(tmp_path: Path) -> None:
+def test_model_entry_defaults_for_optional_fields(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(config_mod, "OVERLAY_PATH", tmp_path / "no-such-overlay.yaml")
     base_path = tmp_path / "config.yaml"
     write_yaml(base_path, MINIMAL_CONFIG)
     cfg = load_config(base_path)
