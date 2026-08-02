@@ -51,6 +51,14 @@ class BackgroundQueue:
             await worker
             self._worker = None
 
+    def cancel(self) -> None:
+        """Forcibly cancel the worker task (used when stop()'s graceful
+        drain times out). Best-effort; does not await completion."""
+        self._stopping = True
+        if self._worker is not None:
+            self._worker.cancel()
+            self._worker = None
+
     async def drain(self) -> None:
         """Block until every submitted job has finished (test helper)."""
         await self._queue.join()

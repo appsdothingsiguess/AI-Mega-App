@@ -74,7 +74,7 @@ npx tsc --noEmit
 
 Full CI gate = ruff + `tsc --noEmit` + pytest + Playwright-vs-fake. Tests run against a fake llama-swap (canned OpenAI-format responses) — no GPU needed in CI. Live-hardware checks belong in `scripts/preflight.py`, run only on the box. A feature PR = code + wiring (registered at startup, reachable end-to-end) + tests + `docs/<feature>.md`; "built but not injected" is a rejected PR. Every new pipeline stage must write a debug span — a feature invisible in the Debug panel (`PLAN.md` §4.16) is not done.
 
-Router changes additionally run the eval harness (`eval/` labeled prompt→route CSV + scoring script); Phase 2 exit criterion is ≥90%.
+Router changes additionally run the eval harness (`eval/` labeled prompt→route CSV + scoring script); Phase 2 exit criterion is ≥90%. `--base-url` for `scripts/eval_router.py` must include `/v1` (matching `config.yaml`'s `llama_swap.base_url`, e.g. `http://127.0.0.1:8080/v1`) — the bare host:port 404s every classifier call and silently falls back to `chat` for everything, which reads like a broken classifier but is just a wrong URL.
 
 ## Architecture shape (see `PLAN.md` §3 for the full diagram)
 

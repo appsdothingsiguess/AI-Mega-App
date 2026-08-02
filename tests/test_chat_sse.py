@@ -262,6 +262,40 @@ def test_model_override_persists_and_is_used(tmp_path: Path) -> None:
     assert messages[1]["model"] == "chat-default"
 
 
+def test_no_override_forwards_llm_client_and_config_to_router(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """Regression: the orchestrator's call to app.router.route() must pass
+    llm_client and config, not just (chat, text, attachments). Omitting
+    them silently defaults llm_client to None inside route(), which skips
+    the classifier layer entirely on every real turn -- every message
+    routes to routing.classifier.fallback_model regardless of content,
+    with source="classifier"/confidence=None/near-zero latency (looks like
+    a real classifier decision in the debug panel but isn't one)."""
+    import app.chat.orchestrator as orchestrator_mod
+    from app.types import RouteResult
+
+    captured: dict = {}
+
+    async def fake_route(chat, text, attachments, *, llm_client=None, config=None, trace_id=None):
+        captured["llm_client"] = llm_client
+        captured["config"] = config
+        return RouteResult(
+            model="chat-default", source="classifier", intent="chat",
+            latency_ms=1.0, confidence=0.9,
+        )
+
+    monkeypatch.setattr(orchestrator_mod, "_route", fake_route)
+
+    fake = FakeLLMClient(chunks=["ok"])
+    client = _make_client(tmp_path, fake)
+    chat_id = client.post("/api/chats", json={}).json()["id"]
+    client.post(f"/api/chats/{chat_id}/messages", json={"content": "hi"})
+
+    assert captured["llm_client"] is fake
+    assert captured["config"] is not None
+
+
 def test_history_endpoint_lists_chats(tmp_path: Path) -> None:
     client = _make_client(tmp_path, FakeLLMClient())
     chat_id = client.post("/api/chats", json={}).json()["id"]

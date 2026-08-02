@@ -28,9 +28,22 @@ import pytest
 import uvicorn
 from fastapi.testclient import TestClient
 
+from app import config as config_mod
 from app.config import Config, DbConfig, DefaultsConfig, LlamaSwapConfig, ModelEntry
 from app.db import open_db
 from app.main import create_app
+
+
+@pytest.fixture(autouse=True)
+def _isolate_overlay(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Point OVERLAY_PATH at a tmp, nonexistent file for every test by
+    default, so a real settings.local.yaml on the dev/CI box (written by
+    actually using the Settings UI) can never leak into a test's config.
+    Tests that specifically exercise the overlay (test_settings_api.py,
+    the overlay round-trip tests in test_config.py) override this by
+    monkeypatching OVERLAY_PATH again to their own tmp overlay path — the
+    last monkeypatch in a test wins, so that's safe."""
+    monkeypatch.setattr(config_mod, "OVERLAY_PATH", tmp_path / "no-such-overlay.yaml")
 
 TEST_MODEL = ModelEntry(
     name="chat-default",

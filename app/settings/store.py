@@ -87,10 +87,11 @@ def update_model(name: str, patch: dict[str, Any]) -> Config:
 
 
 def update_routing(body: dict[str, Any]) -> Config:
-    """Replace overlay ``routing.rules``; deep-merge ``routing.intents``.
+    """Replace overlay ``routing.rules``; deep-merge ``routing.intents`` and
+    ``routing.classifier``.
 
-    ``body`` may include ``rules`` and/or ``intents``. Raises ``ConfigError``
-    on validation failure (overlay left unchanged).
+    ``body`` may include ``rules``, ``intents``, and/or ``classifier``.
+    Raises ``ConfigError`` on validation failure (overlay left unchanged).
     """
     overlay = dict(read_overlay())
     routing = dict(overlay.get("routing") or {})
@@ -100,6 +101,9 @@ def update_routing(body: dict[str, Any]) -> Config:
     if "intents" in body:
         existing = dict(routing.get("intents") or {})
         routing["intents"] = _deep_merge(existing, dict(body["intents"]))
+    if "classifier" in body:
+        existing = dict(routing.get("classifier") or {})
+        routing["classifier"] = _deep_merge(existing, dict(body["classifier"]))
 
     overlay["routing"] = routing
     validated = _validate_merged(overlay)

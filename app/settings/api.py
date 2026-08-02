@@ -35,6 +35,7 @@ class RoutingPatch(BaseModel):
 
     rules: list[dict[str, Any]] | None = None
     intents: dict[str, str] | None = None
+    classifier: dict[str, Any] | None = None
 
 
 def _redact_secrets(data: dict[str, Any]) -> dict[str, Any]:

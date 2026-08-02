@@ -16,8 +16,11 @@ Property tests cover the Phase-0 acceptance criteria enumerated in swapgen.py:
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 
+from app import config as config_mod
 from app.config import load_config
 from app.gpu.swapgen import generate
 
@@ -81,7 +84,15 @@ groups:
 
 @pytest.fixture(scope="module")
 def real_config():
-    return load_config()
+    """The checked-in config.yaml, deliberately without any local overlay —
+    this is a golden test of the repo's own roster, not whatever overrides
+    happen to be sitting in settings.local.yaml on this machine."""
+    original = config_mod.OVERLAY_PATH
+    config_mod.OVERLAY_PATH = Path("/nonexistent/settings.local.yaml")
+    try:
+        yield load_config()
+    finally:
+        config_mod.OVERLAY_PATH = original
 
 
 @pytest.fixture(scope="module")
@@ -184,3 +195,34 @@ def test_gpu0_main_membership(generated):
     for name in ["chat-default", "coder", "coder-small", "vision"]:
         assert name in gpu0_line
     assert "reasoner" not in gpu0_line
+
+
+def test_both_resident_ties_keep_first_in_list():
+    """Two entries sharing a file, both resident:true, must not let the
+    later one clobber the earlier one — first-in-list wins the tie.
+
+    Regression: a live settings.local.yaml overlay once set both
+    chat-default and reasoner resident:true (same underlying gguf); the old
+    dedup logic let reasoner overwrite chat-default as the swap-slot
+    survivor, so chat-default silently vanished from llama-swap.yaml and
+    every chat request 404'd with "no router for requested model"."""
+    original = config_mod.OVERLAY_PATH
+    config_mod.OVERLAY_PATH = Path("/nonexistent/settings.local.yaml")
+    try:
+        base = load_config()
+    finally:
+        config_mod.OVERLAY_PATH = original
+    models = [m.model_copy(deep=True) for m in base.models]
+    for m in models:
+        if m.name in ("chat-default", "reasoner"):
+            m.resident = True
+    cfg = base.model_copy(update={"models": models})
+
+    generated = generate(cfg)
+    model_keys = [
+        line.strip().rstrip(":")
+        for line in generated.splitlines()
+        if line.startswith("  ") and line.strip().endswith(":") and not line.startswith("   ")
+    ]
+    assert "chat-default" in model_keys
+    assert "reasoner" not in model_keys

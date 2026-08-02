@@ -168,7 +168,9 @@ def test_orchestrator_uses_router(
 ) -> None:
     _patch_config_paths(monkeypatch, tmp_path)
 
-    async def fake_route(chat, text: str, attachments: list) -> RouteResult:
+    async def fake_route(
+        chat, text: str, attachments: list, *, llm_client=None, config=None, trace_id=None
+    ) -> RouteResult:
         return RouteResult(
             model="chat-default",
             source="rule",

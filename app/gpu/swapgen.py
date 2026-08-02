@@ -83,14 +83,20 @@ def _select_entries(config: Config) -> list[ModelEntry]:
     the request layer) into chat-default — llama-swap sees one swap slot.
     """
     file_to_canonical: dict[str, str] = {}
+    file_to_canonical_resident: dict[str, bool] = {}
     for m in config.models:
         if not m.enabled:
             continue
         if m.file not in file_to_canonical:
             file_to_canonical[m.file] = m.name
-        elif m.resident:
-            # A resident entry displaces a non-resident one for the same file.
+            file_to_canonical_resident[m.file] = m.resident
+        elif m.resident and not file_to_canonical_resident[m.file]:
+            # A resident entry displaces a non-resident one for the same
+            # file — but only once. If the canonical is already resident,
+            # it keeps priority (first-in-list wins the tie), so a second
+            # resident:true entry for the same file can't clobber it.
             file_to_canonical[m.file] = m.name
+            file_to_canonical_resident[m.file] = True
 
     return [
         m

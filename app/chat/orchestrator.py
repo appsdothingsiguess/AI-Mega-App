@@ -185,7 +185,13 @@ class ChatOrchestrator:
                         "confidence": None,
                     }
                 elif _route is not None:
-                    result = await _route(chat_row, text, attachments)
+                    result = await _route(
+                        chat_row,
+                        text,
+                        attachments,
+                        llm_client=self.llm_client,
+                        config=self.config,
+                    )
                     resolved_model = result.model
                     route_info = result.model_dump()
                 else:
