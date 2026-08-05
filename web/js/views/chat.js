@@ -1,6 +1,6 @@
 /** Chat view: history, SSE stream, picker from /api/models, route/title. */
 import { createChat, getMessages, listChats, streamMessage } from "../api.js";
-import { escapeHtml, renderMarkdown } from "../markdown.js";
+import { addCopyButtons, escapeHtml, renderMarkdown } from "../markdown.js";
 import { navigate, replaceHash } from "../router.js";
 import { get, set } from "../store.js";
 import { applyModelPick, applyTitleToStore, chatLayoutHtml, refreshHealthModels, renderPickerMenu, routeHoverTitle, selectedModelLabel, } from "./composer.js";
@@ -60,8 +60,10 @@ export function createChatView() {
             row.className = `msg ${m.role === "user" ? "user" : "assistant"}`;
             const bubble = document.createElement("div");
             bubble.className = "msg-bubble";
-            if (m.role === "assistant")
+            if (m.role === "assistant") {
                 bubble.innerHTML = renderMarkdown(m.content);
+                addCopyButtons(bubble);
+            }
             else
                 bubble.textContent = m.content;
             if (streaming && m === messages[messages.length - 1] && m.role === "assistant") {

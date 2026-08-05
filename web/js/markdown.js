@@ -79,6 +79,31 @@ export function renderMarkdown(src) {
         ALLOW_DATA_ATTR: false,
     });
 }
+/** Add a "Copy" button (top-right) to every <pre> block inside a rendered container. */
+export function addCopyButtons(container) {
+    container.querySelectorAll("pre").forEach((pre) => {
+        const el = pre;
+        if (el.querySelector(".copy-code-btn"))
+            return;
+        el.style.position = "relative";
+        const btn = document.createElement("button");
+        btn.type = "button";
+        btn.className = "copy-code-btn";
+        btn.textContent = "Copy";
+        btn.addEventListener("click", () => {
+            const code = el.querySelector("code");
+            const text = code?.textContent ?? el.textContent ?? "";
+            navigator.clipboard.writeText(text).then(() => {
+                btn.textContent = "Copied!";
+                setTimeout(() => (btn.textContent = "Copy"), 1500);
+            }, () => {
+                btn.textContent = "Failed";
+                setTimeout(() => (btn.textContent = "Copy"), 1500);
+            });
+        });
+        el.appendChild(btn);
+    });
+}
 /** Escape plain text for safe textContent-alternative HTML. */
 export function escapeHtml(text) {
     return text

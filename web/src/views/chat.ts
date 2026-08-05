@@ -1,7 +1,7 @@
 /** Chat view: history, SSE stream, picker from /api/models, route/title. */
 
 import { createChat, getMessages, listChats, streamMessage } from "../api.js";
-import { escapeHtml, renderMarkdown } from "../markdown.js";
+import { addCopyButtons, escapeHtml, renderMarkdown } from "../markdown.js";
 import { navigate, replaceHash, type Route, type ViewHandle } from "../router.js";
 import { get, set } from "../store.js";
 import type { DoneEvent } from "../types.js";
@@ -72,8 +72,10 @@ export function createChatView(): ViewHandle {
       row.className = `msg ${m.role === "user" ? "user" : "assistant"}`;
       const bubble = document.createElement("div");
       bubble.className = "msg-bubble";
-      if (m.role === "assistant") bubble.innerHTML = renderMarkdown(m.content);
-      else bubble.textContent = m.content;
+      if (m.role === "assistant") {
+        bubble.innerHTML = renderMarkdown(m.content);
+        addCopyButtons(bubble);
+      } else bubble.textContent = m.content;
       if (streaming && m === messages[messages.length - 1] && m.role === "assistant") {
         const cur = document.createElement("span");
         cur.className = "stream-cursor";
