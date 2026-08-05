@@ -57,6 +57,7 @@ class FakeLLMClient:
         self.raise_error = raise_error
         self.timings = timings
         self.seen_messages: list[dict[str, str]] | None = None
+        self.last_model: str | None = None
 
     async def chat(
         self,
@@ -72,6 +73,7 @@ class FakeLLMClient:
         import asyncio
 
         self.seen_messages = messages
+        self.last_model = model
         if self.delay_before_first:
             await asyncio.sleep(self.delay_before_first)
         if self.raise_error is not None:
@@ -437,3 +439,60 @@ def test_slow_first_token_emits_swap_wait_span(tmp_path: Path, monkeypatch) -> N
     spans = _spans_by_stage(client, trace_id)
     assert "swap_wait" in spans
     assert spans["swap_wait"][0]["model"] == "chat-default"
+
+
+def test_alias_model_sends_canonical_swap_name_to_llm(tmp_path: Path) -> None:
+    """When a model alias shares a GGUF with a canonical entry (e.g.
+    reasoner shares chat-default's file), the orchestrator must send the
+    canonical name to llm_client.chat() — llama-swap only has the canonical
+    entry.  Debug/done payload should still show the alias name."""
+    fake = FakeLLMClient(chunks=["ok"])
+    cfg = Config(
+        llama_swap=LlamaSwapConfig(base_url="http://127.0.0.1:8080/v1"),
+        db=DbConfig(path=str(tmp_path / "app.db")),
+        models=[
+            ModelEntry(
+                name="chat-default",
+                **{"class": "general"},
+                ctx=4096,
+                gpu=0,
+                tool_call="native",
+                max_tokens=1024,
+                file="/models/shared.gguf",
+                quant="Q4_K_M",
+                resident=True,
+            ),
+            ModelEntry(
+                name="reasoner",
+                **{"class": "reasoning"},
+                ctx=4096,
+                gpu=0,
+                tool_call="none",
+                thinking=True,
+                max_tokens=4096,
+                file="/models/shared.gguf",
+                quant="Q4_K_M",
+            ),
+        ],
+        defaults=DefaultsConfig(
+            chat_model="chat-default",
+            utility_model="chat-default",
+            title_model="chat-default",
+        ),
+    )
+    app = create_app(config=cfg)
+    app.state.llm_client = fake
+    client = TestClient(app)
+    client.__enter__()
+
+    chat_id = client.post("/api/chats", json={}).json()["id"]
+    # Force model override to "reasoner" (the alias)
+    client.post(f"/api/chats/{chat_id}/model", json={"model": "reasoner"})
+    resp = client.post(f"/api/chats/{chat_id}/messages", json={"content": "think about this"})
+    events = _parse_sse(resp.text)
+    done_data = next(data for ev, data in events if ev == "done")
+
+    # llm_client should have received the canonical name
+    assert fake.last_model == "chat-default"
+    # done payload should still show the alias for Debug visibility
+    assert done_data["model"] == "reasoner"

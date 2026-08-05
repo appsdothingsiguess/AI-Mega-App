@@ -155,6 +155,31 @@ class ChatOrchestrator:
                 return entry
         return None
 
+    def _canonical_swap_name(self, model: str) -> str:
+        """Translate a model alias to the canonical swap-slot name.
+
+        When swapgen dedupes models sharing a GGUF (e.g. reasoner →
+        chat-default), llama-swap only has the canonical entry.  This
+        replicates swapgen's dedup priority (resident > non-resident,
+        first-in-list wins ties) so the orchestrator sends the name
+        llama-swap actually knows.
+        """
+        entry = self._model_entry(model)
+        if entry is None:
+            return model
+        file_to_canonical: dict[str, str] = {}
+        file_to_resident: dict[str, bool] = {}
+        for m in self.config.models:
+            if not m.enabled:
+                continue
+            if m.file not in file_to_canonical:
+                file_to_canonical[m.file] = m.name
+                file_to_resident[m.file] = m.resident
+            elif m.resident and not file_to_resident[m.file]:
+                file_to_canonical[m.file] = m.name
+                file_to_resident[m.file] = True
+        return file_to_canonical.get(entry.file, model)
+
     async def handle_message(
         self,
         chat_id: str,
@@ -234,6 +259,7 @@ class ChatOrchestrator:
                 await run_sync(history.insert_message, self.conn, chat_id, "user", text, None)
 
             model_entry = self._model_entry(resolved_model)
+            swap_model = self._canonical_swap_name(resolved_model)
 
             async with span(trace_id, "llm_request", model=resolved_model) as sp:
                 messages = await run_sync(history.build_llm_messages, self.conn, chat_id)
@@ -249,7 +275,7 @@ class ChatOrchestrator:
                 }
                 messages = [_SYSTEM_MSG] + messages
                 agen = self.llm_client.chat(
-                    model=resolved_model,
+                    model=swap_model,
                     messages=messages,
                     thinking=model_entry.thinking if model_entry else None,
                     max_tokens=model_entry.max_tokens if model_entry else 1024,
