@@ -158,8 +158,9 @@ export function createDebugView(): ViewHandle {
       row.type = "button";
       row.className =
         "span-row" + (selectedSpan?.id === sp.id ? " active" : "");
+      const gpuTag = sp.data?.gpu != null ? ` [GPU${sp.data.gpu}]` : "";
       const modelTag =
-        typeof sp.data?.model === "string" ? ` · ${sp.data.model}` : "";
+        typeof sp.data?.model === "string" ? ` · ${sp.data.model}${gpuTag}` : "";
       row.innerHTML = `
         <span class="span-name" title="${escapeHtml(sp.stage)}">${escapeHtml(sp.stage)}</span>
         <div class="span-track"><div class="span-bar" style="width:${pct}%"></div></div>

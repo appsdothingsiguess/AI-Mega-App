@@ -261,7 +261,8 @@ class ChatOrchestrator:
             model_entry = self._model_entry(resolved_model)
             swap_model = self._canonical_swap_name(resolved_model)
 
-            async with span(trace_id, "llm_request", model=resolved_model) as sp:
+            gpu = model_entry.gpu if model_entry else None
+            async with span(trace_id, "llm_request", model=resolved_model, gpu=gpu) as sp:
                 messages = await run_sync(history.build_llm_messages, self.conn, chat_id)
                 # Stopgap: prepend a system prompt so local models understand
                 # they're a persistent assistant (full app/prompts/ is Phase 3+).
@@ -294,7 +295,7 @@ class ChatOrchestrator:
                     prompt=_render_prompt(messages),
                 )
 
-            async with span(trace_id, "llm_stream", model=resolved_model) as sp:
+            async with span(trace_id, "llm_stream", model=resolved_model, gpu=gpu) as sp:
                 tokens_out = 0
                 # A model_loading warn means llama-swap is loading/swapping
                 # the slot; bracket that wait in its own swap_wait span so the
