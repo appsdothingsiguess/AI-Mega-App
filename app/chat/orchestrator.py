@@ -237,6 +237,17 @@ class ChatOrchestrator:
 
             async with span(trace_id, "llm_request", model=resolved_model) as sp:
                 messages = await run_sync(history.build_llm_messages, self.conn, chat_id)
+                # Stopgap: prepend a system prompt so local models understand
+                # they're a persistent assistant (full app/prompts/ is Phase 3+).
+                _SYSTEM_MSG: dict[str, str] = {
+                    "role": "system",
+                    "content": (
+                        "You are a helpful AI assistant. "
+                        "You have access to the full conversation history. "
+                        "Answer the user's questions directly and helpfully."
+                    ),
+                }
+                messages = [_SYSTEM_MSG] + messages
                 agen = self.llm_client.chat(
                     model=resolved_model,
                     messages=messages,
