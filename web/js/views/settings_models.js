@@ -63,7 +63,7 @@ export function mountModelsPanel(panel, opts) {
               <span class="toggle-thumb"></span>
             </button>
           </td>
-          <td><input class="field-ttl mono" type="number" min="0" data-i="${i}" value="${escapeHtml(String(d.ttl_s))}" /></td>
+          <td><input class="field-ttl mono" type="number" min="0" placeholder="—" title="Blank = no TTL. 0 = never unload." data-i="${i}" value="${d.ttl_s == null ? "" : escapeHtml(String(d.ttl_s))}" /></td>
         </tr>`;
         })
             .join("");
@@ -115,7 +115,8 @@ export function mountModelsPanel(panel, opts) {
         panel.querySelectorAll(".field-ttl").forEach((inp) => {
             inp.addEventListener("change", () => {
                 const i = Number(inp.dataset.i);
-                const ttl = Math.max(0, Number(inp.value) || 0);
+                const raw = inp.value.trim();
+                const ttl = raw === "" ? null : Math.max(0, Number(raw) || 0);
                 const next = opts.drafts.map((d, idx) => idx === i ? { ...d, ttl_s: ttl } : d);
                 opts.onDrafts(next);
                 opts.drafts = next;

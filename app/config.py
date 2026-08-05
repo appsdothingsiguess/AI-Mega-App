@@ -124,7 +124,9 @@ class RoutingIntents(_Strict):
 
 class RoutingClassifierConfig(_Strict):
     model: str = "classifier"
-    timeout_s: float = 2.0
+    # 6s, not 2s: the ~600-token few-shot prompt on the CPU-resident
+    # classifier measures 0.9-1.1s warm and 2.5s cold (live, 2026-08-02).
+    timeout_s: float = 6.0
     confidence_threshold: float = 0.5
     fallback_model: str = "chat-default"
 

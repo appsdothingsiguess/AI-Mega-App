@@ -47,6 +47,11 @@ class ChatDelta(BaseModel):
     tool_calls: list[ToolCallDelta] | None = None
     finish_reason: str | None = None
     usage: Usage | None = None
+    # llama.cpp's own `timings` block (prompt_per_second,
+    # predicted_per_second, ...) as sent verbatim on the final chunk.
+    # Additive/optional: the Debug view's tok/s must come from the server,
+    # never a client-side estimate (PLAN.md §4.16, docs/FEATURES.md F19).
+    timings: dict[str, Any] | None = None
 
 
 class SSEEvent(BaseModel):
