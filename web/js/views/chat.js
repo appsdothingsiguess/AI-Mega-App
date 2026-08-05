@@ -46,6 +46,10 @@ export function createChatView() {
         const box = root?.querySelector(".messages-inner");
         if (!box)
             return;
+        const sc = root?.querySelector(".messages");
+        const wasNearBottom = sc
+            ? sc.scrollHeight - sc.scrollTop - sc.clientHeight < 80
+            : true;
         box.replaceChildren();
         if (!messages.length && !streaming) {
             const empty = document.createElement("div");
@@ -109,10 +113,8 @@ export function createChatView() {
             b.textContent = bannerError;
             box.appendChild(b);
         }
-        if (scroll) {
-            const sc = root?.querySelector(".messages");
-            if (sc)
-                sc.scrollTop = sc.scrollHeight;
+        if (scroll && wasNearBottom && sc) {
+            sc.scrollTop = sc.scrollHeight;
         }
     }
     async function loadHistory(chatId) {

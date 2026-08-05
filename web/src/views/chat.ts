@@ -58,6 +58,10 @@ export function createChatView(): ViewHandle {
   function renderMessages(scroll: boolean): void {
     const box = root?.querySelector(".messages-inner");
     if (!box) return;
+    const sc = root?.querySelector(".messages") as HTMLElement | null;
+    const wasNearBottom = sc
+      ? sc.scrollHeight - sc.scrollTop - sc.clientHeight < 80
+      : true;
     box.replaceChildren();
     if (!messages.length && !streaming) {
       const empty = document.createElement("div");
@@ -118,9 +122,8 @@ export function createChatView(): ViewHandle {
       b.textContent = bannerError;
       box.appendChild(b);
     }
-    if (scroll) {
-      const sc = root?.querySelector(".messages");
-      if (sc) sc.scrollTop = sc.scrollHeight;
+    if (scroll && wasNearBottom && sc) {
+      sc.scrollTop = sc.scrollHeight;
     }
   }
 
