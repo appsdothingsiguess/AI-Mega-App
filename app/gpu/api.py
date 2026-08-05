@@ -68,9 +68,7 @@ async def _poll_health(url: str, timeout_s: float = _POLL_TIMEOUT_S) -> bool:
 @router.get("/inventory")
 async def get_inventory(request: Request) -> list[dict]:
     """Return GPU inventory from nvidia-smi.  Returns [] on dev machines."""
-    trace_id = new_trace()
-    async with span(trace_id, "gpu_inventory"):
-        gpus = await fetch_inventory()
+    gpus = await fetch_inventory()
     return [asdict(g) for g in gpus]
 
 
@@ -78,9 +76,7 @@ async def get_inventory(request: Request) -> list[dict]:
 async def get_swap_config(request: Request) -> str:
     """Return the YAML that would be written by /apply (current config)."""
     config = request.app.state.config
-    trace_id = new_trace()
-    async with span(trace_id, "swapgen"):
-        yaml_text = generate(config)
+    yaml_text = generate(config)
     return yaml_text
 
 
