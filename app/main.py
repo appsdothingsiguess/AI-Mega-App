@@ -22,6 +22,7 @@ from app.db import check_connection, open_db
 from app.debug.api import router as debug_router
 from app.debug.trace import reset_connection as reset_debug_connection
 from app.settings.api import router as settings_router
+from app.warmup import warmup_resident_models
 
 # Soft-import wave-2 peers that land via parallel merges. Missing packages
 # are expected until interface-gate blockers clear (app.gpu / app.background
@@ -43,25 +44,26 @@ _logger = logging.getLogger(__name__)
 
 WEB_DIR = REPO_ROOT / "web"
 
+# How often the resident-model warm-up sweep re-fires after startup. A
+# llama-swap config reload (e.g. Settings UI "Apply GPU config") kills every
+# running llama-server process, not just the swapping GPU0 slot — resident
+# CPU/GPU1 models (classifier, dispatcher, utility, embed, coder-small) then
+# sit cold until the next real request hits them. A one-shot startup warm-up
+# can't detect that; a periodic sweep self-heals within one interval.
+_WARMUP_INTERVAL_S = 300.0
 
-async def _warmup_classifier(app: FastAPI) -> None:
-    """Fire a single request to the classifier model on startup so llama-swap
-    loads it eagerly. Without this, the first real classify call pays a cold-
-    start penalty even though the model is configured as resident."""
-    llm = getattr(getattr(app, "state", None), "llm_client", None)
-    cfg: Config | None = getattr(getattr(app, "state", None), "config", None)
-    if llm is None or cfg is None:
-        return
-    model = cfg.routing.classifier.model
-    try:
-        async for _ in llm.chat(
-            model, [{"role": "user", "content": "ping"}],
-            max_tokens=1, stream=False, thinking=False,
-        ):
-            pass
-        _logger.info("classifier warm-up complete (%s)", model)
-    except Exception as exc:
-        _logger.warning("classifier warm-up failed: %s", exc)
+
+async def _warmup_loop(app: FastAPI) -> None:
+    """Startup warm-up, then a periodic sweep so resident models recover
+    automatically after a llama-swap config reload wipes them (see
+    _WARMUP_INTERVAL_S). app/gpu/api.py additionally fires an immediate
+    warm-up right after a successful /api/gpu/apply, so this loop is the
+    steady-state fallback, not the only recovery path."""
+    while True:
+        llm = getattr(getattr(app, "state", None), "llm_client", None)
+        cfg: Config | None = getattr(getattr(app, "state", None), "config", None)
+        await warmup_resident_models(llm, cfg)
+        await asyncio.sleep(_WARMUP_INTERVAL_S)
 
 
 def _resolve_db_path(config: Config) -> Path:
@@ -87,7 +89,7 @@ def create_app(config: Config | None = None) -> FastAPI:
             await background_start(app)
         if start_rewarm is not None:
             await start_rewarm(app)  # async when present (sibling drift)
-        asyncio.create_task(_warmup_classifier(app))
+        asyncio.create_task(_warmup_loop(app))
         try:
             yield
         finally:

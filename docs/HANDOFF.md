@@ -4,6 +4,117 @@ Working notes for whichever Claude Code session picks this up next.
 Not a planning doc, not user-facing — just context that isn't obvious
 from the code alone. Delete or trim entries once they're stale.
 
+## Where things stand (2026-08-06 — post-restart-fix live re-test)
+
+Follow-up session after the classifier-timeout/context-truncation fixes
+landed (`app/warmup.py`, summary compaction in `orchestrator.py`,
+`settings.local.yaml` classifier `timeout_s`/`ttl_s` correction) and a
+systemd unit fix (`--timeout-graceful-shutdown 10` added to
+`ai-mega-app.service` — `systemctl restart` was hanging indefinitely
+because uvicorn's default graceful shutdown waits forever for open SSE
+connections, e.g. the Debug panel's `/api/debug/stream`, to close; fixed
+live, confirmed working). User re-tested and reported 4 more issues.
+**Nothing in this entry is fixed yet except where noted.**
+
+### A. "All models unloaded after chat completion" — turned out to be a UI/API lie, not real unload
+`app/settings/api.py::list_models()` (`GET /api/models`, backs the
+model-picker roster) **hardcodes `"loaded": False` for every model,
+always** — it's a stub predating real llama-swap wiring
+(`main.py:112`'s own comment calls it a placeholder pending "Phase 2's
+`GET /api/models` adds resident/loaded flags", docs/FEATURES.md F3).
+It never queries llama-swap for real state, so the UI *always* shows
+every model as unloaded regardless of what's actually resident — this
+is why the user saw "no models loaded" right after a restart and
+assumed sending a message would fix it. **Real fix:** wire this to
+llama-swap's actual running-state endpoint — confirmed live via
+`curl http://127.0.0.1:8080/v1/models` that llama-swap already reports
+per-model `status.value` (`"loaded"`/`"unloaded"`), and
+`curl http://127.0.0.1:8080/running` gives full process detail
+(cmd/proxy/ttl) for what's actually up. Either is a clean data source;
+`/v1/models` is the smaller shape and probably the better fit for the
+roster endpoint.
+
+**However — while checking whether this was "just" a UI bug, found a
+second, real problem in the same area, unresolved:** live `curl` right
+after a fresh restart showed only `coder` actually running; `chat-default`,
+`classifier`, `dispatcher`, `utility`, `embed` — all `resident: true`
+and supposedly eagerly warmed by `app/warmup.py`'s startup
+`_warmup_loop` — showed `"unloaded"`. `journalctl -u ai-mega-app` had
+**zero** `warm-up complete`/`warm-up failed` log lines for any of them
+across two full restart cycles (the only warm-up log line in the entire
+journal is one stale `warm-up failed (embed)` from *before* this
+session's embed-endpoint fix). That means `warmup_one()` isn't even
+reaching its own `try`/`except` logging for most models — not failing
+loudly, just never completing/logging at all. Prime suspect, not yet
+confirmed: `settings.local.yaml` currently marks **`coder`, `coder-small`,
+and `vision` as `resident: true`** in addition to the intended
+`chat-default`/`dispatcher`/`utility`/`embed`/`classifier` set — that's
+three ~24-32GB GPU0 models simultaneously demanding permanent residency
+on a single 24GB 3090, which `config.yaml`'s own defaults correctly mark
+`resident: false` for (GPU0 is a `swap: true` group by design, see
+existing entry #3 below). If `warmup_resident_models`'s
+`asyncio.gather` fires pings for all of them concurrently, GPU0 likely
+thrashes/deadlocks trying to satisfy three mutually-exclusive residency
+demands, which could stall the whole gather (Python's `asyncio.gather`
+doesn't fail-fast per-task in a way that would explain zero logs from
+the *independent* CPU-resident models unless something upstream — the
+`llm.chat()` httpx call itself — hangs without ever raising). **Next
+session: (1) revert `coder`/`coder-small`/`vision` to
+`resident: false` in `settings.local.yaml` to match `config.yaml`
+intent, restart, and check whether `warm-up complete` lines start
+appearing for the CPU models; (2) if they still don't, add a per-call
+`asyncio.wait_for` timeout around each `warmup_one` ping so one hung
+model can't silently swallow the others' completion, and log entry/exit
+explicitly (right now there's no "attempting warm-up" log, only
+completion/failure, so a hang before either is invisible).**
+
+### B. Browser-tab-switching bug (issue #5 in the 2026-08-05 entry below) — still open, not yet re-investigated this session
+User confirms this is still reproducing. No new investigation done this
+session beyond re-confirming it's not fixed — see existing entry #5
+below for the known architecture gap (aborted SSE stream never persists
+partial content).
+
+### C. Scroll bug still reproducing despite the `requestAnimationFrame` fix
+The `chat.ts` fix from the prior session (wrapping `sc.scrollTop =
+sc.scrollHeight` in `requestAnimationFrame`) did not resolve what the
+user is seeing. That fix only addressed a *timing* race (assignment
+before layout); it does **not** address issue #8 in the 2026-08-05 entry
+below (auto-scroll fighting a manual scroll-up during streaming, because
+every token still force-scrolls unconditionally) — that's almost
+certainly the actual bug the user is still hitting, since #8 was never
+fixed, only the unrelated rAF timing issue was. **Next session: implement
+the "only stick to bottom if already within N px of it" fix described in
+#8**, not another timing tweak.
+
+### D. Rolling summary never produces a summary message, and a `first_token_timeout` breaks the chat entirely — needs live repro
+User's repro: chat titled around "show current system time" hit a
+`first_token_timeout` error, and **no summary message appeared after
+the error**. Two distinct things tangled together here, neither
+confirmed root-caused yet:
+- `first_token_timeout` breaking the chat outright suggests the SSE
+  error path doesn't leave the conversation in a recoverable state —
+  worth checking whether `orchestrator.py`'s error handling for that
+  specific `LLMError` kind persists anything to SQLite or just aborts,
+  and whether the frontend shows a retry affordance or just silently
+  breaks (user says "the chat broken" — get the exact visible symptom:
+  stuck spinner? console error? messages gone?).
+- Separately, per existing entry #7 below, summaries were already known
+  to be **generated server-side but never surfaced in the chat UI at
+  all** — so "no summary message after this error" may be expected
+  today regardless of the timeout (there was never a UI element for it
+  to appear in). Don't conflate "summary didn't visibly appear" (#7,
+  known, unfixed) with "summary generation itself failed because of the
+  timeout" (unconfirmed) — check `chats.summary` in SQLite directly for
+  that chat_id to tell which one actually happened before assuming a new
+  bug.
+
+**Priority suggestion for next session:** A (the real-loaded-state wiring
++ the warm-up hang) and D (chat-breaking error) are the sharpest —
+A because the `settings.local.yaml` triple-resident drift could be
+actively causing GPU contention beyond just cosmetics, D because a
+"broken chat" is a hard stop for the user, not a cosmetic bug. C has a
+known fix already written up (#8 below), just not applied yet.
+
 ## Where things stand (2026-08-05 — live UI bug sweep, NOT YET FIXED)
 
 User ran a live test pass against the running app on `ailab` and reported

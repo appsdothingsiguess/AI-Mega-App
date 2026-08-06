@@ -83,6 +83,7 @@ async def route(
     config: Config | None = None,
     trace_id: str | None = None,
     details: dict[str, Any] | None = None,
+    preferred_model: str | None = None,
 ) -> RouteResult:
     """Resolve model for one turn through three strictly ordered layers.
 
@@ -105,7 +106,7 @@ async def route(
 
     async with _maybe_span(trace_id) as sp:
         try:
-            result, extra = await _route_inner(chat, text, attachments, llm_client, cfg, started)
+            result, extra = await _route_inner(chat, text, attachments, llm_client, cfg, started, preferred_model)
         except Exception as exc:
             logger.exception("router: unexpected error: %s", exc)
             latency_ms = (time.monotonic() - started) * 1000
@@ -141,6 +142,7 @@ async def _route_inner(
     llm_client: LLMClient | None,
     cfg: Config,
     started: float,
+    preferred_model: str | None = None,
 ) -> tuple[RouteResult, dict[str, Any]]:
     """Inner pipeline — returns (RouteResult, extra_span_fields)."""
 
@@ -221,6 +223,22 @@ async def _route_inner(
         )
 
     model = _resolve_model(cls, cfg)
+    
+    # Swap-aware routing: prefer the currently-loaded GPU0 model when the
+    # classifier's confidence is not high, to avoid unnecessary model swaps
+    # that cause cold-load latency (HANDOFF 2026-08-06, user request).
+    if preferred_model and model != preferred_model and conf < 0.8:
+        return (
+            RouteResult(
+                model=preferred_model,
+                source="classifier",
+                intent=cls,
+                latency_ms=elapsed(),
+                confidence=conf,
+            ),
+            {"layer": "classifier", "sticky": True, **clf_details},
+        )
+    
     return (
         RouteResult(
             model=model,

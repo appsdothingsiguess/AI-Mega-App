@@ -52,6 +52,75 @@ class ChatCompleter(Protocol):
 
 FIRST_TOKEN_WARN_S = 2.0  # PLAN.md §4.2: model_loading fires past this
 
+# Rough chars-per-token for context budget estimation.  Conservative (low)
+# so we over-count prompt tokens and leave headroom for the response.
+_CHARS_PER_TOKEN = 3.5
+
+
+def _apply_summary_compaction(
+    history: list[dict[str, str]],
+    summary: str | None,
+    recent_turns: int,
+) -> list[dict[str, str]]:
+    """Replace everything but the most recent `recent_turns` turns with the
+    chat's rolling summary (app/background/summaries.py), so a long chat's
+    context usage stays roughly flat instead of growing with turn count.
+
+    The summary regenerates from the full transcript every
+    config.background.summary_every_n_turns user turns, so it always covers
+    everything up to the last regeneration point; between regenerations at
+    most (summary_every_n_turns - 1) turns are unsummarized. Keeping a
+    `recent_turns`-turn tail (caller passes summary_every_n_turns) safely
+    covers that gap without needing to track an exact cutoff in the DB.
+
+    _truncate_to_ctx below stays as a hard safety net — it's the only thing
+    protecting a model with no summary yet (early in a chat) or a very
+    small ctx budget from an overflow.
+    """
+    if not summary:
+        return history
+    recent_messages = recent_turns * 2  # each turn is a user + assistant pair
+    if len(history) <= recent_messages:
+        return history
+    tail = history[-recent_messages:] if recent_messages > 0 else []
+    summary_msg = {
+        "role": "system",
+        "content": f"Summary of earlier conversation:\n{summary}",
+    }
+    return [summary_msg] + tail
+
+
+def _truncate_to_ctx(
+    messages: list[dict[str, str]],
+    ctx: int,
+    max_tokens: int,
+) -> list[dict[str, str]]:
+    """Keep the system prompt + as many recent turns as fit in the context
+    budget (ctx minus max_tokens for the response).  Drops oldest
+    user/assistant pairs first, preserving the system prompt at index 0.
+
+    Last-resort safety net: _apply_summary_compaction is the primary
+    mechanism once a chat has a summary; this still protects turns before
+    the first summary exists, or a model whose ctx is small enough that
+    even summary + recent tail overflows it."""
+    budget_tokens = ctx - max_tokens
+    if budget_tokens <= 0:
+        budget_tokens = ctx // 2
+
+    def estimate(msgs: list[dict[str, str]]) -> float:
+        return sum(len(m.get("content", "")) / _CHARS_PER_TOKEN for m in msgs)
+
+    if estimate(messages) <= budget_tokens:
+        return messages
+
+    system = [messages[0]] if messages and messages[0].get("role") == "system" else []
+    history = messages[len(system):]
+
+    while history and estimate(system + history) > budget_tokens:
+        history = history[1:]
+
+    return system + history
+
 
 def _render_prompt(messages: list[dict[str, str]]) -> str:
     """Flatten wire messages into the readable transcript the Debug view's
@@ -180,6 +249,21 @@ class ChatOrchestrator:
                 file_to_resident[m.file] = True
         return file_to_canonical.get(entry.file, model)
 
+    async def _get_preferred_model(self) -> str | None:
+        """Find the currently-loaded GPU0 model to prefer for sticky routing.
+
+        Returns the model name if exactly one GPU0 model is loaded, None
+        otherwise. This avoids unnecessary swaps when the classifier's
+        confidence is low (HANDOFF 2026-08-06).
+        """
+        try:
+            status = await self.llm_client.model_status()
+        except Exception:
+            return None
+        gpu0_models = [m.name for m in self.config.models if m.gpu == 0 and m.enabled]
+        loaded_gpu0 = [name for name in gpu0_models if status.get(name)]
+        return loaded_gpu0[0] if len(loaded_gpu0) == 1 else None
+
     async def handle_message(
         self,
         chat_id: str,
@@ -229,6 +313,7 @@ class ChatOrchestrator:
                     # frozen shape can't; without it a classifier timeout
                     # looks identical to a confident `chat` in the Debug view.
                     route_details: dict[str, Any] = {}
+                    preferred = await self._get_preferred_model()
                     result = await _route(
                         chat_row,
                         text,
@@ -236,6 +321,7 @@ class ChatOrchestrator:
                         llm_client=self.llm_client,
                         config=self.config,
                         details=route_details,
+                        preferred_model=preferred,
                     )
                     resolved_model = result.model
                     route_info = result.model_dump()
@@ -266,6 +352,16 @@ class ChatOrchestrator:
             gpu = model_entry.gpu if model_entry else None
             async with span(trace_id, "llm_request", model=resolved_model, gpu=gpu) as sp:
                 messages = await run_sync(history.build_llm_messages, self.conn, chat_id)
+                # Primary context-growth control: once the background job
+                # (app/background/summaries.py) has produced a rolling
+                # summary, compact everything but the most recent turns into
+                # it so a long chat's context usage stays roughly flat
+                # instead of growing without bound.
+                messages = _apply_summary_compaction(
+                    messages,
+                    chat_row["summary"],
+                    self.config.background.summary_every_n_turns,
+                )
                 # Stopgap: prepend a system prompt so local models understand
                 # they're a persistent assistant (full app/prompts/ is Phase 3+).
                 _SYSTEM_MSG: dict[str, str] = {
@@ -277,6 +373,11 @@ class ChatOrchestrator:
                     ),
                 }
                 messages = [_SYSTEM_MSG] + messages
+                ctx = model_entry.ctx if model_entry else 8192
+                mtk = model_entry.max_tokens if model_entry else 1024
+                # Safety net for turns before the first summary exists, or a
+                # ctx small enough that even summary + recent tail overflows.
+                messages = _truncate_to_ctx(messages, ctx, mtk)
                 agen = self.llm_client.chat(
                     model=swap_model,
                     messages=messages,
@@ -361,6 +462,7 @@ class ChatOrchestrator:
                 "message_id": message_row["id"],
                 "model": resolved_model,
                 "usage": usage_dict,
+                "timings": timings_dict,
                 "route": {
                     "source": route_info["source"],
                     "intent": route_info["intent"],

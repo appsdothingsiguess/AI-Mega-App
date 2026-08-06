@@ -208,3 +208,25 @@ def test_orchestrator_uses_router(
         else json.loads(route_span["data"])
     )
     assert route_data["source"] == "rule"
+
+
+def test_list_models_returns_real_loaded_state(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _patch_config_paths(monkeypatch, tmp_path)
+    fake_llm = FakeLLMClient(
+        chunks=["ok"],
+        model_status={"chat-default": True, "coder": False},
+    )
+    cfg = config_mod.load_config()
+    app = create_app(config=cfg)
+    app.state.llm_client = fake_llm
+    client = TestClient(app)
+    client.__enter__()
+    try:
+        resp = client.get("/api/models")
+        assert resp.status_code == 200
+        models = {m["alias"]: m for m in resp.json()}
+        assert models["chat-default"]["loaded"] is True
+    finally:
+        client.__exit__(None, None, None)

@@ -88,6 +88,7 @@ class FakeLlamaSwap:
         self._chat_queue: list[ScriptedChat] = []
         self._embed_queue: list[ScriptedEmbeddings] = []
         self._models: list[str] = ["chat-default"]
+        self._model_status: dict[str, str] = {}
         self.chat_requests: list[dict] = []
         self.embed_requests: list[dict] = []
         self.app: FastAPI = self._build_app()
@@ -100,6 +101,10 @@ class FakeLlamaSwap:
 
     def script_models(self, names: list[str]) -> None:
         self._models = list(names)
+
+    def script_model_status(self, status_map: dict[str, str]) -> None:
+        """Set per-model status values (e.g. {"chat-default": "loaded"})."""
+        self._model_status = dict(status_map)
 
     def _next_chat(self) -> ScriptedChat:
         return self._chat_queue.pop(0) if self._chat_queue else ScriptedChat(content_chunks=["ok"])
@@ -144,7 +149,12 @@ class FakeLlamaSwap:
 
         @app.get("/v1/models")
         async def models():  # type: ignore[no-untyped-def]
-            data = [{"id": name, "object": "model"} for name in self._models]
+            data = []
+            for name in self._models:
+                entry: dict[str, Any] = {"id": name, "object": "model"}
+                if name in self._model_status:
+                    entry["status"] = {"value": self._model_status[name]}
+                data.append(entry)
             return JSONResponse(content={"object": "list", "data": data})
 
         return app

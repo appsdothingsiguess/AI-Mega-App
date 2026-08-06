@@ -130,6 +130,38 @@ def test_apply_writes_file_and_returns_ok(tmp_path: Path, monkeypatch) -> None:
     assert swap_path.read_text(encoding="utf-8") == generate(cfg)
 
 
+def test_apply_rewarms_resident_models_after_reload(tmp_path: Path, monkeypatch) -> None:
+    """Regression: llama-swap's -watch-config reload (triggered by /apply
+    writing a new YAML) kills every running llama-server process, not just
+    the swapping GPU0 slot. Its own /health only reports proxy liveness, so
+    the poll above returning OK does not mean any model is warm. /apply must
+    re-warm resident models itself before replying, or the classifier (and
+    every other resident model) sits cold until something else hits it."""
+    import app.gpu.api as gpu_api
+
+    monkeypatch.setattr(gpu_api, "_poll_health", AsyncMock(return_value=True))
+
+    swap_path = tmp_path / "llama-swap.yaml"
+    cfg = _make_config(str(swap_path))
+    app = _make_app(cfg)
+
+    warmed: list = []
+
+    async def fake_warmup(llm, config) -> None:
+        warmed.append((llm, config))
+
+    monkeypatch.setattr(gpu_api, "warmup_resident_models", fake_warmup)
+
+    sentinel_llm = object()
+    app.state.llm_client = sentinel_llm
+    client = TestClient(app)
+
+    resp = client.post("/api/gpu/apply")
+
+    assert resp.status_code == 200
+    assert warmed == [(sentinel_llm, cfg)]
+
+
 def test_apply_disabled_gpu_returns_400(tmp_path: Path) -> None:
     """POST /apply returns 400 when gpu.enabled is false."""
     swap_path = tmp_path / "llama-swap.yaml"

@@ -23,7 +23,7 @@ _app: Any | None = None
 # graceful shutdown that just awaits the queue can silently block for that
 # long. Bound the wait and cancel the worker if it's still running a job,
 # rather than making systemctl restart look hung with no explanation.
-_STOP_DRAIN_TIMEOUT_S = 15.0
+_STOP_DRAIN_TIMEOUT_S = 8.0
 
 
 async def start(app: Any) -> None:

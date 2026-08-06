@@ -29,6 +29,7 @@ from fastapi.responses import PlainTextResponse
 from app.debug import new_trace, span
 from app.gpu.inventory import GPUInfo, fetch_inventory
 from app.gpu.swapgen import generate
+from app.warmup import warmup_resident_models
 
 router = APIRouter(prefix="/api/gpu", tags=["gpu"])
 
@@ -133,5 +134,14 @@ async def post_apply(request: Request) -> dict:
             status_code=503,
             detail=f"llama-swap did not return OK within {_POLL_TIMEOUT_S}s; rolled back to previous config.",
         )
+
+    # llama-swap's /health only reports the proxy's own liveness, not any
+    # individual model's — a reload kills every running llama-server process
+    # (not just the swapping GPU0 slot), so every resident model is cold
+    # right now even though the poll above just returned OK. Re-warm before
+    # replying so the next real request (e.g. the classifier on the very
+    # next chat turn) doesn't eat a cold-start timeout.
+    llm = getattr(request.app.state, "llm_client", None)
+    await warmup_resident_models(llm, config)
 
     return {"ok": True, "health_url": health_url, "path": str(swap_path)}

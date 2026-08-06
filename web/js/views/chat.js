@@ -105,12 +105,16 @@ export function createChatView() {
                 bubble.appendChild(cur);
             }
             row.appendChild(bubble);
-            if (m.role === "assistant" && (m.model || m.traceId)) {
+            if (m.role === "assistant" && (m.model || m.traceId || m.tokensPerSecond)) {
                 const meta = document.createElement("div");
                 meta.className = "msg-meta";
                 if (m.model) {
                     const modelEl = document.createElement("span");
-                    modelEl.textContent = m.model;
+                    let modelText = m.model;
+                    if (m.tokensPerSecond) {
+                        modelText += ` · ${m.tokensPerSecond} tok/s`;
+                    }
+                    modelEl.textContent = modelText;
                     const tip = routeHoverTitle(m.route, m.model);
                     if (tip)
                         modelEl.title = tip;
@@ -128,6 +132,19 @@ export function createChatView() {
                 }
                 row.appendChild(meta);
             }
+            // Regenerate button: only for non-streaming assistant messages
+            if (m.role === "assistant" && !streaming) {
+                const userMsg = messages[messages.indexOf(m) - 1];
+                if (userMsg && userMsg.role === "user") {
+                    const regenBtn = document.createElement("button");
+                    regenBtn.type = "button";
+                    regenBtn.className = "regen-btn";
+                    regenBtn.title = "Regenerate response";
+                    regenBtn.innerHTML = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/><path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16"/><path d="M8 16H3v5"/></svg>`;
+                    regenBtn.addEventListener("click", () => void regenerate(userMsg.content));
+                    row.appendChild(regenBtn);
+                }
+            }
             box.appendChild(row);
         }
         if (loadingModel) {
@@ -143,7 +160,15 @@ export function createChatView() {
             box.appendChild(b);
         }
         if (scroll && wasNearBottom && sc) {
-            sc.scrollTop = sc.scrollHeight;
+            // Deferred to a frame after layout: reading/writing scrollHeight in
+            // the same tick as replaceChildren() can race the browser's layout
+            // pass on some engines, especially mid-stream when content height
+            // changes every few ms — the assignment silently no-ops if it lands
+            // before the new height is committed.
+            requestAnimationFrame(() => {
+                if (sc)
+                    sc.scrollTop = sc.scrollHeight;
+            });
         }
     }
     async function loadHistory(chatId) {
@@ -238,6 +263,78 @@ export function createChatView() {
                     assistant.traceId = d.trace_id;
                     if (d.route)
                         assistant.route = d.route;
+                    if (d.timings?.predicted_per_second) {
+                        assistant.tokensPerSecond = Math.round(d.timings.predicted_per_second * 10) / 10;
+                    }
+                    set({ lastTraceId: d.trace_id });
+                    renderMessages(true);
+                }
+                else if (ev.event === "error") {
+                    loadingModel = null;
+                    const d = ev.data;
+                    bannerError = d.detail || d.kind || "error";
+                    renderMessages(true);
+                }
+            },
+        });
+        streaming = false;
+        loadingModel = null;
+        syncStopBtn();
+        if (result === "lost" && !bannerError)
+            bannerError = "connection lost";
+        renderMessages(true);
+        try {
+            set({ chats: await listChats() });
+        }
+        catch { /* ignore */ }
+    }
+    async function regenerate(userContent) {
+        if (streaming)
+            return;
+        const chatId = await ensureChat();
+        if (!chatId)
+            return;
+        bannerError = null;
+        loadingModel = null;
+        const assistant = {
+            id: `local-a-${Date.now()}`,
+            role: "assistant",
+            content: "",
+            model: get().modelOverride,
+            created_at: Date.now(),
+        };
+        messages.push(assistant);
+        streaming = true;
+        syncStopBtn();
+        renderMessages(true);
+        abort = new AbortController();
+        const result = await streamMessage(chatId, { content: userContent, model: get().modelOverride }, {
+            signal: abort.signal,
+            onConnectionLost: () => {
+                bannerError = "connection lost";
+                loadingModel = null;
+            },
+            onEvent: (ev) => {
+                if (ev.event === "token") {
+                    loadingModel = null;
+                    assistant.content += ev.data.text ?? "";
+                    renderMessages(true);
+                }
+                else if (ev.event === "model_loading") {
+                    loadingModel = ev.data.model ?? "model";
+                    renderMessages(true);
+                }
+                else if (ev.event === "done") {
+                    const d = ev.data;
+                    loadingModel = null;
+                    assistant.id = d.message_id ?? assistant.id;
+                    assistant.model = d.model ?? assistant.model;
+                    assistant.traceId = d.trace_id;
+                    if (d.route)
+                        assistant.route = d.route;
+                    if (d.timings?.predicted_per_second) {
+                        assistant.tokensPerSecond = Math.round(d.timings.predicted_per_second * 10) / 10;
+                    }
                     set({ lastTraceId: d.trace_id });
                     renderMessages(true);
                 }

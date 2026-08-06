@@ -50,12 +50,14 @@ class FakeLLMClient:
         delay_before_first: float = 0.0,
         raise_error: Exception | None = None,
         timings: dict | None = None,
+        model_status: dict[str, bool] | None = None,
     ) -> None:
         self.chunks = chunks if chunks is not None else ["Hello", ", ", "world!"]
         self.usage = usage
         self.delay_before_first = delay_before_first
         self.raise_error = raise_error
         self.timings = timings
+        self._model_status = model_status or {}
         self.seen_messages: list[dict[str, str]] | None = None
         self.last_model: str | None = None
         self.all_models: list[str] = []
@@ -88,6 +90,9 @@ class FakeLLMClient:
                 usage=self.usage if is_last else None,
                 timings=self.timings if is_last else None,
             )
+
+    async def model_status(self) -> dict[str, bool]:
+        return dict(self._model_status)
 
 
 def _test_config(db_path: Path, first_token_timeout_s: float = 30) -> Config:
@@ -500,3 +505,109 @@ def test_alias_model_sends_canonical_swap_name_to_llm(tmp_path: Path) -> None:
     assert chat_models[0] == "chat-default"
     # done payload should still show the alias for Debug visibility
     assert done_data["model"] == "reasoner"
+
+
+def test_long_history_is_truncated_to_fit_model_context(tmp_path: Path) -> None:
+    """Regression: sending full unbounded history to a small-context model
+    (e.g. coder-small at ctx=8192) used to overflow and 400 from llama.cpp
+    ("request exceeds the available context size"). The orchestrator must
+    drop oldest turns to fit ctx - max_tokens before dispatching."""
+    fake = FakeLLMClient(chunks=["ok"])
+    cfg = Config(
+        llama_swap=LlamaSwapConfig(base_url="http://127.0.0.1:8080/v1"),
+        db=DbConfig(path=str(tmp_path / "app.db")),
+        models=[
+            ModelEntry(
+                name="chat-default",
+                **{"class": "general"},
+                ctx=1024,
+                gpu=0,
+                tool_call="native",
+                max_tokens=200,
+                file="/models/chat-default.gguf",
+                quant="Q4_K_M",
+            ),
+        ],
+        defaults=DefaultsConfig(
+            chat_model="chat-default",
+            utility_model="chat-default",
+            title_model="chat-default",
+        ),
+    )
+    app = create_app(config=cfg)
+    app.state.llm_client = fake
+    client = TestClient(app)
+    client.__enter__()
+
+    chat_id = client.post("/api/chats", json={}).json()["id"]
+    # Each turn is long enough that a dozen of them would blow well past a
+    # 1024-token context budget (200 reserved for the response).
+    long_text = "word " * 300
+    for _ in range(10):
+        client.post(f"/api/chats/{chat_id}/messages", json={"content": long_text})
+
+    sent = fake.seen_messages
+    assert sent is not None
+    # System prompt always survives; oldest history turns must have been
+    # dropped rather than sent whole and overflowing ctx.
+    assert sent[0]["role"] == "system"
+    assert len(sent) < 21  # far fewer than the full 10 turns * 2 + system
+
+
+def test_chat_summary_compacts_old_turns_instead_of_raw_truncation(
+    tmp_path: Path,
+) -> None:
+    """Once app/background/summaries.py has produced a rolling summary, the
+    orchestrator should compact everything but the most recent
+    summary_every_n_turns turns into it, rather than relying on
+    _truncate_to_ctx to silently drop the oldest raw turns. This keeps
+    context usage roughly flat on long chats and preserves older content as
+    a summary instead of dropping it outright."""
+    fake = FakeLLMClient(chunks=["ok"])
+    cfg = Config(
+        llama_swap=LlamaSwapConfig(base_url="http://127.0.0.1:8080/v1"),
+        db=DbConfig(path=str(tmp_path / "app.db")),
+        models=[
+            ModelEntry(
+                name="chat-default",
+                **{"class": "general"},
+                ctx=32768,
+                gpu=0,
+                tool_call="native",
+                max_tokens=1024,
+                file="/models/chat-default.gguf",
+                quant="Q4_K_M",
+            ),
+        ],
+        defaults=DefaultsConfig(
+            chat_model="chat-default",
+            utility_model="chat-default",
+            title_model="chat-default",
+        ),
+    )
+    app = create_app(config=cfg)
+    app.state.llm_client = fake
+    client = TestClient(app)
+    client.__enter__()
+
+    chat_id = client.post("/api/chats", json={}).json()["id"]
+    for i in range(10):
+        client.post(f"/api/chats/{chat_id}/messages", json={"content": f"turn {i}"})
+
+    # Simulate the background summary job having run (it's async/queued in
+    # production; write the summary directly to isolate the orchestrator's
+    # compaction behavior from the background job).
+    app.state.db.execute(
+        "UPDATE chats SET summary = ? WHERE id = ?",
+        ("Earlier turns covered X, Y, Z.", chat_id),
+    )
+    app.state.db.commit()
+
+    client.post(f"/api/chats/{chat_id}/messages", json={"content": "one more turn"})
+
+    sent = fake.seen_messages
+    assert sent is not None
+    assert sent[0]["role"] == "system"  # persistent-assistant stopgap prompt
+    assert any("Earlier turns covered X, Y, Z." in m["content"] for m in sent)
+    # cfg default summary_every_n_turns=6 -> 12 messages kept + 2 system msgs.
+    assert len(sent) <= 14

@@ -105,16 +105,24 @@ async def put_routing(
 
 
 @router.get("/models")
-async def list_models() -> list[dict[str, Any]]:
+async def list_models(request: Request) -> list[dict[str, Any]]:
     """Model-picker roster: alias, class, device, resident, loaded, ctx."""
     cfg = get_effective()
+    llm_client = getattr(request.app.state, "llm_client", None)
+    loaded_map: dict[str, bool] = {}
+    if llm_client is not None:
+        from app.llm_client import LLMError
+        try:
+            loaded_map = await llm_client.model_status()
+        except LLMError:
+            pass
     return [
         {
             "alias": m.name,
             "class": m.class_,
             "device": m.gpu,
             "resident": m.resident,
-            "loaded": False,
+            "loaded": loaded_map.get(m.name, False),
             "ctx": m.ctx,
         }
         for m in cfg.models

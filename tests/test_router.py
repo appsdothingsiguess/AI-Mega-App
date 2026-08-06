@@ -528,3 +528,54 @@ async def test_override_details_report_the_override_layer() -> None:
         config=cfg, details=details,
     )
     assert details["layer"] == "override"
+
+
+@pytest.mark.asyncio
+async def test_sticky_routing_prefers_loaded_model_when_confidence_low() -> None:
+    """When classifier confidence < 0.8, prefer the currently-loaded GPU0 model
+    to avoid unnecessary swaps (HANDOFF 2026-08-06)."""
+    fake = FakeLlamaSwap()
+    # Classifier returns "code_task" with confidence 0.65 (below 0.8 threshold)
+    fake.script_chat(
+        content_chunks=['{"class": "code_task", "confidence": 0.65}'],
+        finish_reason="stop",
+    )
+    client = make_client(fake)
+    cfg = make_config()
+    try:
+        # preferred_model is "chat-default" (currently loaded on GPU0)
+        result = await route(
+            chat(), "write a script", [], llm_client=client, config=cfg,
+            preferred_model="chat-default",
+        )
+        # Should use preferred model instead of coder (which code_task maps to)
+        assert result.model == "chat-default"
+        assert result.intent == "code_task"
+        assert result.confidence == 0.65
+    finally:
+        await client.close()
+
+
+@pytest.mark.asyncio
+async def test_sticky_routing_yields_when_confidence_high() -> None:
+    """When classifier confidence >= 0.8, use the classifier's choice even if
+    it differs from the preferred model."""
+    fake = FakeLlamaSwap()
+    # Classifier returns "code_task" with confidence 0.92 (above 0.8 threshold)
+    fake.script_chat(
+        content_chunks=['{"class": "code_task", "confidence": 0.92}'],
+        finish_reason="stop",
+    )
+    client = make_client(fake)
+    cfg = make_config()
+    try:
+        result = await route(
+            chat(), "write a script", [], llm_client=client, config=cfg,
+            preferred_model="chat-default",
+        )
+        # Should use coder (code_task maps to coder) despite preferred_model
+        assert result.model == "coder"
+        assert result.intent == "code_task"
+        assert result.confidence == 0.92
+    finally:
+        await client.close()

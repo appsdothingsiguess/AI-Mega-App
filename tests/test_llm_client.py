@@ -185,6 +185,37 @@ async def test_models_list():
         await client.close()
 
 
+async def test_model_status_returns_loaded_map():
+    fake = FakeLlamaSwap()
+    fake.script_models(["chat-default", "coder", "dispatcher"])
+    fake.script_model_status({
+        "chat-default": "loaded",
+        "coder": "unloaded",
+        "dispatcher": "loaded",
+    })
+    client = make_client(fake)
+    try:
+        status = await client.model_status()
+        assert status == {
+            "chat-default": True,
+            "coder": False,
+            "dispatcher": True,
+        }
+    finally:
+        await client.close()
+
+
+async def test_model_status_defaults_to_false_when_no_status():
+    fake = FakeLlamaSwap()
+    fake.script_models(["chat-default", "coder"])
+    client = make_client(fake)
+    try:
+        status = await client.model_status()
+        assert status == {"chat-default": False, "coder": False}
+    finally:
+        await client.close()
+
+
 async def test_streaming_requests_usage_from_the_server():
     """OpenAI-compatible servers omit `usage` from streams unless asked.
     Without stream_options every live turn reported usage=null and the Debug

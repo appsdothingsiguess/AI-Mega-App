@@ -182,6 +182,35 @@ class LLMClient:
         except (KeyError, TypeError, ValueError) as exc:
             raise LLMError("stream_error", f"malformed models response: {exc}") from exc
 
+    async def model_status(self) -> dict[str, bool]:
+        """Return {model_id: is_loaded} for every model llama-swap knows about.
+
+        llama-swap's /v1/models includes per-model ``status.value``
+        (``"loaded"``/``"unloaded"``). This is the data source for the
+        model-picker roster's ``loaded`` flag (HANDOFF 2026-08-06 A).
+        """
+        try:
+            resp = await asyncio.wait_for(self._client.get("models"), timeout=self._timeout_s)
+        except (TimeoutError, httpx.TimeoutException) as exc:
+            raise LLMError("timeout", str(exc)) from exc
+        except httpx.HTTPError as exc:
+            raise LLMError("connection", str(exc)) from exc
+        if resp.status_code >= 400:
+            raise LLMError("http_error", f"{resp.status_code}: {resp.text}")
+        try:
+            body = resp.json()
+            result: dict[str, bool] = {}
+            for item in body.get("data", []):
+                model_id = item.get("id")
+                if not model_id:
+                    continue
+                status = item.get("status", {})
+                is_loaded = status.get("value") == "loaded" if isinstance(status, dict) else False
+                result[model_id] = is_loaded
+            return result
+        except (KeyError, TypeError, ValueError) as exc:
+            raise LLMError("stream_error", f"malformed models response: {exc}") from exc
+
     async def close(self) -> None:
         await self._client.aclose()
 

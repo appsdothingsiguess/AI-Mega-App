@@ -158,11 +158,55 @@
   text-decoration: none;
   cursor: pointer;
 }
-
-.msg-meta a:hover {
-  color: var(--accent-hover);
-}
-
+.msg-meta a:hover {
+
+  color: var(--accent-hover);
+
+}
+
+
+
+.regen-btn {
+
+  background: none;
+
+  border: none;
+
+  padding: 4px;
+
+  cursor: pointer;
+
+  color: var(--text-muted);
+
+  opacity: 0.6;
+
+  transition: opacity 0.15s, color 0.15s;
+
+  display: flex;
+
+  align-items: center;
+
+  margin-top: 2px;
+
+}
+
+
+
+.regen-btn:hover {
+
+  opacity: 1;
+
+  color: var(--accent);
+
+}
+
+
+
+.regen-btn svg {
+
+  display: block;
+
+}
 .banner {
   display: flex;
   align-items: center;

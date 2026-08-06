@@ -39,6 +39,8 @@ export interface Message {
   created_at: number;
   /** Client-only: set from done.trace_id for deep-link to Debug. */
   traceId?: string;
+  /** Client-only: tokens/second from llama.cpp timings. */
+  tokensPerSecond?: number;
 }
 
 export interface Usage {
@@ -59,6 +61,7 @@ export interface DoneEvent {
   message_id: string;
   model: string;
   usage?: Usage;
+  timings?: { predicted_per_second?: number };
   trace_id: string;
   route?: { source?: string; intent?: string; model?: string; confidence?: number };
   citations?: unknown;

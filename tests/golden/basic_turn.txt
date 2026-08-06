@@ -8,4 +8,4 @@ event: token
 data: {"text":"world!"}
 
 event: done
-data: {"message_id":"<MESSAGE_ID>","model":"chat-default","usage":{"prompt_tokens":5,"completion_tokens":3,"total_tokens":8},"route":{"source":"classifier","intent":"chat","model":"chat-default","confidence":null},"trace_id":"<TRACE_ID>"}
+data: {"message_id":"<MESSAGE_ID>","model":"chat-default","usage":{"prompt_tokens":5,"completion_tokens":3,"total_tokens":8},"timings":null,"route":{"source":"classifier","intent":"chat","model":"chat-default","confidence":null},"trace_id":"<TRACE_ID>"}
