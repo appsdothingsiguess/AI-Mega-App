@@ -59,10 +59,14 @@ async def _warmup_loop(app: FastAPI) -> None:
     _WARMUP_INTERVAL_S). app/gpu/api.py additionally fires an immediate
     warm-up right after a successful /api/gpu/apply, so this loop is the
     steady-state fallback, not the only recovery path."""
+    import logging
+    logger = logging.getLogger(__name__)
     while True:
         llm = getattr(getattr(app, "state", None), "llm_client", None)
         cfg: Config | None = getattr(getattr(app, "state", None), "config", None)
+        logger.info("warmup loop: starting sweep (llm=%s, cfg=%s)", llm is not None, cfg is not None)
         await warmup_resident_models(llm, cfg)
+        logger.info("warmup loop: sweep complete, sleeping %.0fs", _WARMUP_INTERVAL_S)
         await asyncio.sleep(_WARMUP_INTERVAL_S)
 
 

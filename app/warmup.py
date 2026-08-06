@@ -20,18 +20,23 @@ def resident_swap_names(cfg: Config) -> list[str]:
     """Canonical swap-slot names for every enabled, resident model, deduped
     the same way app.gpu.swapgen collapses models that share a GGUF (e.g.
     reasoner -> chat-default) so we never ping a name llama-swap doesn't
-    have a slot for."""
+    have a slot for.
+    
+    Each swap slot is pinged once, even if multiple config entries share it,
+    because llama-swap treats each slot as an independent loadable unit."""
+    # Replicate swapgen's dedup logic: models sharing a file keep one entry,
+    # priority: resident:true over non-resident; ties broken by first in list.
     file_to_canonical: dict[str, str] = {}
-    file_to_resident: dict[str, bool] = {}
+    file_to_canonical_resident: dict[str, bool] = {}
     for m in cfg.models:
         if not m.enabled:
             continue
         if m.file not in file_to_canonical:
             file_to_canonical[m.file] = m.name
-            file_to_resident[m.file] = m.resident
-        elif m.resident and not file_to_resident[m.file]:
+            file_to_canonical_resident[m.file] = m.resident
+        elif m.resident and not file_to_canonical_resident[m.file]:
             file_to_canonical[m.file] = m.name
-            file_to_resident[m.file] = True
+            file_to_canonical_resident[m.file] = True
 
     names: list[str] = []
     seen: set[str] = set()
@@ -39,7 +44,7 @@ def resident_swap_names(cfg: Config) -> list[str]:
         if not m.enabled or not m.resident:
             continue
         canonical = file_to_canonical.get(m.file, m.name)
-        if canonical not in seen:
+        if canonical == m.name and canonical not in seen:
             seen.add(canonical)
             names.append(canonical)
     return names

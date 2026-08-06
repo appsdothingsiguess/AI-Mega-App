@@ -20,82 +20,58 @@ currently loaded), the UI doesn't show the "loading model" banner. The
 `model_loading` SSE event is sent by the orchestrator
 (`orchestrator.py:400`), but the frontend may not be displaying it correctly,
 or the swap is happening so fast that the banner flashes and disappears.
-**Next session: check if `model_loading` events are being sent and received
-correctly; verify the banner display logic in `chat.ts:235-237`.**
+**Status: NOT YET INVESTIGATED. Next session: check if `model_loading` events
+are being sent and received correctly; verify the banner display logic in
+`chat.ts:235-237`.**
 
-### 2. Navigating to Debug page while messaging interrupts it (but browser tab switch doesn't)
-User reports that navigating from Chat to Debug within the app interrupts
-the in-flight SSE stream, but switching to a different browser tab and back
-does NOT interrupt it. This suggests the issue is in the SPA router
-(`web/src/router.ts`) or the chat view's `unmount()` logic
-(`chat.ts:30-37`), which calls `abort?.abort()`. The abort controller is
-correctly wired to cancel the SSE stream, but the question is: why does
-in-app navigation trigger unmount while browser tab switch doesn't?
-**Next session: (1) verify that `unmount()` is called on in-app navigation
-but not on browser tab switch (browser tab visibility change doesn't unmount
-React-less views); (2) consider making the SSE stream persist across
-in-app navigation (e.g., move it to a global store or make it resumable);
-(3) the orchestrator's finally-block persists partial content
-(`orchestrator.py:474-486`), so the content shouldn't be lost, but the
-stream itself is aborted.**
+### 2. Navigating to Debug page while messaging interrupts it — FIXED (commit 53dac3a)
+**Root cause:** Chat view's `unmount()` called `abort?.abort()`, which canceled
+the SSE stream. In-app navigation triggers `unmount()` via the router, but
+browser tab switching does NOT (only `pagehide`/`beforeunload` on tab close).
+**Fix:** Don't abort the SSE stream on unmount. Track streaming state globally
+in the store (`activeChatStreaming`) so it persists across view changes. The
+stream continues in the background, and when the user returns to Chat, they
+load the completed message from DB. The stop button still aborts explicitly.
 
-### 3. Scrolling while generating still broken
-User reports that scrolling up while a message is generating still gets
-yanked back to the bottom. The `wasNearBottom < 80` threshold check exists
-in `chat.ts:87-89,151`, but the user says it's not working. Possible causes:
-(1) the threshold is too generous (80px is ~3 lines, maybe too much);
-(2) the `wasNearBottom` calculation is wrong (maybe `scrollHeight` changes
-mid-render, making the check stale); (3) the `requestAnimationFrame`
-deferred scroll assignment is still racing with layout. **Next session:
-(1) add console logging to verify `wasNearBottom` is being calculated
-correctly during streaming; (2) try reducing the threshold to 40px or
-20px; (3) check if `scrollHeight` is being read before/after the DOM
-update (it should be read BEFORE `replaceChildren()`, which it is, but
-verify).**
+### 3. Scrolling while generating still broken — FIXED (commit 53dac3a)
+**Root cause:** The `wasNearBottom` check was calculated before the DOM update,
+but the scroll assignment happened after in a single `requestAnimationFrame`.
+If the user scrolled up between the check and the assignment, they were still
+yanked back down. Also, the 80px threshold was too generous.
+**Fix:** Use double-`requestAnimationFrame` to ensure layout is fully committed,
+then re-check the scroll position inside the callback. Reduced threshold from
+80px to 20px. Now only auto-scrolls if the user is STILL near the bottom after
+the layout settles.
 
 ### 4. Can't tell if summarizer is doing anything in Debug mode
 User reports that the rolling summary feature doesn't show any visible
 activity in the Debug panel. The backend generates summaries every 6 turns
 (`background/summaries.py`, `config.yaml:233`), and the Debug view should
-show a `summary` span when it runs. **Next session: (1) verify that
-`maybe_enqueue_summary` is being called after every turn
-(`orchestrator.py:439-440` calls `_on_turn_complete`); (2) check if the
+show a `summary` span when it runs. **Status: NOT YET INVESTIGATED. Next
+session: (1) verify that `maybe_enqueue_summary` is being called after every
+turn (`orchestrator.py:439-440` calls `_on_turn_complete`); (2) check if the
 summary job is actually running (add logging to `summaries.py:110-130`);
 (3) verify that the summary span is being emitted and reaches the Debug
 SSE stream; (4) check if the summary is being written to `chats.summary`
 in SQLite (query the DB directly to confirm).**
 
-### 5. Classifier timeout for trace_id: 31a0033c-59c9-451a-b495-2e24223f2ee9
-User reports a classifier timeout for a specific trace. Need to query the
-SQLite DB for this trace and inspect the route span to see:
-(1) what the classifier returned (or if it timed out);
-(2) what the fallback reason was;
-(3) whether the classifier process was actually running at the time
-(check `journalctl -u llama-swap` for the timestamp).
-**Next session: query `data/app.db` for trace_id
-`31a0033c-59c9-451a-b495-2e24223f2ee9`, inspect the route span data,
-and correlate with llama-swap logs.**
+### 5. Classifier timeout for trace_id: 31a0033c-59c9-451a-b495-2e24223f2ee9 — ROOT CAUSE FOUND
+**Root cause:** Classifier process was cold (not loaded yet) at 03:07:39.
+llama-swap logs show:
+- 03:07:39: classifier request arrived, proxy tried localhost:5801 → "connection refused"
+- 03:07:45: classifier health check passed (process started)
+- 03:07:45: request canceled ("context canceled") after 6s timeout
+- 03:07:52: classifier finished loading (1m32s cold load!)
+The 6s timeout (`config.yaml:226`) is too short for a cold classifier load.
+The classifier is CPU-resident but still takes 1m32s to load on first request.
+**Fix options: (1) increase `routing.classifier.timeout_s` to 90s or more;
+(2) ensure classifier is eagerly warmed on startup (check `warmup.py` is
+actually pinging it); (3) add a "classifier cold" warning in the UI when
+the first request takes >10s.**
 
-### What was fixed in this session (commit 8c4f7b4)
-- **Regenerate button**: Circular arrow icon under each assistant message
-  re-sends the previous user message (chat.ts, chat.css)
-- **Tokens/second display**: Shows `model · 31.5 tok/s` next to model name,
-  sourced from llama.cpp's `timings.predicted_per_second` (orchestrator.py,
-  types.ts, chat.ts)
-- **Swap-aware routing**: Orchestrator queries llama-swap for currently-loaded
-  GPU0 model, passes it as `preferred_model` to router; router uses it when
-  classifier confidence < 0.8 to avoid unnecessary swaps (router.py,
-  orchestrator.py)
-- **Warmup timeout**: `warmup_one()` now has a 60s per-call timeout
-  (`asyncio.timeout`) so one hung model can't stall the entire gather
-  (warmup.py)
-- **Real loaded state**: `GET /api/models` now queries llama-swap's
-  `/v1/models` endpoint for real loaded/unloaded state instead of
-  hardcoding `loaded: false` (llm_client.py, settings/api.py)
-- **Residency drift fix**: `settings.local.yaml` coder/vision/reasoner-alt
-  set to `resident: false` (matching config.yaml intent)
-- **Drain timeout reduced**: `_STOP_DRAIN_TIMEOUT_S` reduced from 15s to 8s
-  (under uvicorn's 10s `--timeout-graceful-shutdown`)
+### What was fixed in this session
+- **Commit 8c4f7b4**: Regenerate button, tokens/second display, swap-aware routing, warmup timeout, real loaded state, residency drift fix, drain timeout reduction
+- **Commit 53dac3a**: Scrolling fix (double-rAF + re-check), navigation interrupt fix (global streaming state)
 
 ## Where things stand (2026-08-06 — post-restart-fix live re-test)
 
