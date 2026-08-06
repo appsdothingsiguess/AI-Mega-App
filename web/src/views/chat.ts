@@ -36,6 +36,13 @@ export function createChatView(): ViewHandle {
     route = null;
   };
 
+  function syncStopBtn(): void {
+    const sendBtn = root?.querySelector("#send-btn") as HTMLElement | null;
+    const stopBtn = root?.querySelector("#stop-btn") as HTMLElement | null;
+    if (sendBtn) sendBtn.hidden = streaming;
+    if (stopBtn) stopBtn.hidden = !streaming;
+  }
+
   function syncPicker(): void {
     const menu = root?.querySelector(".model-menu");
     if (!menu) return;
@@ -55,6 +62,24 @@ export function createChatView(): ViewHandle {
     if (el) el.textContent = text;
   }
 
+  function renderSummaryBanner(): void {
+    const existing = root?.querySelector(".summary-banner");
+    if (existing) existing.remove();
+    const chat = get().chats.find((c) => c.id === route?.chatId);
+    if (!chat?.summary) return;
+    const wrap = root?.querySelector(".messages");
+    if (!wrap) return;
+    const banner = document.createElement("details");
+    banner.className = "summary-banner";
+    const s = document.createElement("summary");
+    s.textContent = "Conversation summary";
+    banner.appendChild(s);
+    const body = document.createElement("p");
+    body.textContent = chat.summary;
+    banner.appendChild(body);
+    wrap.prepend(banner);
+  }
+
   function renderMessages(scroll: boolean): void {
     const box = root?.querySelector(".messages-inner");
     if (!box) return;
@@ -63,6 +88,7 @@ export function createChatView(): ViewHandle {
       ? sc.scrollHeight - sc.scrollTop - sc.clientHeight < 80
       : true;
     box.replaceChildren();
+    renderSummaryBanner();
     if (!messages.length && !streaming) {
       const empty = document.createElement("div");
       empty.className = "empty-state";
@@ -181,6 +207,7 @@ export function createChatView(): ViewHandle {
     };
     messages.push(assistant);
     streaming = true;
+    syncStopBtn();
     renderMessages(true);
 
     abort = new AbortController();
@@ -226,6 +253,7 @@ export function createChatView(): ViewHandle {
     );
     streaming = false;
     loadingModel = null;
+    syncStopBtn();
     if (result === "lost" && !bannerError) bannerError = "connection lost";
     renderMessages(true);
     try { set({ chats: await listChats() }); } catch { /* ignore */ }
@@ -241,6 +269,14 @@ export function createChatView(): ViewHandle {
       syncPicker();
     });
     el.querySelector("#send-btn")?.addEventListener("click", () => void send());
+    el.querySelector("#stop-btn")?.addEventListener("click", () => {
+      abort?.abort();
+      abort = null;
+      streaming = false;
+      loadingModel = null;
+      syncStopBtn();
+      renderMessages(false);
+    });
     const ta = el.querySelector("textarea") as HTMLTextAreaElement;
     ta.addEventListener("keydown", (e) => {
       if (e.key === "Enter" && !e.shiftKey) {

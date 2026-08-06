@@ -5,6 +5,8 @@ marked mount points for wave-2 routers to app.include_router() into.
 
 from __future__ import annotations
 
+import asyncio
+import logging
 import sqlite3
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
@@ -37,7 +39,29 @@ except ImportError:  # BLOCKED: app.background absent — interface-gate (step 2
     background_start = None
     background_stop = None
 
+_logger = logging.getLogger(__name__)
+
 WEB_DIR = REPO_ROOT / "web"
+
+
+async def _warmup_classifier(app: FastAPI) -> None:
+    """Fire a single request to the classifier model on startup so llama-swap
+    loads it eagerly. Without this, the first real classify call pays a cold-
+    start penalty even though the model is configured as resident."""
+    llm = getattr(getattr(app, "state", None), "llm_client", None)
+    cfg: Config | None = getattr(getattr(app, "state", None), "config", None)
+    if llm is None or cfg is None:
+        return
+    model = cfg.routing.classifier.model
+    try:
+        async for _ in llm.chat(
+            model, [{"role": "user", "content": "ping"}],
+            max_tokens=1, stream=False, thinking=False,
+        ):
+            pass
+        _logger.info("classifier warm-up complete (%s)", model)
+    except Exception as exc:
+        _logger.warning("classifier warm-up failed: %s", exc)
 
 
 def _resolve_db_path(config: Config) -> Path:
@@ -63,6 +87,7 @@ def create_app(config: Config | None = None) -> FastAPI:
             await background_start(app)
         if start_rewarm is not None:
             await start_rewarm(app)  # async when present (sibling drift)
+        asyncio.create_task(_warmup_classifier(app))
         try:
             yield
         finally:

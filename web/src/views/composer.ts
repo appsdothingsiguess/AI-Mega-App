@@ -149,6 +149,9 @@ export function chatLayoutHtml(label: string): string {
 <button type="button" class="send-btn" id="send-btn" aria-label="Send">
 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="12" y1="19" x2="12" y2="5"></line><polyline points="5 12 12 5 19 12"></polyline></svg>
 </button>
+<button type="button" class="stop-btn" id="stop-btn" aria-label="Stop" hidden>
+<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><rect x="6" y="6" width="12" height="12" rx="1"></rect></svg>
+</button>
 </div></div></div></div></div>
 <aside class="right-panel muted">Artifact panel — Phase 3</aside></div>`;
 }

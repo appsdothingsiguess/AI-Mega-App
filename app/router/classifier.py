@@ -152,23 +152,33 @@ async def classify(
 
     started = time.monotonic()
     record(prompt=prompt, classifier_model=cfg.model)
-    try:
-        delta = await asyncio.wait_for(
-            _single_completion(llm_client, cfg.model, messages),
-            timeout=cfg.timeout_s,
-        )
-    except (TimeoutError, asyncio.TimeoutError):
-        logger.warning("router.classifier: timeout after %.1fs", cfg.timeout_s)
+    last_error: LLMError | None = None
+    for attempt in range(2):
+        try:
+            delta = await asyncio.wait_for(
+                _single_completion(llm_client, cfg.model, messages),
+                timeout=cfg.timeout_s,
+            )
+            last_error = None
+            break
+        except (TimeoutError, asyncio.TimeoutError):
+            logger.warning("router.classifier: timeout after %.1fs (attempt %d)", cfg.timeout_s, attempt + 1)
+            record(
+                classifier_ms=(time.monotonic() - started) * 1000,
+                classifier_error=f"timeout after {cfg.timeout_s}s",
+            )
+            return None
+        except LLMError as exc:
+            last_error = exc
+            if attempt == 0 and "502" in exc.detail:
+                logger.info("router.classifier: 502 on attempt 1, retrying")
+                continue
+            break
+    if last_error is not None:
+        logger.warning("router.classifier: llm error %s", last_error)
         record(
             classifier_ms=(time.monotonic() - started) * 1000,
-            classifier_error=f"timeout after {cfg.timeout_s}s",
-        )
-        return None
-    except LLMError as exc:
-        logger.warning("router.classifier: llm error %s", exc)
-        record(
-            classifier_ms=(time.monotonic() - started) * 1000,
-            classifier_error=f"{exc.kind}: {exc.detail}",
+            classifier_error=f"{last_error.kind}: {last_error.detail}",
         )
         return None
 

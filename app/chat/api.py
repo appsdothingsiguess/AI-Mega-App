@@ -35,6 +35,7 @@ class ChatSummaryOut(BaseModel):
     id: str
     title: str | None
     updated_at: int
+    summary: str | None = None
 
 
 class MessageOut(BaseModel):

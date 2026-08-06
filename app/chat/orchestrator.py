@@ -207,6 +207,8 @@ class ChatOrchestrator:
             )
             return
 
+        persisted = False
+        resolved_model = ""
         try:
             async with span(trace_id, "route", explicit_model=model) as sp:
                 # PLAN.md §4.3: override > rules > classifier. Explicit
@@ -348,6 +350,7 @@ class ChatOrchestrator:
                     resolved_model,
                 )
                 await run_sync(history.touch_chat, self.conn, chat_id)
+                persisted = True
 
             if _on_turn_complete is not None:
                 await _on_turn_complete(chat_id)
@@ -384,3 +387,17 @@ class ChatOrchestrator:
         except Exception as exc:  # noqa: BLE001 - last-resort terminal error
             async with span(trace_id, "sse_emit", event="error", kind="internal_error"):
                 yield SSEEvent(event="error", data={"kind": "internal_error", "detail": str(exc)})
+        finally:
+            if not persisted and accumulated:
+                try:
+                    await run_sync(
+                        history.insert_message,
+                        self.conn,
+                        chat_id,
+                        "assistant",
+                        "".join(accumulated),
+                        resolved_model or None,
+                    )
+                    await run_sync(history.touch_chat, self.conn, chat_id)
+                except Exception:  # noqa: BLE001
+                    pass

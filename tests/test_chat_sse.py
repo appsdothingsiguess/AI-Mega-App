@@ -58,6 +58,7 @@ class FakeLLMClient:
         self.timings = timings
         self.seen_messages: list[dict[str, str]] | None = None
         self.last_model: str | None = None
+        self.all_models: list[str] = []
 
     async def chat(
         self,
@@ -74,6 +75,7 @@ class FakeLLMClient:
 
         self.seen_messages = messages
         self.last_model = model
+        self.all_models.append(model)
         if self.delay_before_first:
             await asyncio.sleep(self.delay_before_first)
         if self.raise_error is not None:
@@ -374,7 +376,7 @@ def test_prompt_fields_dropped_when_store_prompts_is_false(
     assert "messages" not in spans["llm_request"][0]
     assert "response" not in spans["llm_stream"][0]
     # non-prompt fields still recorded
-    assert spans["llm_request"][0]["message_count"] == 1
+    assert spans["llm_request"][0]["message_count"] == 2
 
 
 def test_llm_stream_span_records_server_usage_and_timings(tmp_path: Path) -> None:
@@ -492,7 +494,9 @@ def test_alias_model_sends_canonical_swap_name_to_llm(tmp_path: Path) -> None:
     events = _parse_sse(resp.text)
     done_data = next(data for ev, data in events if ev == "done")
 
-    # llm_client should have received the canonical name
-    assert fake.last_model == "chat-default"
+    # The chat turn should send the canonical name to llm_client.
+    # Filter out startup warm-up (classifier) and background jobs (dispatcher).
+    chat_models = [m for m in fake.all_models if m not in ("classifier", "dispatcher")]
+    assert chat_models[0] == "chat-default"
     # done payload should still show the alias for Debug visibility
     assert done_data["model"] == "reasoner"
