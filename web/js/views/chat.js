@@ -12,11 +12,16 @@ export function createChatView() {
     let pickerOpen = false;
     let loadingModel = null;
     let bannerError = null;
-    let streaming = false;
     let onDocClick = null;
+    // Track streaming state globally so it persists across view unmount/remount
+    // (HANDOFF 2026-08-06 #2: navigating to Debug shouldn't interrupt streaming).
+    let streaming = get().activeChatStreaming ?? false;
     const unmount = () => {
-        abort?.abort();
-        abort = null;
+        // Don't abort the SSE stream on unmount — let it complete in the background
+        // so the user can navigate away and back without interrupting generation.
+        // The abort controller is only used for explicit stop (stop button) or
+        // page unload (handled by router.ts teardownRouter).
+        set({ activeChatStreaming: streaming });
         if (onDocClick)
             document.removeEventListener("click", onDocClick);
         onDocClick = null;
@@ -159,16 +164,25 @@ export function createChatView() {
             b.textContent = bannerError;
             box.appendChild(b);
         }
-        if (scroll && wasNearBottom && sc) {
-            // Deferred to a frame after layout: reading/writing scrollHeight in
-            // the same tick as replaceChildren() can race the browser's layout
-            // pass on some engines, especially mid-stream when content height
-            // changes every few ms — the assignment silently no-ops if it lands
-            // before the new height is committed.
-            requestAnimationFrame(() => {
-                if (sc)
-                    sc.scrollTop = sc.scrollHeight;
-            });
+        if (scroll && sc) {
+            // Only auto-scroll if the user was near the bottom BEFORE the update
+            // AND is still near the bottom AFTER the layout settles. This prevents
+            // yanking the user back to the bottom if they scrolled up mid-stream
+            // (HANDOFF 2026-08-06 #3).
+            if (wasNearBottom) {
+                // Double-rAF to ensure layout is fully committed before reading
+                // scrollHeight, then re-check position to avoid racing with user input.
+                requestAnimationFrame(() => {
+                    requestAnimationFrame(() => {
+                        if (sc) {
+                            const stillNearBottom = sc.scrollHeight - sc.scrollTop - sc.clientHeight < 20;
+                            if (stillNearBottom) {
+                                sc.scrollTop = sc.scrollHeight;
+                            }
+                        }
+                    });
+                });
+            }
         }
     }
     async function loadHistory(chatId) {
@@ -278,6 +292,7 @@ export function createChatView() {
             },
         });
         streaming = false;
+        set({ activeChatStreaming: false });
         loadingModel = null;
         syncStopBtn();
         if (result === "lost" && !bannerError)
@@ -347,6 +362,7 @@ export function createChatView() {
             },
         });
         streaming = false;
+        set({ activeChatStreaming: false });
         loadingModel = null;
         syncStopBtn();
         if (result === "lost" && !bannerError)
@@ -371,6 +387,7 @@ export function createChatView() {
             abort?.abort();
             abort = null;
             streaming = false;
+            set({ activeChatStreaming: false });
             loadingModel = null;
             syncStopBtn();
             renderMessages(false);

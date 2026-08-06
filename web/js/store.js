@@ -6,6 +6,7 @@ const initial = {
     modelOverride: null,
     healthModels: [],
     lastTraceId: null,
+    activeChatStreaming: false,
 };
 let state = { ...initial };
 const listeners = new Set();

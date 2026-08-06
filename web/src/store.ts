@@ -10,6 +10,7 @@ export interface AppState {
   modelOverride: string | null;
   healthModels: import("./types.js").HealthModel[];
   lastTraceId: string | null;
+  activeChatStreaming: boolean;
 }
 
 const initial: AppState = {
@@ -19,6 +20,7 @@ const initial: AppState = {
   modelOverride: null,
   healthModels: [],
   lastTraceId: null,
+  activeChatStreaming: false,
 };
 
 let state: AppState = { ...initial };
