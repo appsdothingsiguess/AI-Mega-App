@@ -28,6 +28,13 @@
   margin-left: auto;
 }
 
+/* the view renders one wrapper holding the bars + swap label */
+.debug-telemetry > div {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+
 .gpu-bar {
   display: flex;
   align-items: center;
@@ -48,7 +55,38 @@
 .gpu-fill {
   height: 100%;
   width: 0;
-  background: var(--border);
+  background: var(--accent);
+}
+
+/* Route source chip: which layer decided, and why it fell back if it did. */
+.route-chip {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  color: var(--text-secondary);
+  white-space: nowrap;
+}
+
+.route-chip.is-override {
+  color: var(--route-override);
+  border-color: var(--route-override);
+}
+
+.route-chip.is-rule {
+  color: var(--route-rule);
+  border-color: var(--route-rule);
+}
+
+.route-chip.is-classifier {
+  color: var(--route-classifier);
+  border-color: var(--route-classifier);
+}
+
+.route-chip.is-fallback {
+  color: var(--warning);
+  border-color: var(--warning);
 }
 
 .swap-label {

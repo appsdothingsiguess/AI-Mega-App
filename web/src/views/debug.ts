@@ -1,6 +1,12 @@
 /** Debug view: trace list, waterfall, span detail, live /api/debug/stream. */
 
-import { getTrace, listTraces, streamDebugSpans } from "../api.js";
+import {
+  getGpuInventory,
+  getTrace,
+  listTraces,
+  streamDebugSpans,
+  type GpuInfo,
+} from "../api.js";
 import { escapeHtml } from "../markdown.js";
 import type { Route, ViewHandle } from "../router.js";
 import { get } from "../store.js";
@@ -19,6 +25,30 @@ function isBackgroundOnly(t: Trace): boolean {
   return t.spans.length > 0 && t.spans.every((s) => s.stage === "title");
 }
 
+/** Route source chip (docs/FEATURES.md F19): which layer decided, what it
+ *  decided, how sure it was, and — the part that was missing — why it fell
+ *  back when it did. */
+function routeChipHtml(t: Trace): string {
+  const route = t.spans.find((s) => s.stage === "route");
+  if (!route) return "";
+  const d = route.data ?? {};
+  const parts: string[] = [];
+  if (d.source) parts.push(String(d.source));
+  if (d.intent) parts.push(String(d.intent));
+  if (typeof d.confidence === "number") parts.push(`${Math.round(d.confidence * 100)}%`);
+  const fallback = d.fallback_reason ? String(d.fallback_reason) : "";
+  const source = typeof d.source === "string" ? d.source : "classifier";
+  const cls = fallback ? "route-chip is-fallback" : `route-chip is-${source}`;
+  const label = parts.join(" · ") || "route";
+  const suffix = fallback ? ` — fallback: ${fallback}` : "";
+  return `<span class="${cls}" title="${escapeHtml(label + suffix)}">${escapeHtml(label + suffix)}</span>`;
+}
+
+function mb(n: unknown): string {
+  const v = Number(n);
+  return Number.isFinite(v) ? `${(v / 1024).toFixed(1)}GB` : "—";
+}
+
 export function createDebugView(): ViewHandle {
   let root: HTMLElement | null = null;
   let traces: Trace[] = [];
@@ -27,12 +57,16 @@ export function createDebugView(): ViewHandle {
   let detailTab: "data" | "prompt" | "response" = "data";
   let live: { stop: () => void } | null = null;
   let abort: AbortController | null = null;
+  let gpus: GpuInfo[] = [];
+  let gpuTimer: ReturnType<typeof setInterval> | null = null;
 
   const unmount = () => {
     live?.stop();
     live = null;
     abort?.abort();
     abort = null;
+    if (gpuTimer !== null) clearInterval(gpuTimer);
+    gpuTimer = null;
     root = null;
   };
 
@@ -108,6 +142,7 @@ export function createDebugView(): ViewHandle {
     const meta = document.createElement("div");
     meta.className = "waterfall-meta";
     meta.innerHTML = `<span class="mono">${escapeHtml(String(model))}</span>
+      ${routeChipHtml(selected)}
       <span class="muted">${selected.spans.length} spans</span>`;
     pane.appendChild(meta);
     const id = document.createElement("div");
@@ -123,8 +158,9 @@ export function createDebugView(): ViewHandle {
       row.type = "button";
       row.className =
         "span-row" + (selectedSpan?.id === sp.id ? " active" : "");
+      const gpuTag = sp.data?.gpu != null ? ` [GPU${sp.data.gpu}]` : "";
       const modelTag =
-        typeof sp.data?.model === "string" ? ` · ${sp.data.model}` : "";
+        typeof sp.data?.model === "string" ? ` · ${sp.data.model}${gpuTag}` : "";
       row.innerHTML = `
         <span class="span-name" title="${escapeHtml(sp.stage)}">${escapeHtml(sp.stage)}</span>
         <div class="span-track"><div class="span-bar" style="width:${pct}%"></div></div>
@@ -172,10 +208,21 @@ export function createDebugView(): ViewHandle {
     pre.className = "detail-pre";
     const data = selectedSpan.data ?? {};
     let body: string;
-    if (detailTab === "prompt" && data.prompt != null) {
-      body = String(data.prompt);
-    } else if (detailTab === "response" && data.response != null) {
-      body = String(data.response);
+    if (detailTab === "prompt") {
+      // `prompt`/`response` are stripped server-side when
+      // debug.store_prompts is false — say so instead of silently falling
+      // back to the raw data dump, which read as "prompts are broken".
+      body =
+        data.prompt != null
+          ? String(data.prompt)
+          : `No prompt recorded for the "${selectedSpan.stage}" stage.\n\nOnly stages that send a model a prompt record one (llm_request, route), and only when debug.store_prompts is true in config.yaml.`;
+    } else if (detailTab === "response") {
+      body =
+        data.response != null
+          ? String(data.response)
+          : data.raw_response != null
+            ? String(data.raw_response)
+            : `No response recorded for the "${selectedSpan.stage}" stage.\n\nOnly stages that receive model output record one (llm_stream, route), and only when debug.store_prompts is true in config.yaml.`;
     } else {
       body = JSON.stringify(
         {
@@ -214,10 +261,58 @@ export function createDebugView(): ViewHandle {
     }
   }
 
+  /** Live nvidia-smi telemetry (docs/FEATURES.md A3): real used/total VRAM
+   *  per device, plus the model llama-swap most recently served. */
+  function renderTelemetry(): void {
+    const pane = root?.querySelector(".debug-telemetry");
+    if (!pane) return;
+    pane.replaceChildren();
+    const wrap = document.createElement("div");
+    if (!gpus.length) {
+      wrap.innerHTML = `<div class="muted">no GPU telemetry</div>`;
+    } else {
+      wrap.innerHTML = gpus
+        .slice()
+        .sort((a, b) => a.index - b.index)
+        .map((g) => {
+          const used = Math.max(0, g.mem_total_mb - g.mem_free_mb);
+          const pct = g.mem_total_mb ? Math.round((used / g.mem_total_mb) * 100) : 0;
+          return `<div class="gpu-bar" title="${escapeHtml(g.name)}">
+            <span>GPU${g.index}</span>
+            <div class="gpu-track"><div class="gpu-fill" style="width:${pct}%"></div></div>
+            <span class="mono">${mb(used)} / ${mb(g.mem_total_mb)}</span>
+          </div>`;
+        })
+        .join("");
+    }
+    const swap = document.createElement("div");
+    swap.className = "swap-label";
+    const lastModel =
+      traces
+        .flatMap((t) => t.spans)
+        .filter((s) => s.stage === "llm_request" || s.stage === "llm_stream")
+        .sort((a, b) => b.started_at - a.started_at)
+        .map((s) => s.data?.model)
+        .find((m) => typeof m === "string") ?? "—";
+    swap.innerHTML = `<span class="swap-dot"></span><span>swap: ${escapeHtml(String(lastModel))}</span>`;
+    wrap.appendChild(swap);
+    pane.appendChild(wrap);
+  }
+
+  async function refreshTelemetry(): Promise<void> {
+    try {
+      gpus = await getGpuInventory();
+    } catch {
+      gpus = [];
+    }
+    renderTelemetry();
+  }
+
   function render(): void {
     renderList();
     renderWaterfall();
     renderDetail();
+    renderTelemetry();
   }
 
   async function selectTrace(traceId: string): Promise<void> {
@@ -241,22 +336,7 @@ export function createDebugView(): ViewHandle {
       <div class="debug-view">
         <div class="debug-top">
           <h1>Debug</h1>
-          <div class="debug-telemetry">
-            <div class="gpu-bar">
-              <span>GPU0</span>
-              <div class="gpu-track"><div class="gpu-fill"></div></div>
-              <span>— / — (Phase 2)</span>
-            </div>
-            <div class="gpu-bar">
-              <span>GPU1</span>
-              <div class="gpu-track"><div class="gpu-fill"></div></div>
-              <span>— / — (Phase 2)</span>
-            </div>
-            <div class="swap-label">
-              <span class="swap-dot"></span>
-              <span>swap: — (Phase 2)</span>
-            </div>
-          </div>
+          <div class="debug-telemetry"></div>
         </div>
         <div class="debug-body">
           <div class="trace-list"></div>
@@ -284,6 +364,8 @@ export function createDebugView(): ViewHandle {
       }
 
       live = streamDebugSpans((span) => mergeSpan(span), { signal: abort.signal });
+      void refreshTelemetry();
+      gpuTimer = setInterval(() => void refreshTelemetry(), 5000);
     },
     unmount,
   };

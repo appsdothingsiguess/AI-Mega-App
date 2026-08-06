@@ -84,6 +84,48 @@ export function renderMarkdown(src: string): string {
   });
 }
 
+function copyText(s: string): Promise<void> {
+  if (navigator.clipboard?.writeText) {
+    return navigator.clipboard.writeText(s);
+  }
+  const ta = document.createElement("textarea");
+  ta.value = s;
+  ta.style.cssText = "position:fixed;left:-9999px";
+  document.body.appendChild(ta);
+  ta.select();
+  const ok = document.execCommand("copy");
+  document.body.removeChild(ta);
+  return ok ? Promise.resolve() : Promise.reject();
+}
+
+/** Add a "Copy" button (top-right) to every <pre> block inside a rendered container. */
+export function addCopyButtons(container: HTMLElement): void {
+  container.querySelectorAll("pre").forEach((pre) => {
+    const el = pre as HTMLElement;
+    if (el.querySelector(".copy-code-btn")) return;
+    el.style.position = "relative";
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "copy-code-btn";
+    btn.textContent = "Copy";
+    btn.addEventListener("click", () => {
+      const code = el.querySelector("code");
+      const text = code?.textContent ?? el.textContent ?? "";
+      copyText(text).then(
+        () => {
+          btn.textContent = "Copied!";
+          setTimeout(() => (btn.textContent = "Copy"), 1500);
+        },
+        () => {
+          btn.textContent = "Failed";
+          setTimeout(() => (btn.textContent = "Copy"), 1500);
+        },
+      );
+    });
+    el.appendChild(btn);
+  });
+}
+
 /** Escape plain text for safe textContent-alternative HTML. */
 export function escapeHtml(text: string): string {
   return text

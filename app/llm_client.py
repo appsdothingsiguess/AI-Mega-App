@@ -77,8 +77,13 @@ class LLMClient:
             payload["max_tokens"] = max_tokens
         if thinking is not None:
             payload["reasoning"] = "on" if thinking else "off"
-
         if stream:
+            # OpenAI-compatible servers (llama.cpp included) omit `usage`
+            # from streamed responses unless this is asked for explicitly.
+            # Without it every streamed turn reports usage=null and the
+            # Debug view has no real token counts (PLAN.md §4.16 forbids
+            # client-side estimates), so it is always on.
+            payload["stream_options"] = {"include_usage": True}
             async for delta in self._chat_stream(payload):
                 yield delta
         else:
@@ -104,6 +109,7 @@ class LLMClient:
                 tool_calls=_parse_full_tool_calls(message.get("tool_calls")),
                 finish_reason=choice.get("finish_reason"),
                 usage=_parse_usage(body.get("usage")),
+                timings=body.get("timings"),
             )
         except (KeyError, IndexError, TypeError, ValueError) as exc:
             raise LLMError("stream_error", f"malformed chat response: {exc}") from exc
@@ -232,8 +238,23 @@ def _parse_stream_chunk(chunk: dict) -> ChatDelta | None:
             ]
         finish_reason = choice.get("finish_reason")
     usage = _parse_usage(chunk.get("usage"))
-    if content is None and tool_calls is None and finish_reason is None and usage is None:
+    # llama.cpp attaches `timings` to the same final chunk as `usage`
+    # (stream_options.include_usage). It is the only source of real tok/s.
+    timings = chunk.get("timings")
+    if not isinstance(timings, dict):
+        timings = None
+    if (
+        content is None
+        and tool_calls is None
+        and finish_reason is None
+        and usage is None
+        and timings is None
+    ):
         return None
     return ChatDelta(
-        content=content, tool_calls=tool_calls, finish_reason=finish_reason, usage=usage
+        content=content,
+        tool_calls=tool_calls,
+        finish_reason=finish_reason,
+        usage=usage,
+        timings=timings,
     )

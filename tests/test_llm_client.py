@@ -183,3 +183,46 @@ async def test_models_list():
         assert names == ["chat-default", "coder", "dispatcher"]
     finally:
         await client.close()
+
+
+async def test_streaming_requests_usage_from_the_server():
+    """OpenAI-compatible servers omit `usage` from streams unless asked.
+    Without stream_options every live turn reported usage=null and the Debug
+    view had no real token counts (PLAN.md §4.16 bans client estimates)."""
+    fake = FakeLlamaSwap()
+    fake.script_chat(content_chunks=["ok"])
+    client = make_client(fake)
+    try:
+        await collect(client)
+        assert fake.chat_requests[0]["stream_options"] == {"include_usage": True}
+    finally:
+        await client.close()
+
+
+async def test_non_stream_request_omits_stream_options():
+    fake = FakeLlamaSwap()
+    fake.script_chat(content_chunks=["ok"])
+    client = make_client(fake)
+    try:
+        await collect(client, stream=False)
+        assert "stream_options" not in fake.chat_requests[0]
+    finally:
+        await client.close()
+
+
+async def test_llama_cpp_timings_reach_the_caller():
+    """`timings` (tok/s) rides the same final chunk as `usage` — it is the
+    only server-side source for the Debug view's tok/s readout."""
+    fake = FakeLlamaSwap()
+    fake.script_chat(
+        content_chunks=["ok"],
+        usage={"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+        timings={"predicted_per_second": 31.5},
+    )
+    client = make_client(fake)
+    try:
+        deltas = await collect(client)
+        timings = [d.timings for d in deltas if d.timings is not None]
+        assert timings == [{"predicted_per_second": 31.5}]
+    finally:
+        await client.close()

@@ -13,7 +13,12 @@ Routing NEVER raises into the chat path — every exception is caught and the
 fallback model is returned.
 
 Public interface (frozen — settings-api and eval import exactly this):
-    async def route(chat, text, attachments, *, llm_client, config, trace_id) -> RouteResult
+    async def route(chat, text, attachments, *, llm_client, config, trace_id,
+                    details) -> RouteResult
+
+`details` is an optional out-dict for callers that own their own route span
+(the chat orchestrator); it receives the layer/fallback_reason/classifier
+prompt fields that RouteResult's frozen shape has no room for.
 
 `chat` is duck-typed: accepts a sqlite3.Row (dict-like), a plain dict, or
 any object with a .model_override attribute.
@@ -77,6 +82,7 @@ async def route(
     llm_client: LLMClient | None = None,
     config: Config | None = None,
     trace_id: str | None = None,
+    details: dict[str, Any] | None = None,
 ) -> RouteResult:
     """Resolve model for one turn through three strictly ordered layers.
 
@@ -84,6 +90,15 @@ async def route(
     error; never raises.  If trace_id is provided, emits one route span
     (stage="route") with source, intent, model, confidence, latency_ms, and
     (when applicable) fallback_reason.
+
+    `details`, when given, is filled in-place with the same *why* fields the
+    span would carry (`layer`, `fallback_reason`, and the classifier's own
+    `prompt`/`raw_response`/`classifier_error`).  RouteResult's shape is
+    frozen (PLAN.md §4.3) and carries the decision only, so callers that own
+    their own route span — the chat orchestrator does, which is why it passes
+    trace_id=None to avoid double-emitting the stage — need this to record
+    *why* a turn routed the way it did.  Without it a classifier timeout is
+    indistinguishable in the Debug view from a confident `chat` answer.
     """
     cfg = config or get_config()
     started = time.monotonic()
@@ -112,6 +127,9 @@ async def route(
             latency_ms=result.latency_ms,
             **extra,
         )
+
+    if details is not None:
+        details.update(extra)
 
     return result
 
@@ -163,19 +181,27 @@ async def _route_inner(
 
     if llm_client is None:
         logger.warning("router: no llm_client for classifier, using fallback")
-        return _fallback_result(fallback_model, elapsed(), "error")
+        return _fallback_result(fallback_model, elapsed(), "no_llm_client")
 
     clf_cfg = cfg.routing.classifier
-    clf_result = await _clf.classify(text, llm_client=llm_client, cfg=clf_cfg)
+    # What the classifier was sent and returned, for the route span.
+    clf_details: dict[str, Any] = {}
+    clf_result = await _clf.classify(
+        text, llm_client=llm_client, cfg=clf_cfg, details=clf_details
+    )
 
     if clf_result is None:
-        return _fallback_result(fallback_model, elapsed(), "timeout")
+        # Distinguish the failure modes the classifier recorded — a 2s
+        # timeout and a malformed response both used to read as "timeout".
+        error = str(clf_details.get("classifier_error", ""))
+        reason = "timeout" if error.startswith("timeout") else "classifier_failed"
+        return _fallback_result(fallback_model, elapsed(), reason, clf_details)
 
     cls, conf = clf_result
 
     if cls not in _VALID_CLASSES:
         logger.warning("router: classifier returned unknown class %r", cls)
-        return _fallback_result(fallback_model, elapsed(), "timeout")
+        return _fallback_result(fallback_model, elapsed(), "invalid_class", clf_details)
 
     if conf < clf_cfg.confidence_threshold:
         # Degrade to fallback but preserve the actual confidence value and class
@@ -187,7 +213,11 @@ async def _route_inner(
                 latency_ms=elapsed(),
                 confidence=conf,
             ),
-            {"layer": "classifier", "fallback_reason": "low_confidence"},
+            {
+                "layer": "classifier",
+                "fallback_reason": "low_confidence",
+                **clf_details,
+            },
         )
 
     model = _resolve_model(cls, cfg)
@@ -199,12 +229,15 @@ async def _route_inner(
             latency_ms=elapsed(),
             confidence=conf,
         ),
-        {"layer": "classifier"},
+        {"layer": "classifier", **clf_details},
     )
 
 
 def _fallback_result(
-    fallback_model: str, latency_ms: float, reason: str
+    fallback_model: str,
+    latency_ms: float,
+    reason: str,
+    clf_details: dict[str, Any] | None = None,
 ) -> tuple[RouteResult, dict[str, Any]]:
     return (
         RouteResult(
@@ -214,5 +247,5 @@ def _fallback_result(
             latency_ms=latency_ms,
             confidence=None,
         ),
-        {"layer": "classifier", "fallback_reason": reason},
+        {"layer": "classifier", "fallback_reason": reason, **(clf_details or {})},
     )

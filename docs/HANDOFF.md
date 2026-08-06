@@ -4,7 +4,200 @@ Working notes for whichever Claude Code session picks this up next.
 Not a planning doc, not user-facing — just context that isn't obvious
 from the code alone. Delete or trim entries once they're stale.
 
-## Where things stand (2026-08-02, later same day — CRITICAL ROUTER BUG)
+## Where things stand (2026-08-05 — live UI bug sweep, NOT YET FIXED)
+
+User ran a live test pass against the running app on `ailab` and reported
+10 issues in one batch. This session investigated the code for each one
+to classify it before any fixes land — **nothing below is fixed yet**,
+this is triage only. Ordered roughly by severity/confidence.
+
+### 1. Classifier fallback: `chat — fallback: timeout` — CONFIRMED, needs live repro
+`routing.classifier.timeout_s` is `6.0` (`config.yaml`), `classifier` is
+`resident:true` (`ttl: 0` in the generated `llama-swap.yaml`), so it
+should already be loaded and answering in ~0.9-1.1s warm per the docs'
+own numbers (`app/router/classifier.py` docstring). A hard 6s timeout
+firing on a resident model suggests either: the classifier process
+crashed/isn't actually up (check `curl :8080/health`, check
+`llama-swap`'s own process list, not just the config file), CPU
+contention from a concurrent `utility` job (both are CPU-resident and
+share the same CPU budget — a summary job mid-flight could starve the
+classifier), or general box load. **Next step: reproduce live and check
+`journalctl`/llama-swap logs for the classifier process at the moment of
+a timeout**, not a code fix — nothing in `classifier.py` looks wrong on
+read-through.
+
+### 2. GPU inventory spam in Debug — CONFIRMED BUG
+`web/src/views/debug.ts:367` polls `/api/gpu/inventory` every 5s
+(`gpuTimer = setInterval(refreshTelemetry, 5000)`) while the Debug view
+is mounted, and `app/gpu/api.py:71`'s `get_inventory()` calls
+`new_trace()` + a `gpu_inventory` span **on every single poll**. Every
+5s the Debug view is open, a brand-new trace gets created and pushed to
+the top of the traces list — this is why it looks like "a loop... new
+entries every few seconds." Fix: telemetry polling shouldn't mint a new
+trace per call; either stop tracing routine inventory polls entirely, or
+reuse one trace_id for the polling session instead of `new_trace()` each
+time.
+
+### 3. "Chat-default reloading" every message — LIKELY NOT A BUG, is `gpu0-main` swap-group behavior
+GPU0 runs `chat-default`/`coder`/`coder-small`/`vision` in one
+`swap: true` group (`llama-swap.yaml`) because the 3090 can't hold two
+~24GB big models at once — **only one of those four can be resident on
+GPU0 at a time by design** (`PLAN.md` §4.1, Config B). If the user
+alternates between a chat message and a code message, GPU0 swaps
+chat-default out and coder in, then back — that's real VRAM-constrained
+swapping, not a bug, and "check which model is loaded, skip reload"
+isn't possible for that group without more VRAM. **If this is instead
+reproducing on *consecutive* plain-chat messages with no coder/vision
+message between them**, that would be a real bug — needs a live repro
+with the exact message sequence, because nothing in `orchestrator.py`
+forces a reload of an already-resident model.
+
+### 4. Copy-to-clipboard button visible but doesn't copy — CONFIRMED REGRESSION (I introduced this)
+`navigator.clipboard.writeText()` (`web/src/markdown.ts`, added this
+session) requires a **secure context** — HTTPS or `localhost`. The app
+is served over plain HTTP at `http://192.168.0.89:8000` (LAN IP, not
+`localhost`), so `navigator.clipboard` is `undefined` there and the
+button's click handler throws before `writeText` ever resolves/rejects,
+silently doing nothing. **This needs a fallback path** (e.g.
+`document.execCommand("copy")` via a hidden textarea, or catching the
+`undefined` case explicitly and showing "unsupported" instead of hanging
+silently). Also "should be instant" — current 1.5s "Copied!" revert
+delay is probably fine, but the real complaint is likely just "nothing
+visibly happens," which is the secure-context failure, not the delay.
+
+### 5. Navigating away mid-stream and back loses the response — CONFIRMED GAP
+`chat.ts`'s `unmount()` calls `abort?.abort()`, killing the in-flight SSE
+connection. The assistant's streamed content only gets persisted to
+SQLite in `orchestrator.py`'s `db: persist_assistant_message` span,
+which runs **after** the stream completes normally — an aborted stream
+never reaches it. So navigating away mid-generation and back reloads
+history from the DB, which never got the partial (or even complete, if
+the abort raced the final chunk) answer. This is an architecture gap,
+not a one-line fix: either persist partial content on abort, or make
+generation resumable/backgrounded independent of the view's lifecycle
+(the latter matches how the title/summary background jobs already work
+— worth reusing that pattern).
+
+### 6. `reasoner`/`reasoner-alt` → 404 "no router for requested model" — CONFIRMED BUG, root cause found
+`PLAN.md` §4.1 / `swapgen.py`'s own docstring say `reasoner` is
+"*same blob as chat-default*... enabled at the request layer, not a
+separate swap entry — routing chat→reasoner costs zero load time."
+`swapgen.py::_select_entries` correctly dedupes `reasoner` out of the
+generated `llama-swap.yaml` (verified live — `reasoner` has no entry in
+`/home/john/llm-stack/serving/llama-swap/config.yaml`). **But nothing
+resolves the request-time model name.** `orchestrator.py:213`
+(`resolved_model = result.model`) passes the literal string `"reasoner"`
+straight to `llm_client.chat(model=resolved_model, ...)`
+(`orchestrator.py:241`), and that goes straight to llama-swap, which has
+no `reasoner` key → 404. The `thinking=model_entry.thinking` flag *is*
+correctly threaded through separately, but the model name itself is
+never translated to `chat-default`. **This is the actual fix needed:**
+when `resolved_model`'s `ModelEntry.resident` collapsed it into another
+canonical entry during swapgen, the orchestrator (or router) needs to
+send the *canonical swap-slot name* to llama-swap while still using the
+original entry's `thinking`/`max_tokens`/etc. Same root cause explains
+`reasoner-alt`, though that one is additionally `enabled: false` in
+`config.yaml` — it wouldn't work even with the alias fix until re-enabled.
+
+### 7. Rolling summaries "don't seem to happen" — IMPLEMENTED SERVER-SIDE, NEVER SURFACED IN UI
+`app/background/summaries.py` is real and wired: `maybe_enqueue_summary`
+fires every `cfg.background.summary_every_n_turns` user turns, writes to
+`chats.summary` in SQLite. **Confirmed: zero references to it anywhere
+in `web/src/**`** — nothing fetches or displays `chats.summary`. This is
+exactly the "built but not injected" failure mode `CLAUDE.md`/`PLAN.md`
+call out as a rejected-PR condition — the backend half shipped without
+the frontend half. Needs: an API surface for the summary (if `/api/chats`
+doesn't already return it — check) and a UI spot to show it (Debug span
+already exists at `summary` stage, so it's visible *there*, just not in
+the chat view itself).
+
+### 8. Auto-scroll fights manual scroll-up during streaming — CONFIRMED BUG
+`chat.ts` calls `renderMessages(true)` on nearly every SSE token during
+streaming (lines ~197-227), and `scroll=true` unconditionally does
+`sc.scrollTop = sc.scrollHeight` every time. So scrolling up mid-stream
+gets yanked back to the bottom on the very next token, which reads as
+"can't scroll down" (you're fighting a forced re-snap every ~50-100ms
+during generation). Standard fix: only force-scroll if the user was
+already within some threshold (e.g. `scrollHeight - scrollTop -
+clientHeight < 80`) of the bottom *before* the update — i.e. "stick to
+bottom" only while already at the bottom, never yank someone back who
+scrolled away on purpose.
+
+### 9. No stop/interrupt button for in-flight generation — CONFIRMED MISSING FEATURE
+`chat.ts` already has an `AbortController` (`abort`) wired to cancel the
+SSE stream on unmount, but there's no UI control that calls
+`abort.abort()` while staying on the same view — `composer.ts`'s layout
+only has a `send-btn`, no stop/cancel button. The plumbing (abort
+controller, SSE cancellation) already exists; this is a real UI gap, not
+a backend one. Wiring a stop button through the existing `abort` would
+also need to (a) not lose the partial content already streamed (see #5 —
+same underlying persist-on-abort gap) and (b) flip the composer back to
+its idle state.
+
+### 10. Model appears to not see full session history — LIKELY MODEL BEHAVIOR, PLUMBING VERIFIED CORRECT
+`app/chat/history.py::build_llm_messages` returns **every** prior
+message in the chat as OpenAI-format turns, called fresh before every
+`llm_client.chat()` call (`orchestrator.py:239`), and the span already
+records `message_count`/`messages` for the Debug view to show — this
+matches what the user says they saw in Debug. The wiring looks correct
+on read-through. Two real considerations, neither of which is a "send
+fewer messages" bug: (a) **no system prompt is ever prepended** —
+`build_llm_messages` only returns bare user/assistant turns, no framing
+that tells the model it's a persistent app receiving full history each
+call, which is exactly the kind of ambiguity a raw local model can
+misinterpret and answer generically about "session storage." (b) small/
+local models (this roster tops out at 35B-A3B) are meaningfully worse at
+this kind of self-referential meta-question than frontier hosted models
+even with correct context — this may just be a model-quality ceiling, not
+a bug. **Recommend verifying via the Debug prompt tab on the exact turn
+that produced this answer** (need `debug.store_prompts: true` per the
+span's own doc comment) before assuming there's a plumbing bug — the
+code path itself looks right.
+
+### Also flagged, not yet triaged in depth (verify against `PLAN.md`/`docs/FEATURES.md` before treating as bugs)
+- **Debug doesn't show if a model is ejected/evicted from a swap slot.**
+  No code found that surfaces llama-swap eviction events at all — likely
+  not yet implemented (`docs/FEATURES.md` doesn't call out an eviction
+  event either), flag as a feature request, not a regression.
+- **Tokens/sec + response time next to the model name in chat (LM
+  Studio-style).** `PLAN.md` §4.16 says the Debug window is supposed to
+  show real tok/s from llama.cpp's `timings`, and `debug.ts:253` already
+  renders `predicted_per_second` **inside the Debug span detail view** —
+  so the data is captured and shown *somewhere*, just not inline in the
+  chat bubble next to the model name as requested. That inline placement
+  is a real, reasonable feature request, not a bug — needs `msg.usage`/
+  `msg.timings` threaded from the `done` payload into `ChatMsg` and
+  rendered in the `msg-meta` row (`chat.ts` ~line 83-104 already has the
+  right spot for it, just needs the fields).
+- **Debug doesn't show model "thinking" in the stream.** Confirmed at the
+  type level: `app/types.py::ChatDelta` has no `reasoning_content` field
+  at all, and nothing in `llm_client.py` reads `reasoning_content` off
+  llama.cpp's stream deltas. `PLAN.md` §4.2 says thinking tokens "arrive
+  inside `token` and are tagged in the `done` payload" — that description
+  doesn't match what's actually implemented; reasoning content isn't
+  captured anywhere server-side yet. This is a real gap against the
+  written contract, not a UI-only fix — needs `ChatDelta.reasoning_content`,
+  threading through `llm_client.chat()`, and a Debug-view field to render
+  it, in that order.
+
+### Not yet verified live (deploy status unclear)
+- **The 2026-08-02 background-shutdown-hang fix (`_STOP_DRAIN_TIMEOUT_S`,
+  bug #4 in the entry below) — user reports the hang is STILL happening.**
+  The service was restarted 2026-08-05 per this session's earlier work, so
+  the fix should be live, but if the hang is still reproducing, don't
+  assume the original diagnosis (uncapped background-job drain) was
+  complete — re-check `app/background/__init__.py::stop()` end-to-end
+  against a live repro rather than assuming the prior fix covers it. Get
+  the exact symptom (how long, what's it doing, does it eventually
+  recover or need a kill -9) before re-diagnosing.
+
+**Nothing in this entry has been fixed yet — this is triage only, next
+session should work through these roughly in the order listed (6 and 4
+are the sharpest, highest-confidence root causes; 1 and 3 need live
+repro before code changes; the "also flagged" section is scoping work,
+not urgent bugs).**
+
+## Where things stood (2026-08-02, later same day — CRITICAL ROUTER BUG)
 
 **The Phase-2 router classifier has never actually run on live chat
 traffic, since it was first wired.** `app/chat/orchestrator.py` called
@@ -61,6 +254,13 @@ tracking whether the current canonical is already resident and only
 letting a later entry displace it if it isn't. Regression test:
 `test_both_resident_ties_keep_first_in_list` in `tests/test_swapgen.py`.
 
+**Note (2026-08-05): this fixed a *different* 404 than issue #6 above.**
+That earlier bug was about `settings.local.yaml` drift causing
+`chat-default` itself to disappear from the swap config. Issue #6 above
+is a separate, still-unfixed bug: `reasoner`/`reasoner-alt` are *supposed*
+to be deduped away (that's correct, by design) but nothing translates
+the request-time model name to the surviving canonical entry.
+
 **Third: `PUT /api/settings/routing` 422'd on `classifier`.**
 `RoutingConfig` (`app/config.py`) has `rules`, `attachments`, `intents`,
 **and** `classifier`, but `RoutingPatch` (`app/settings/api.py`) only
@@ -81,7 +281,8 @@ block for tens of seconds with systemd's default 90s `TimeoutStopSec` as
 the only backstop. Added a 15s bounded wait
 (`_STOP_DRAIN_TIMEOUT_S`) with `asyncio.wait_for` + a warning log +
 `BackgroundQueue.cancel()` fallback, so shutdown degrades visibly instead
-of silently stalling.
+of silently stalling. **User reports this is STILL reproducing as of
+2026-08-05 — see "Not yet verified live" above, re-open this.**
 
 **Fifth (not a bug, but confusing UX, worth documenting):**
 `RoutingRule.keywords` rejects single-word entries by design (`app/config.py`
@@ -178,6 +379,9 @@ before doing either.
   `app/**` (Python) changes require a service restart.
 - The Windows laptop is a pure browser client hitting
   `http://192.168.0.89:8000` — nothing to `git pull` there, ever.
+  **This also means `navigator.clipboard` (secure-context-only) fails
+  there — see issue #4 above, this bit the copy-button feature the same
+  day it shipped.**
 
 ## Two real bugs found + fixed this session (patterns worth remembering)
 

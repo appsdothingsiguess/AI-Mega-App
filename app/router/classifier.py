@@ -26,6 +26,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import time
 
 from app.config import RoutingClassifierConfig
 from app.llm_client import LLMClient, LLMError
@@ -122,12 +123,19 @@ async def classify(
     *,
     llm_client: LLMClient,
     cfg: RoutingClassifierConfig,
+    details: dict | None = None,
 ) -> tuple[str, float] | None:
     """Call the classifier model and return (class, confidence) or None.
 
     None means any failure: timeout, HTTP error, malformed response, missing
     content.  The caller (router.py) applies the fallback; this function
     never raises into the call path.
+
+    `details`, when given, is filled in-place with what the classifier was
+    actually sent and got back (`prompt`, `raw_response`, `classifier_model`,
+    `classifier_ms`, and `classifier_error` on failure) so the route span can
+    show it in the Debug view.  `prompt`/`raw_response` are dropped by
+    app/debug/trace.py unless `debug.store_prompts` is true.
 
     thinking=False sends an explicit per-request reasoning=off to llama-swap,
     supplementing the server's --reasoning off flag.  Both are required:
@@ -137,20 +145,48 @@ async def classify(
     # JSON braces that confuse str.format()'s field parser.
     prompt = CLASSIFIER_PROMPT.replace("{message}", text)
     messages = [{"role": "user", "content": prompt}]
-    try:
-        delta = await asyncio.wait_for(
-            _single_completion(llm_client, cfg.model, messages),
-            timeout=cfg.timeout_s,
+
+    def record(**fields: object) -> None:
+        if details is not None:
+            details.update(fields)
+
+    started = time.monotonic()
+    record(prompt=prompt, classifier_model=cfg.model)
+    last_error: LLMError | None = None
+    for attempt in range(2):
+        try:
+            delta = await asyncio.wait_for(
+                _single_completion(llm_client, cfg.model, messages),
+                timeout=cfg.timeout_s,
+            )
+            last_error = None
+            break
+        except (TimeoutError, asyncio.TimeoutError):
+            logger.warning("router.classifier: timeout after %.1fs (attempt %d)", cfg.timeout_s, attempt + 1)
+            record(
+                classifier_ms=(time.monotonic() - started) * 1000,
+                classifier_error=f"timeout after {cfg.timeout_s}s",
+            )
+            return None
+        except LLMError as exc:
+            last_error = exc
+            if attempt == 0 and "502" in exc.detail:
+                logger.info("router.classifier: 502 on attempt 1, retrying")
+                continue
+            break
+    if last_error is not None:
+        logger.warning("router.classifier: llm error %s", last_error)
+        record(
+            classifier_ms=(time.monotonic() - started) * 1000,
+            classifier_error=f"{last_error.kind}: {last_error.detail}",
         )
-    except (TimeoutError, asyncio.TimeoutError):
-        logger.warning("router.classifier: timeout after %.1fs", cfg.timeout_s)
         return None
-    except LLMError as exc:
-        logger.warning("router.classifier: llm error %s", exc)
-        return None
+
+    record(classifier_ms=(time.monotonic() - started) * 1000, raw_response=delta)
 
     if not delta:
         logger.warning("router.classifier: empty response content")
+        record(classifier_error="empty response content")
         return None
 
     try:
@@ -160,6 +196,7 @@ async def classify(
         return cls, conf
     except (json.JSONDecodeError, KeyError, TypeError, ValueError) as exc:
         logger.warning("router.classifier: parse error %s (content=%r)", exc, delta)
+        record(classifier_error=f"parse error: {exc}")
         return None
 
 

@@ -1,7 +1,7 @@
 /** Chat view: history, SSE stream, picker from /api/models, route/title. */
 
 import { createChat, getMessages, listChats, streamMessage } from "../api.js";
-import { escapeHtml, renderMarkdown } from "../markdown.js";
+import { addCopyButtons, escapeHtml, renderMarkdown } from "../markdown.js";
 import { navigate, replaceHash, type Route, type ViewHandle } from "../router.js";
 import { get, set } from "../store.js";
 import type { DoneEvent } from "../types.js";
@@ -36,6 +36,13 @@ export function createChatView(): ViewHandle {
     route = null;
   };
 
+  function syncStopBtn(): void {
+    const sendBtn = root?.querySelector("#send-btn") as HTMLElement | null;
+    const stopBtn = root?.querySelector("#stop-btn") as HTMLElement | null;
+    if (sendBtn) sendBtn.hidden = streaming;
+    if (stopBtn) stopBtn.hidden = !streaming;
+  }
+
   function syncPicker(): void {
     const menu = root?.querySelector(".model-menu");
     if (!menu) return;
@@ -55,10 +62,33 @@ export function createChatView(): ViewHandle {
     if (el) el.textContent = text;
   }
 
+  function renderSummaryBanner(): void {
+    const existing = root?.querySelector(".summary-banner");
+    if (existing) existing.remove();
+    const chat = get().chats.find((c) => c.id === route?.chatId);
+    if (!chat?.summary) return;
+    const wrap = root?.querySelector(".messages");
+    if (!wrap) return;
+    const banner = document.createElement("details");
+    banner.className = "summary-banner";
+    const s = document.createElement("summary");
+    s.textContent = "Conversation summary";
+    banner.appendChild(s);
+    const body = document.createElement("p");
+    body.textContent = chat.summary;
+    banner.appendChild(body);
+    wrap.prepend(banner);
+  }
+
   function renderMessages(scroll: boolean): void {
     const box = root?.querySelector(".messages-inner");
     if (!box) return;
+    const sc = root?.querySelector(".messages") as HTMLElement | null;
+    const wasNearBottom = sc
+      ? sc.scrollHeight - sc.scrollTop - sc.clientHeight < 80
+      : true;
     box.replaceChildren();
+    renderSummaryBanner();
     if (!messages.length && !streaming) {
       const empty = document.createElement("div");
       empty.className = "empty-state";
@@ -72,8 +102,10 @@ export function createChatView(): ViewHandle {
       row.className = `msg ${m.role === "user" ? "user" : "assistant"}`;
       const bubble = document.createElement("div");
       bubble.className = "msg-bubble";
-      if (m.role === "assistant") bubble.innerHTML = renderMarkdown(m.content);
-      else bubble.textContent = m.content;
+      if (m.role === "assistant") {
+        bubble.innerHTML = renderMarkdown(m.content);
+        addCopyButtons(bubble);
+      } else bubble.textContent = m.content;
       if (streaming && m === messages[messages.length - 1] && m.role === "assistant") {
         const cur = document.createElement("span");
         cur.className = "stream-cursor";
@@ -116,9 +148,8 @@ export function createChatView(): ViewHandle {
       b.textContent = bannerError;
       box.appendChild(b);
     }
-    if (scroll) {
-      const sc = root?.querySelector(".messages");
-      if (sc) sc.scrollTop = sc.scrollHeight;
+    if (scroll && wasNearBottom && sc) {
+      sc.scrollTop = sc.scrollHeight;
     }
   }
 
@@ -176,6 +207,7 @@ export function createChatView(): ViewHandle {
     };
     messages.push(assistant);
     streaming = true;
+    syncStopBtn();
     renderMessages(true);
 
     abort = new AbortController();
@@ -221,6 +253,7 @@ export function createChatView(): ViewHandle {
     );
     streaming = false;
     loadingModel = null;
+    syncStopBtn();
     if (result === "lost" && !bannerError) bannerError = "connection lost";
     renderMessages(true);
     try { set({ chats: await listChats() }); } catch { /* ignore */ }
@@ -236,6 +269,14 @@ export function createChatView(): ViewHandle {
       syncPicker();
     });
     el.querySelector("#send-btn")?.addEventListener("click", () => void send());
+    el.querySelector("#stop-btn")?.addEventListener("click", () => {
+      abort?.abort();
+      abort = null;
+      streaming = false;
+      loadingModel = null;
+      syncStopBtn();
+      renderMessages(false);
+    });
     const ta = el.querySelector("textarea") as HTMLTextAreaElement;
     ta.addEventListener("keydown", (e) => {
       if (e.key === "Enter" && !e.shiftKey) {

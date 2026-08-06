@@ -170,4 +170,20 @@
   opacity: 0.4;
   cursor: not-allowed;
 }
+
+.stop-btn {
+  width: 32px;
+  height: 32px;
+  border-radius: 8px;
+  border: none;
+  background: var(--danger, #e53935);
+  color: #fff;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
 
+.stop-btn:hover {
+  opacity: 0.85;
+}

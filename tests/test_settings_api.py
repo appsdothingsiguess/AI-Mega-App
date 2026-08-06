@@ -168,8 +168,11 @@ def test_orchestrator_uses_router(
 ) -> None:
     _patch_config_paths(monkeypatch, tmp_path)
 
+    # Mirror route()'s real signature and swallow anything added to it:
+    # a stub narrower than the callee masked a missing-argument bug for a
+    # whole phase once (docs/HANDOFF.md, 2026-08-02).
     async def fake_route(
-        chat, text: str, attachments: list, *, llm_client=None, config=None, trace_id=None
+        chat, text: str, attachments: list, **kwargs
     ) -> RouteResult:
         return RouteResult(
             model="chat-default",

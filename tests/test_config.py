@@ -218,7 +218,7 @@ def test_repo_config_routing_intents(tmp_path: Path) -> None:
 def test_repo_config_routing_classifier(tmp_path: Path) -> None:
     cfg = load_config(config_mod.CONFIG_PATH)
     assert cfg.routing.classifier.model == "classifier"
-    assert cfg.routing.classifier.timeout_s == 2.0
+    assert cfg.routing.classifier.timeout_s == 6.0
     assert cfg.routing.classifier.confidence_threshold == 0.5
     assert cfg.routing.classifier.fallback_model == "chat-default"
 
@@ -237,7 +237,7 @@ def test_routing_defaults_when_absent(tmp_path: Path) -> None:
     assert cfg.routing.rules == []
     assert cfg.routing.attachments == {}
     assert cfg.routing.intents.code_task == "coder"
-    assert cfg.routing.classifier.timeout_s == 2.0
+    assert cfg.routing.classifier.timeout_s == 6.0
 
 
 def test_routing_rule_keyword_must_be_multi_word() -> None:

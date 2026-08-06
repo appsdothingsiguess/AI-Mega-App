@@ -1,6 +1,6 @@
 /** Chat view: history, SSE stream, picker from /api/models, route/title. */
 import { createChat, getMessages, listChats, streamMessage } from "../api.js";
-import { escapeHtml, renderMarkdown } from "../markdown.js";
+import { addCopyButtons, escapeHtml, renderMarkdown } from "../markdown.js";
 import { navigate, replaceHash } from "../router.js";
 import { get, set } from "../store.js";
 import { applyModelPick, applyTitleToStore, chatLayoutHtml, refreshHealthModels, renderPickerMenu, routeHoverTitle, selectedModelLabel, } from "./composer.js";
@@ -23,6 +23,14 @@ export function createChatView() {
         root = null;
         route = null;
     };
+    function syncStopBtn() {
+        const sendBtn = root?.querySelector("#send-btn");
+        const stopBtn = root?.querySelector("#stop-btn");
+        if (sendBtn)
+            sendBtn.hidden = streaming;
+        if (stopBtn)
+            stopBtn.hidden = !streaming;
+    }
     function syncPicker() {
         const menu = root?.querySelector(".model-menu");
         if (!menu)
@@ -42,11 +50,36 @@ export function createChatView() {
         if (el)
             el.textContent = text;
     }
+    function renderSummaryBanner() {
+        const existing = root?.querySelector(".summary-banner");
+        if (existing)
+            existing.remove();
+        const chat = get().chats.find((c) => c.id === route?.chatId);
+        if (!chat?.summary)
+            return;
+        const wrap = root?.querySelector(".messages");
+        if (!wrap)
+            return;
+        const banner = document.createElement("details");
+        banner.className = "summary-banner";
+        const s = document.createElement("summary");
+        s.textContent = "Conversation summary";
+        banner.appendChild(s);
+        const body = document.createElement("p");
+        body.textContent = chat.summary;
+        banner.appendChild(body);
+        wrap.prepend(banner);
+    }
     function renderMessages(scroll) {
         const box = root?.querySelector(".messages-inner");
         if (!box)
             return;
+        const sc = root?.querySelector(".messages");
+        const wasNearBottom = sc
+            ? sc.scrollHeight - sc.scrollTop - sc.clientHeight < 80
+            : true;
         box.replaceChildren();
+        renderSummaryBanner();
         if (!messages.length && !streaming) {
             const empty = document.createElement("div");
             empty.className = "empty-state";
@@ -60,8 +93,10 @@ export function createChatView() {
             row.className = `msg ${m.role === "user" ? "user" : "assistant"}`;
             const bubble = document.createElement("div");
             bubble.className = "msg-bubble";
-            if (m.role === "assistant")
+            if (m.role === "assistant") {
                 bubble.innerHTML = renderMarkdown(m.content);
+                addCopyButtons(bubble);
+            }
             else
                 bubble.textContent = m.content;
             if (streaming && m === messages[messages.length - 1] && m.role === "assistant") {
@@ -107,10 +142,8 @@ export function createChatView() {
             b.textContent = bannerError;
             box.appendChild(b);
         }
-        if (scroll) {
-            const sc = root?.querySelector(".messages");
-            if (sc)
-                sc.scrollTop = sc.scrollHeight;
+        if (scroll && wasNearBottom && sc) {
+            sc.scrollTop = sc.scrollHeight;
         }
     }
     async function loadHistory(chatId) {
@@ -172,6 +205,7 @@ export function createChatView() {
         };
         messages.push(assistant);
         streaming = true;
+        syncStopBtn();
         renderMessages(true);
         abort = new AbortController();
         const result = await streamMessage(chatId, { content: text, model: get().modelOverride }, {
@@ -217,6 +251,7 @@ export function createChatView() {
         });
         streaming = false;
         loadingModel = null;
+        syncStopBtn();
         if (result === "lost" && !bannerError)
             bannerError = "connection lost";
         renderMessages(true);
@@ -235,6 +270,14 @@ export function createChatView() {
             syncPicker();
         });
         el.querySelector("#send-btn")?.addEventListener("click", () => void send());
+        el.querySelector("#stop-btn")?.addEventListener("click", () => {
+            abort?.abort();
+            abort = null;
+            streaming = false;
+            loadingModel = null;
+            syncStopBtn();
+            renderMessages(false);
+        });
         const ta = el.querySelector("textarea");
         ta.addEventListener("keydown", (e) => {
             if (e.key === "Enter" && !e.shiftKey) {

@@ -66,7 +66,9 @@ export async function setChatModel(
 export type GpuId = number | "cpu";
 
 export interface ModelSettingsBody {
-  gpu: GpuId; resident: boolean; ttl_s: number; enabled?: boolean;
+  // ttl_s null = "no TTL" (config's own default for swapped models). Sending
+  // 0 instead means "never unload" to llama-swap, which is a different thing.
+  gpu: GpuId; resident: boolean; ttl_s: number | null; enabled?: boolean;
 }
 export interface RoutingBody {
   rules?: { keywords: string[]; intent: string }[];

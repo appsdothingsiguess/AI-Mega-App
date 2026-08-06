@@ -51,8 +51,8 @@ class ScriptedChat:
         entry an "arg_chunks" list (list[str]) to split its arguments across
         several fragments sharing one index — `name`/`id` are sent only on
         the first fragment, matching real incremental tool-call streaming.
-    finish_reason, usage: attached to the final chunk (stream) or the
-        response body (non-stream).
+    finish_reason, usage, timings: attached to the final chunk (stream) or
+        the response body (non-stream).
     status_code: >=400 simulates an HTTP error from llama-swap.
     delay_s: sleep before responding at all (before headers/body) — pair
         with a short client timeout_s to exercise the timeout -> LLMError
@@ -63,6 +63,9 @@ class ScriptedChat:
     tool_calls: list[dict[str, Any]] = field(default_factory=list)
     finish_reason: str | None = "stop"
     usage: dict[str, int] | None = None
+    # llama.cpp's own `timings` block, attached alongside `usage` on the
+    # final chunk / response body — the only source of real tok/s.
+    timings: dict[str, Any] | None = None
     status_code: int = 200
     delay_s: float = 0.0
     error_body: str = "internal error"
@@ -167,6 +170,8 @@ def _full_chat_body(script: ScriptedChat) -> dict:
     }
     if script.usage:
         body["usage"] = script.usage
+    if script.timings:
+        body["timings"] = script.timings
     return body
 
 
@@ -196,6 +201,8 @@ async def _stream_chat(script: ScriptedChat) -> AsyncIterator[str]:
     }
     if script.usage:
         final_chunk["usage"] = script.usage
+    if script.timings:
+        final_chunk["timings"] = script.timings
     yield _sse(final_chunk)
     yield "data: [DONE]\n\n"
 

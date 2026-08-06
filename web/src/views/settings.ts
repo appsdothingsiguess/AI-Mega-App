@@ -46,7 +46,10 @@ function parseModels(settings: AppSettings, roster: { alias: string; class: stri
         class: String(o.class ?? ""),
         gpu: asGpu(o.gpu ?? o.device),
         resident: Boolean(o.resident),
-        ttl_s: Number(o.ttl_s ?? 0),
+        // null/absent stays null — coercing it to 0 silently told
+        // llama-swap "never unload this model" for every model the user
+        // ever touched in Settings (swapgen emits `ttl: 0` for ttl_s == 0).
+        ttl_s: o.ttl_s == null ? null : Number(o.ttl_s),
         enabled: o.enabled === undefined ? true : Boolean(o.enabled),
       };
     }).filter((m) => m.name);
@@ -56,7 +59,7 @@ function parseModels(settings: AppSettings, roster: { alias: string; class: stri
     class: m.class,
     gpu: asGpu(m.device),
     resident: m.resident,
-    ttl_s: 0,
+    ttl_s: null,
     enabled: true,
   }));
 }

@@ -28,6 +28,7 @@ export interface ChatSummary {
   id: string;
   title: string | null;
   updated_at: number;
+  summary?: string | null;
 }
 
 export interface Message {
