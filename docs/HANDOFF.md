@@ -4,6 +4,29 @@ Working notes for whichever Claude Code session picks this up next.
 Not a planning doc, not user-facing — just context that isn't obvious
 from the code alone. Delete or trim entries once they're stale.
 
+## TODO — model-picker shows "Auto" even when a chat has a persisted manual override
+
+User-reported live: Debug showed `route` span `source: "override", intent: "manual"`
+(chat locked to `coder-small`) for a chat whose composer UI still displayed
+"Auto (router)". Root cause (not yet fixed, just diagnosed):
+- `ChatSummaryOut` (`app/chat/api.py:34`) has no `model_override` field at
+  all — `GET /api/chats` never tells the frontend a chat has one.
+- `web/src/store.ts`'s `modelOverride` is pure client-side state
+  (`null` on init/every page load); nothing in `web/src/views/chat.ts`
+  (`loadHistory`, mount) ever hydrates it from the chat being opened.
+- So: pick a model manually → `POST .../model` persists `model_override`
+  on that chat row (`app/chat/history.py::set_model_override`, correctly
+  enforced server-side via router Layer 1, `app/router/router.py:152-163`)
+  → reload the page, switch chats, or restart the app → picker silently
+  resets to "Auto" while the backend keeps routing that chat through the
+  override. Not a state-loss-on-restart bug specifically — it's structural:
+  the override was never round-tripped to the client in the first place.
+- **Fix shape (not yet done):** add `model_override: str | None = None` to
+  `ChatSummaryOut` + populate it in `app/chat/history.py::list_chats`'s
+  SELECT; on chat open, `set({ modelOverride: chat.model_override })`
+  before/alongside `loadHistory`; update `selectedModelLabel()`'s caller
+  to re-render after that hydration.
+
 ## 2026-08-11 — session: warmup fix, title-gen fix, title span prompt/response — FIXED, live-verified
 
 Follow-up session after Wave 1 merge, working through open HANDOFF items live on `ailab`.

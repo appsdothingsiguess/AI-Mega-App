@@ -61,6 +61,10 @@ def clean_title(raw: str, max_words: int = 6) -> str:
     words = text.split()
     if len(words) > max_words:
         text = " ".join(words[:max_words])
+    # A word-count truncation can land right after a list separator (e.g.
+    # "...Interactive Art Generator,"), leaving a dangling trailing comma/
+    # colon/semicolon that reads as a cut-off sentence rather than a title.
+    text = re.sub(r"[.!?,:;]+$", "", text).strip()
     return text
 
 
