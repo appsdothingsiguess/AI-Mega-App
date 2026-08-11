@@ -13,8 +13,13 @@ import {
 
 const AUTO_LABEL = "Auto (router)";
 
-/** Client-only route from done.payload (types.ts is read-only). */
-export type ChatMsg = Message & { route?: NonNullable<DoneEvent["route"]> };
+/** Client-only route + timings from done.payload (types.ts is read-only). */
+export type ChatMsg = Message & {
+  route?: NonNullable<DoneEvent["route"]>;
+  elapsedMs?: number;
+  promptTokens?: number;
+  completionTokens?: number;
+};
 
 export function selectedModelLabel(): string {
   return get().modelOverride ?? AUTO_LABEL;

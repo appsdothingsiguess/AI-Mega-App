@@ -16,6 +16,20 @@ import {
   selectedModelLabel,
 } from "./composer.js";
 
+function formatElapsed(ms: number): string {
+  if (ms < 1000) return `${ms}ms`;
+  if (ms < 60_000) return `${(ms / 1000).toFixed(1)}s`;
+  const mins = Math.floor(ms / 60_000);
+  const secs = Math.round((ms % 60_000) / 1000);
+  return `${mins}m${secs}s`;
+}
+
+function formatTokens(n: number): string {
+  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
+  if (n >= 1000) return `${(n / 1000).toFixed(1)}k`;
+  return String(n);
+}
+
 export function createChatView(): ViewHandle {
   let root: HTMLElement | null = null;
   let route: Route | null = null;
@@ -32,8 +46,7 @@ export function createChatView(): ViewHandle {
   const unmount = () => {
     // Don't abort the SSE stream on unmount — let it complete in the background
     // so the user can navigate away and back without interrupting generation.
-    // The abort controller is only used for explicit stop (stop button) or
-    // page unload (handled by router.ts teardownRouter).
+    // The abort controller is only used for the explicit stop button.
     set({ activeChatStreaming: streaming });
     if (onDocClick) document.removeEventListener("click", onDocClick);
     onDocClick = null;
@@ -117,15 +130,21 @@ export function createChatView(): ViewHandle {
         bubble.appendChild(cur);
       }
       row.appendChild(bubble);
-      if (m.role === "assistant" && (m.model || m.traceId || m.tokensPerSecond)) {
+      if (m.role === "assistant" && (m.model || m.traceId || m.tokensPerSecond || m.elapsedMs != null || m.promptTokens != null || m.completionTokens != null)) {
         const meta = document.createElement("div");
         meta.className = "msg-meta";
         if (m.model) {
           const modelEl = document.createElement("span");
           let modelText = m.model;
-          if (m.tokensPerSecond) {
-            modelText += ` · ${m.tokensPerSecond} tok/s`;
+          const parts: string[] = [];
+          if (m.elapsedMs != null) parts.push(formatElapsed(m.elapsedMs));
+          if (m.tokensPerSecond) parts.push(`${m.tokensPerSecond} tok/s`);
+          if (m.promptTokens != null || m.completionTokens != null) {
+            const p = m.promptTokens != null ? formatTokens(m.promptTokens) : "?";
+            const c = m.completionTokens != null ? formatTokens(m.completionTokens) : "?";
+            parts.push(`${p}/${c} tok`);
           }
+          if (parts.length) modelText += ` · ${parts.join(" · ")}`;
           modelEl.textContent = modelText;
           const tip = routeHoverTitle(m.route, m.model);
           if (tip) modelEl.title = tip;
@@ -168,6 +187,19 @@ export function createChatView(): ViewHandle {
       const b = document.createElement("div");
       b.className = "banner error";
       b.textContent = bannerError;
+      const retry = document.createElement("button");
+      retry.type = "button";
+      retry.className = "banner-retry-btn";
+      retry.textContent = "Retry";
+      retry.addEventListener("click", () => {
+        const lastUser = [...messages].reverse().find((m) => m.role === "user");
+        if (lastUser) {
+          void regenerate(lastUser.content);
+        } else if (route?.chatId) {
+          void loadHistory(route.chatId);
+        }
+      });
+      b.appendChild(retry);
       box.appendChild(b);
     }
     if (scroll && sc) {
@@ -278,6 +310,9 @@ export function createChatView(): ViewHandle {
             assistant.id = d.message_id ?? assistant.id;
             assistant.model = d.model ?? assistant.model;
             assistant.traceId = d.trace_id;
+            assistant.elapsedMs = Date.now() - assistant.created_at;
+            assistant.promptTokens = d.usage?.prompt_tokens ?? undefined;
+            assistant.completionTokens = d.usage?.completion_tokens ?? undefined;
             if (d.route) assistant.route = d.route;
             if (d.timings?.predicted_per_second) {
               assistant.tokensPerSecond = Math.round(d.timings.predicted_per_second * 10) / 10;
@@ -344,6 +379,9 @@ export function createChatView(): ViewHandle {
             assistant.id = d.message_id ?? assistant.id;
             assistant.model = d.model ?? assistant.model;
             assistant.traceId = d.trace_id;
+            assistant.elapsedMs = Date.now() - assistant.created_at;
+            assistant.promptTokens = d.usage?.prompt_tokens ?? undefined;
+            assistant.completionTokens = d.usage?.completion_tokens ?? undefined;
             if (d.route) assistant.route = d.route;
             if (d.timings?.predicted_per_second) {
               assistant.tokensPerSecond = Math.round(d.timings.predicted_per_second * 10) / 10;
