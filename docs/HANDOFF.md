@@ -4,6 +4,59 @@ Working notes for whichever Claude Code session picks this up next.
 Not a planning doc, not user-facing — just context that isn't obvious
 from the code alone. Delete or trim entries once they're stale.
 
+## 2026-08-11 — bug: warmup not leaving resident models loaded after deploy
+
+**Reported live (post Wave-1 merge + real deploy). NOT FIXED.**
+
+Config regeneration is CORRECT (verified live): every `env:` pair now has
+`CUDA_DEVICE_ORDER=PCI_BUS_ID` beside `CUDA_VISIBLE_DEVICES`, `resident` group =
+`[dispatcher, utility, embed, classifier]`, `gpu0-main` = `[chat-default, coder,
+coder-small, vision]`. `/home/john/llm-stack/serving/llama-swap/config.yaml`
+matches `git` swapgen golden output. Services `active`.
+
+**Symptom:** after `POST /api/gpu/apply` + `sudo systemctl restart ai-mega-app`,
+`/v1/models` shows the CPU/GPU1 residents (dispatcher, utility, embed, classifier)
+UNLOADED, and they stay unloaded over time — only `chat-default` comes up loaded.
+Manually `curl`ing a `chat/completions` to `classifier` loads it immediately and
+subsequently shows `loaded`, so llama-swap + config + GPU pinning are healthy;
+the warmup loop is not doing its job.
+
+**Root-cause hypotheses (investigate next session):**
+1. **INFO logs invisible (confirmed).** No `logging.basicConfig`/`setLevel` anywhere
+   in `app/` — Python default WARNING level suppresses all `logger.info(...)`
+   output. So `warmup.py:60` "warm-up starting", `main.py:76` "warmup loop:
+   starting sweep", and `main.py:80` "sweep complete" never reach journalctl.
+   Old PID's `warm-up failed (...)` lines DID show because they're WARNING.
+   → Means the warmup loop's only observability (WS-B's logging fix) is dead in
+   production. Add logging config (INFO for `app.*`) or raise these to WARNING.
+   This alone doesn't explain residents staying unloaded, but it hides whether
+   the loop runs.
+2. **`post_apply` single-shot warmup races llama-swap reload (likely).**
+   `app/gpu/api.py:145` calls `warmup_resident_models(...)` immediately after the
+   health poll. llama-swap's `-watch-config` reload kills all llama-servers; at
+   that instant requests can fail with `{"error":"unspecific error: group is
+   shutting down"}` (seen at 19:41). It is a single pass, NOT a retry — so if it
+   fires mid-reload, residents stay cold with no recovery until the 300s sweep.
+3. **Startup retry loop not actually warming (need to confirm).**
+   `_warmup_loop` (main.py:57-88) retries every `_STARTUP_BACKOFF_S` (15s) while
+   `all_residents_loaded()` is False, else settles to 300s. Wait-then-`/v1/models`
+   after restart showed residents still unloaded >20s later → suggests the loop is
+   NOT resolving them, or `app.state.llm_client`/`config` weren't picked up, or the
+   loop died on a startup-phase exception (hidden by suppressed INFO + only
+   WARNING exposure). Verify the task is alive and `all_residents_loaded` logic
+   against live `/v1/models` shape (`status.value`).
+
+**Deploy commands used (live):** `curl -X POST http://localhost:8000/api/gpu/apply`
+then `sudo systemctl restart ai-mega-app`. Note: first apply was run BEFORE restart
+(i.e. old code) → produced stale config missing `CUDA_DEVICE_ORDER`; re-ran apply
+after restart → correct config. Verify config, don't assume.
+
+**Verification note:** `python` on box = `.venv/bin/python` (repo root `.venv`).
+
+**Related:** the whole point of WS-B (`fix/backend-reliability`, commit 86d6cf5 /
+merged 0c8ac3d) was "residents hot at service start" — this deploy shows that goal
+is not met in production. Treat as the top open item.
+
 ## Where things stand (2026-08-11 — post-audit fix plan)
 
 Full audit completed; see `docs/AGENT_CONTEXT_MEGA.md` (facts, code-verified) and `docs/FIX_PLAN_2026-08-11.md` (execution). Four parallel workstreams in flight, one worktree each, disjoint FILE SCOPEs, all forked from `main` at `0170ca4`:
