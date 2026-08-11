@@ -49,32 +49,32 @@ macros:
 models:
   chat-default:
     cmd: ${{llama}} -m {_BASE}/Qwen3.6-35B-A3B-UD-Q4_K_M.gguf -ngl 999 -c 32768
-    env: ["CUDA_VISIBLE_DEVICES=0"]
+    env: ["CUDA_VISIBLE_DEVICES=0", "CUDA_DEVICE_ORDER=PCI_BUS_ID"]
     ttl: 0
   coder:
     cmd: ${{llama}} -m {_BASE}/Qwen3-Coder-30B-A3B-Instruct-Q5_K_M.gguf -ngl 999 -c 16384
-    env: ["CUDA_VISIBLE_DEVICES=0"]
+    env: ["CUDA_VISIBLE_DEVICES=0", "CUDA_DEVICE_ORDER=PCI_BUS_ID"]
   coder-small:
     cmd: ${{llama}} -m {_BASE}/qwen2.5-coder-7b.gguf -ngl 999 -c 8192
-    env: ["CUDA_VISIBLE_DEVICES=0"]
+    env: ["CUDA_VISIBLE_DEVICES=0", "CUDA_DEVICE_ORDER=PCI_BUS_ID"]
   vision:
     cmd: ${{llama}} -m {_BASE}/Qwen3-VL-32B-Instruct-Q4_K_M.gguf -ngl 999 -c 8192 --mmproj {_BASE}/Qwen3-VL-32B-Instruct-mmproj-BF16.gguf
-    env: ["CUDA_VISIBLE_DEVICES=0"]
+    env: ["CUDA_VISIBLE_DEVICES=0", "CUDA_DEVICE_ORDER=PCI_BUS_ID"]
   dispatcher:
     cmd: ${{llama}} -m {_BASE}/Hammer2.1-1.5b-Q4_K_M.gguf -ngl 999 -c 4096 --temp 0
-    env: ["CUDA_VISIBLE_DEVICES=1"]
+    env: ["CUDA_VISIBLE_DEVICES=1", "CUDA_DEVICE_ORDER=PCI_BUS_ID"]
     ttl: 0
   utility:
     cmd: ${{llama}} -m {_BASE}/qwen3-8b.gguf --device none -ngl 0 -c 8192
-    env: ["CUDA_VISIBLE_DEVICES="]
+    env: ["CUDA_VISIBLE_DEVICES=", "CUDA_DEVICE_ORDER=PCI_BUS_ID"]
     ttl: 0
   embed:
     cmd: ${{llama}} -m {_BASE}/nomic-embed-text-v2-moe.Q4_K_M.gguf --device none -ngl 0 --embedding -c 2048
-    env: ["CUDA_VISIBLE_DEVICES="]
+    env: ["CUDA_VISIBLE_DEVICES=", "CUDA_DEVICE_ORDER=PCI_BUS_ID"]
     ttl: 0
   classifier:
     cmd: ${{llama}} -m {_BASE}/Qwen3-1.7B-Q8_0.gguf --device none -ngl 0 -c 4096 --reasoning off --temp 0
-    env: ["CUDA_VISIBLE_DEVICES="]
+    env: ["CUDA_VISIBLE_DEVICES=", "CUDA_DEVICE_ORDER=PCI_BUS_ID"]
     ttl: 0
 groups:
   resident: {{ swap: false, exclusive: false, members: [dispatcher, utility, embed, classifier] }}
@@ -147,9 +147,21 @@ def test_cuda_visible_devices_empty_on_cpu(generated):
             cpu_entry_active = True
         if cpu_entry_active and stripped.startswith("env:"):
             assert 'CUDA_VISIBLE_DEVICES="' in stripped or "CUDA_VISIBLE_DEVICES=" in stripped
-            # Must be the empty-value form
-            assert 'CUDA_VISIBLE_DEVICES="]' in stripped
+            # Must be the empty-value form: CUDA_VISIBLE_DEVICES=" followed
+            # by the closing quote (no digit between = and ").
+            assert 'CUDA_VISIBLE_DEVICES="' in stripped
             cpu_entry_active = False
+
+
+def test_cuda_device_order_on_every_env(generated):
+    """Every env: line must include CUDA_DEVICE_ORDER=PCI_BUS_ID alongside
+    CUDA_VISIBLE_DEVICES — omitting it caused wrong-GPU incidents in the
+    wild (llm-stack/CLAUDE.md:76-78)."""
+    env_lines = [l for l in generated.splitlines() if l.strip().startswith("env:")]
+    assert len(env_lines) > 0
+    for line in env_lines:
+        assert "CUDA_DEVICE_ORDER=PCI_BUS_ID" in line
+        assert "CUDA_VISIBLE_DEVICES" in line
 
 
 def test_embedding_flag_singular(generated):

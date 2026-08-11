@@ -27,7 +27,7 @@ models:
   quant: Q4_K_M
   mmproj: null
   resident: false
-  ttl_s: 0
+  ttl_s: null
   extra_flags: []
 - name: reasoner-alt
   class: reasoning
@@ -42,7 +42,7 @@ models:
   quant: Q4_K_M
   mmproj: null
   resident: false
-  ttl_s: 0
+  ttl_s: null
   extra_flags: []
 - name: coder
   class: coding
@@ -57,12 +57,12 @@ models:
   quant: Q5_K_M
   mmproj: null
   resident: false
-  ttl_s: 0
+  ttl_s: null
   extra_flags: []
 - name: coder-small
   class: coding
   ctx: 8192
-  gpu: 1
+  gpu: 0
   tool_call: weak
   thinking: false
   reasoning_off: false
@@ -71,8 +71,8 @@ models:
   file: /home/john/llm-stack/models/gguf/qwen2.5-coder-7b.gguf
   quant: Q4_K_M
   mmproj: null
-  resident: true
-  ttl_s: 0
+  resident: false
+  ttl_s: null
   extra_flags: []
 - name: vision
   class: vision
@@ -87,7 +87,7 @@ models:
   quant: Q4_K_M
   mmproj: /home/john/llm-stack/models/gguf/Qwen3-VL-32B-Instruct-mmproj-BF16.gguf
   resident: false
-  ttl_s: 0
+  ttl_s: null
   extra_flags: []
 - name: dispatcher
   class: dispatcher
@@ -152,15 +152,20 @@ models:
 routing:
   classifier:
     model: classifier
-    timeout_s: 6
+    timeout_s: 90
     confidence_threshold: 0.5
     fallback_model: chat-default
   rules:
   - keywords:
+    - write code
+    - stack trace
+    intent: code_task
+  - keywords:
     - think step by step
     intent: reasoning_task
-  - keywords: []
-    intent: chat
+  attachments:
+    image: vision_task
+    code_file: code_task
   intents:
     chat: chat-default
     chit_chat: chat-default

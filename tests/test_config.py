@@ -218,7 +218,7 @@ def test_repo_config_routing_intents(tmp_path: Path) -> None:
 def test_repo_config_routing_classifier(tmp_path: Path) -> None:
     cfg = load_config(config_mod.CONFIG_PATH)
     assert cfg.routing.classifier.model == "classifier"
-    assert cfg.routing.classifier.timeout_s == 6.0
+    assert cfg.routing.classifier.timeout_s == 90.0
     assert cfg.routing.classifier.confidence_threshold == 0.5
     assert cfg.routing.classifier.fallback_model == "chat-default"
 

@@ -135,14 +135,17 @@ def generate(config: Config) -> str:
         cmd = _build_cmd(m)
         # env: always emitted — prevents CUDA context leaks on CPU entries
         # (CUDA_VISIBLE_DEVICES="" reclaims ~150-256 MB per card, defect #4).
+        # CUDA_DEVICE_ORDER=PCI_BUS_ID accompanies every CUDA_VISIBLE_DEVICES
+        # pair — without it the wrong GPU gets pinned (llm-stack/CLAUDE.md:76-78).
         if m.gpu == "cpu":
-            env = '"CUDA_VISIBLE_DEVICES="'
+            env_visible = '"CUDA_VISIBLE_DEVICES="'
         else:
-            env = f'"CUDA_VISIBLE_DEVICES={m.gpu}"'
+            env_visible = f'"CUDA_VISIBLE_DEVICES={m.gpu}"'
+        env_order = '"CUDA_DEVICE_ORDER=PCI_BUS_ID"'
 
         lines.append(f"  {m.name}:")
         lines.append(f"    cmd: {cmd}")
-        lines.append(f"    env: [{env}]")
+        lines.append(f"    env: [{env_visible}, {env_order}]")
 
         # ttl: emit when resident or ttl_s == 0; else emit numeric; else omit.
         if m.resident or m.ttl_s == 0:
