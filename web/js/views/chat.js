@@ -4,6 +4,22 @@ import { addCopyButtons, escapeHtml, renderMarkdown } from "../markdown.js";
 import { navigate, replaceHash } from "../router.js";
 import { get, set } from "../store.js";
 import { applyModelPick, applyTitleToStore, chatLayoutHtml, refreshHealthModels, renderPickerMenu, routeHoverTitle, selectedModelLabel, } from "./composer.js";
+/** Refresh the chat list now and again after a delay.
+ *
+ * The auto-title job (app/background/titles.py) runs in a background queue
+ * *after* the turn's SSE stream has already closed (done/error are terminal
+ * per the frozen contract) -- there's no live channel left to push a title
+ * update through even in principle (the server's own emit_chat_sse hook is
+ * never wired to anything, so it's a no-op today regardless). An immediate
+ * refresh right after `done` mostly loses the race against the ~1-1.5s the
+ * title job takes; the delayed one catches it without requiring a manual
+ * page reload. */
+function refreshChatsSoon() {
+    void listChats().then((chats) => set({ chats })).catch(() => { });
+    setTimeout(() => {
+        void listChats().then((chats) => set({ chats })).catch(() => { });
+    }, 2500);
+}
 function formatElapsed(ms) {
     if (ms < 1000)
         return `${ms}ms`;
@@ -339,10 +355,7 @@ export function createChatView() {
         if (result === "lost" && !bannerError)
             bannerError = "connection lost";
         renderMessages(true);
-        try {
-            set({ chats: await listChats() });
-        }
-        catch { /* ignore */ }
+        refreshChatsSoon();
     }
     async function regenerate(userContent) {
         if (streaming)
@@ -412,10 +425,7 @@ export function createChatView() {
         if (result === "lost" && !bannerError)
             bannerError = "connection lost";
         renderMessages(true);
-        try {
-            set({ chats: await listChats() });
-        }
-        catch { /* ignore */ }
+        refreshChatsSoon();
     }
     function buildDom(el) {
         el.innerHTML = chatLayoutHtml(selectedModelLabel());

@@ -16,6 +16,23 @@ import {
   selectedModelLabel,
 } from "./composer.js";
 
+/** Refresh the chat list now and again after a delay.
+ *
+ * The auto-title job (app/background/titles.py) runs in a background queue
+ * *after* the turn's SSE stream has already closed (done/error are terminal
+ * per the frozen contract) -- there's no live channel left to push a title
+ * update through even in principle (the server's own emit_chat_sse hook is
+ * never wired to anything, so it's a no-op today regardless). An immediate
+ * refresh right after `done` mostly loses the race against the ~1-1.5s the
+ * title job takes; the delayed one catches it without requiring a manual
+ * page reload. */
+function refreshChatsSoon(): void {
+  void listChats().then((chats) => set({ chats })).catch(() => {});
+  setTimeout(() => {
+    void listChats().then((chats) => set({ chats })).catch(() => {});
+  }, 2500);
+}
+
 function formatElapsed(ms: number): string {
   if (ms < 1000) return `${ms}ms`;
   if (ms < 60_000) return `${(ms / 1000).toFixed(1)}s`;
@@ -334,7 +351,7 @@ export function createChatView(): ViewHandle {
     syncStopBtn();
     if (result === "lost" && !bannerError) bannerError = "connection lost";
     renderMessages(true);
-    try { set({ chats: await listChats() }); } catch { /* ignore */ }
+    refreshChatsSoon();
   }
 
   async function regenerate(userContent: string): Promise<void> {
@@ -403,7 +420,7 @@ export function createChatView(): ViewHandle {
     syncStopBtn();
     if (result === "lost" && !bannerError) bannerError = "connection lost";
     renderMessages(true);
-    try { set({ chats: await listChats() }); } catch { /* ignore */ }
+    refreshChatsSoon();
   }
 
   function buildDom(el: HTMLElement): void {
