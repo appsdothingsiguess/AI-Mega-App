@@ -62,7 +62,7 @@ models:
     reasoning_off: false
     max_tokens: 8192
     enabled: false
-    file: "/home/john/llm-stack/models/gguf/DeepSeek-R1-Distill-Qwen-32B-Q4_K_M.gguf"
+    file: "/home/john/llm-stack/models/gguf/deepseek-r1-32b.gguf"
     quant: Q4_K_M
     mmproj: null
     resident: false
@@ -134,7 +134,7 @@ models:
     gpu: cpu
     tool_call: none
     thinking: false
-    reasoning_off: false
+    reasoning_off: true
     max_tokens: 1024
     enabled: true
     file: "/home/john/llm-stack/models/gguf/qwen3-8b.gguf"

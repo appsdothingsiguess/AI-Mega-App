@@ -32,7 +32,7 @@ from app.gpu.swapgen import generate
 #   coder-small   (gpu=0, no ttl)
 #   vision        (gpu=0, mmproj, no ttl)
 #   dispatcher    (gpu=1, resident, ttl:0, --temp 0)
-#   utility       (gpu=cpu, resident, ttl:0)
+#   utility       (gpu=cpu, resident, ttl:0, --reasoning off)
 #   embed         (gpu=cpu, resident, ttl:0, --embedding)
 #   classifier    (gpu=cpu, resident, ttl:0, --reasoning off, --temp 0)
 # Dropped: reasoner (same file as chat-default, which is resident — request-
@@ -65,7 +65,7 @@ models:
     env: ["CUDA_VISIBLE_DEVICES=1", "CUDA_DEVICE_ORDER=PCI_BUS_ID"]
     ttl: 0
   utility:
-    cmd: ${{llama}} -m {_BASE}/qwen3-8b.gguf --device none -ngl 0 -c 8192
+    cmd: ${{llama}} -m {_BASE}/qwen3-8b.gguf --device none -ngl 0 -c 8192 --reasoning off
     env: ["CUDA_VISIBLE_DEVICES=", "CUDA_DEVICE_ORDER=PCI_BUS_ID"]
     ttl: 0
   embed:
