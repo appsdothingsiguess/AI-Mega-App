@@ -14,11 +14,11 @@
   },
   "ollama_model_names": {
     "local/qwen3-8b": "qwen3:8b-32k",
-    "local/qwen2.5-coder-7b": "qwen2.5-coder:7b-32k",
-    "local/qwen3-coder-30b": "qwen3-coder:30b-16k",
+    "local/qwen2.5-coder-7b": "qwen2.5-coder:7b-16k",
+    "local/qwen3-coder-30b": "qwen3-coder:30b-24k",
     "local/deepseek-r1-32b": "deepseek-r1:32b-16k",
-    "local/gemma4-12b": "gemma4:12b-32k",
-    "local/deepseek-r1-8b": "deepseek-r1:8b-32k",
+    "local/gemma4-12b": "gemma4:12b-16k",
+    "local/deepseek-r1-8b": "deepseek-r1:8b-16k",
     "local/coding-light": "",
     "local/coding-medium": "",
     "local/coding-heavy": "",
@@ -33,7 +33,7 @@
     "system_prompt": "You are Prompter X, a personal AI assistant for the project \"{project_name}\".\n\n## How to answer\n- Ground answers in project instructions and retrieved document excerpts when they are relevant to the question.\n- Reference source filenames when you use retrieved context.\n- Be direct, accurate, and proportional to what was asked.\n\n## When information is missing\n- When tools are available for this turn, call them to fetch what you need before answering.\n- Use retrieved project context for project-specific facts; use tools for live, external, or filesystem information.\n- When neither context nor tools can help, state what is missing and what you can still offer.\n\n## Response style\n- Prefer clear prose. Use fenced code blocks with language tags when writing code.\n- State assumptions explicitly when you must make them.\n- Report tool results faithfully; do not invent citations, data, or command output.\n"
   },
   "vision": {
-    "local_model": "ollama/gemma4:12b-32k",
+    "local_model": "ollama/gemma4:12b-16k",
     "remote_model": ""
   },
   "router": {

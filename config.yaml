@@ -223,7 +223,7 @@ routing:
     # resident: measured 0.9-1.1s warm, 2.5s on a cold prompt cache (live,
     # 2026-08-02). The old 2.0s bound tripped on every cold call, so every
     # turn silently fell back to chat-default.
-    timeout_s: 6.0
+    timeout_s: 90.0
     confidence_threshold: 0.5
     fallback_model: chat-default
 
