@@ -180,8 +180,14 @@ defaults:
   title_model: "dispatcher"
 
 llm:
-  # Must exceed the measured 12.47s cold load of chat-default (PLAN.md §4.1).
-  first_token_timeout_s: 30
+  # Must exceed a cold GPU0 swap + first-token latency. PLAN.md §4.1's
+  # 12.47s benchmark undershoots live reality: a live trace (2026-08-11,
+  # trace e14cbbe6) measured swap_wait alone at 28s for chat-default,
+  # leaving ~2s of the old 30s budget for the model to actually respond --
+  # hit first_token_timeout mid-conversation, stuck on a "loading
+  # chat-default" banner. Matches the classifier timeout bump (6s->90s,
+  # same live-cold-load-underestimate class of bug) earlier this session.
+  first_token_timeout_s: 90
 
 debug:
   store_prompts: true
