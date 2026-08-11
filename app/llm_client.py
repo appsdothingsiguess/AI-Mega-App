@@ -106,6 +106,7 @@ class LLMClient:
             message = choice.get("message") or {}
             return ChatDelta(
                 content=message.get("content"),
+                reasoning_content=message.get("reasoning_content"),
                 tool_calls=_parse_full_tool_calls(message.get("tool_calls")),
                 finish_reason=choice.get("finish_reason"),
                 usage=_parse_usage(body.get("usage")),
@@ -248,12 +249,14 @@ def _parse_stream_chunk(chunk: dict) -> ChatDelta | None:
     servers send first) so callers never see a wholly-empty ChatDelta."""
     choices = chunk.get("choices") or []
     content = None
+    reasoning_content = None
     tool_calls = None
     finish_reason = None
     if choices:
         choice = choices[0]
         delta = choice.get("delta") or {}
         content = delta.get("content")
+        reasoning_content = delta.get("reasoning_content")
         raw_tool_calls = delta.get("tool_calls")
         if raw_tool_calls:
             tool_calls = [
@@ -274,6 +277,7 @@ def _parse_stream_chunk(chunk: dict) -> ChatDelta | None:
         timings = None
     if (
         content is None
+        and reasoning_content is None
         and tool_calls is None
         and finish_reason is None
         and usage is None
@@ -282,6 +286,7 @@ def _parse_stream_chunk(chunk: dict) -> ChatDelta | None:
         return None
     return ChatDelta(
         content=content,
+        reasoning_content=reasoning_content,
         tool_calls=tool_calls,
         finish_reason=finish_reason,
         usage=usage,

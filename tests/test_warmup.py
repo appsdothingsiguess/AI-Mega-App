@@ -6,7 +6,7 @@ import asyncio
 from collections.abc import AsyncIterator
 
 from app.config import Config, DbConfig, DefaultsConfig, LlamaSwapConfig, ModelEntry
-from app.warmup import warmup_one, warmup_resident_models
+from app.warmup import all_residents_loaded, warmup_one, warmup_resident_models
 
 
 class FakeLLM:
@@ -166,3 +166,103 @@ async def test_warmup_skips_none_when_config_is_none():
     llm = FakeLLM()
     await warmup_resident_models(llm, None)
     assert llm.chat_calls == []
+
+
+# ---------------------------------------------------------------------------
+# all_residents_loaded — startup retry/backoff check (WS-B)
+# ---------------------------------------------------------------------------
+
+
+class StatusFakeLLM(FakeLLM):
+    """Fake LLM that also supports model_status() for startup retry tests."""
+
+    def __init__(self, status_map: dict[str, bool] | None = None, **kwargs):
+        super().__init__(**kwargs)
+        self._status_map = status_map or {}
+
+    async def model_status(self) -> dict[str, bool]:
+        return dict(self._status_map)
+
+
+async def test_all_residents_loaded_true_when_everyone_loaded():
+    llm = StatusFakeLLM(status_map={"chat-default": True, "dispatcher": True})
+    cfg = _make_config(
+        _model("chat-default", resident=True, file="/chat.gguf"),
+        _model("dispatcher", resident=True, gpu=1, file="/disp.gguf"),
+    )
+    assert await all_residents_loaded(llm, cfg) is True
+
+
+async def test_all_residents_loaded_false_when_one_missing():
+    llm = StatusFakeLLM(status_map={"chat-default": True, "dispatcher": False})
+    cfg = _make_config(
+        _model("chat-default", resident=True, file="/chat.gguf"),
+        _model("dispatcher", resident=True, gpu=1, file="/disp.gguf"),
+    )
+    assert await all_residents_loaded(llm, cfg) is False
+
+
+async def test_all_residents_loaded_false_when_llm_is_none():
+    cfg = _make_config(_model("chat-default", resident=True))
+    assert await all_residents_loaded(None, cfg) is False
+
+
+async def test_all_residents_loaded_false_when_cfg_is_none():
+    llm = StatusFakeLLM()
+    assert await all_residents_loaded(llm, None) is False
+
+
+async def test_all_residents_loaded_true_when_no_residents():
+    """Vacuously true — no residents means nothing to load."""
+    llm = StatusFakeLLM()
+    cfg = _make_config(
+        _model("chat-default", resident=False, file="/chat.gguf"),
+    )
+    assert await all_residents_loaded(llm, cfg) is True
+
+
+async def test_all_residents_loaded_false_on_model_status_exception():
+    class FailingStatusLLM(StatusFakeLLM):
+        async def model_status(self) -> dict[str, bool]:
+            raise RuntimeError("llama-swap unreachable")
+
+    llm = FailingStatusLLM(status_map={})
+    cfg = _make_config(_model("chat-default", resident=True, file="/chat.gguf"))
+    assert await all_residents_loaded(llm, cfg) is False
+
+
+async def test_warmup_loop_retries_in_startup_phase():
+    """The _warmup_loop in main.py retries with _STARTUP_BACKOFF_S until
+    all residents report loaded, then settles into _WARMUP_INTERVAL_S.
+    We test the retry semantics by driving the loop components directly."""
+    import asyncio
+    from app.warmup import _STARTUP_BACKOFF_S
+
+    # Simulate a resident model that becomes loaded after the first sweep.
+    call_count = 0
+
+    class RetryLLM(StatusFakeLLM):
+        async def model_status(self) -> dict[str, bool]:
+            nonlocal call_count
+            call_count += 1
+            if call_count >= 2:
+                return {"dispatcher": True}
+            return {"dispatcher": False}
+
+        async def chat(self, model, messages, **kwargs):
+            from app.types import ChatDelta
+            self.chat_calls.append(model)
+            yield ChatDelta(content="ok", finish_reason="stop")
+
+    llm = RetryLLM()
+    cfg = _make_config(_model("dispatcher", resident=True, gpu=1, file="/disp.gguf"))
+
+    # Phase 1: sweep then check — not loaded yet.
+    await warmup_resident_models(llm, cfg)
+    assert await all_residents_loaded(llm, cfg) is False
+    assert call_count == 1
+
+    # Phase 2: sweep again, now resident loaded.
+    await warmup_resident_models(llm, cfg)
+    assert await all_residents_loaded(llm, cfg) is True
+    assert call_count == 2

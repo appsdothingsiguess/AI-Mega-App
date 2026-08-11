@@ -257,3 +257,59 @@ async def test_llama_cpp_timings_reach_the_caller():
         assert timings == [{"predicted_per_second": 31.5}]
     finally:
         await client.close()
+
+
+# ---------------------------------------------------------------------------
+# reasoning_content — stream + non-stream parsing (WS-B, 2026-08-11)
+# ---------------------------------------------------------------------------
+
+
+async def test_reasoning_content_streamed():
+    """Thinking-capable models emit ``reasoning_content`` deltas before
+    regular content.  LLMClient must parse them into ChatDelta."""
+    fake = FakeLlamaSwap()
+    fake.script_chat(
+        reasoning_chunks=["Let me think", " about this..."],
+        content_chunks=["The answer", " is 42"],
+        finish_reason="stop",
+    )
+    client = make_client(fake)
+    try:
+        deltas = await collect(client)
+        reasoning_parts = [d.reasoning_content for d in deltas if d.reasoning_content is not None]
+        content_parts = [d.content for d in deltas if d.content is not None]
+        assert reasoning_parts == ["Let me think", " about this..."]
+        assert content_parts == ["The answer", " is 42"]
+    finally:
+        await client.close()
+
+
+async def test_reasoning_content_non_stream():
+    """Non-streaming responses must also carry reasoning_content."""
+    fake = FakeLlamaSwap()
+    fake.script_chat(
+        reasoning_chunks=["I'll reason step by step."],
+        content_chunks=["Done."],
+        usage={"prompt_tokens": 5, "completion_tokens": 3},
+    )
+    client = make_client(fake)
+    try:
+        deltas = await collect(client, stream=False)
+        assert len(deltas) == 1
+        assert deltas[0].reasoning_content == "I'll reason step by step."
+        assert deltas[0].content == "Done."
+    finally:
+        await client.close()
+
+
+async def test_reasoning_content_none_when_not_present():
+    """When the server sends no reasoning_content, ChatDelta stays None."""
+    fake = FakeLlamaSwap()
+    fake.script_chat(content_chunks=["plain reply"])
+    client = make_client(fake)
+    try:
+        deltas = await collect(client)
+        for d in deltas:
+            assert d.reasoning_content is None
+    finally:
+        await client.close()

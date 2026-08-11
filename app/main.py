@@ -21,8 +21,9 @@ from app.config import REPO_ROOT, Config, get_config
 from app.db import check_connection, open_db
 from app.debug.api import router as debug_router
 from app.debug.trace import reset_connection as reset_debug_connection
+from app.llm_client import LLMClient
 from app.settings.api import router as settings_router
-from app.warmup import warmup_resident_models
+from app.warmup import warmup_resident_models, all_residents_loaded, _STARTUP_BACKOFF_S as _WARMUP_STARTUP_BACKOFF_S
 
 # Soft-import wave-2 peers that land via parallel merges. Missing packages
 # are expected until interface-gate blockers clear (app.gpu / app.background
@@ -47,7 +48,7 @@ WEB_DIR = REPO_ROOT / "web"
 # How often the resident-model warm-up sweep re-fires after startup. A
 # llama-swap config reload (e.g. Settings UI "Apply GPU config") kills every
 # running llama-server process, not just the swapping GPU0 slot — resident
-# CPU/GPU1 models (classifier, dispatcher, utility, embed, coder-small) then
+# CPU/GPU1 models (classifier, dispatcher, utility, embed) then
 # sit cold until the next real request hits them. A one-shot startup warm-up
 # can't detect that; a periodic sweep self-heals within one interval.
 _WARMUP_INTERVAL_S = 300.0
@@ -58,16 +59,33 @@ async def _warmup_loop(app: FastAPI) -> None:
     automatically after a llama-swap config reload wipes them (see
     _WARMUP_INTERVAL_S). app/gpu/api.py additionally fires an immediate
     warm-up right after a successful /api/gpu/apply, so this loop is the
-    steady-state fallback, not the only recovery path."""
+    steady-state fallback, not the only recovery path.
+
+    Startup phase: retry with _WARMUP_STARTUP_BACKOFF_S until every
+    resident swap name reports loaded, then settle into the
+    _WARMUP_INTERVAL_S periodic sweep.  Each individual sweep body is
+    wrapped in try/except so a single failure (e.g. llama-swap temporarily
+    unreachable) never kills the loop."""
     import logging
     logger = logging.getLogger(__name__)
+    startup_phase = True
     while True:
-        llm = getattr(getattr(app, "state", None), "llm_client", None)
-        cfg: Config | None = getattr(getattr(app, "state", None), "config", None)
-        logger.info("warmup loop: starting sweep (llm=%s, cfg=%s)", llm is not None, cfg is not None)
-        await warmup_resident_models(llm, cfg)
-        logger.info("warmup loop: sweep complete, sleeping %.0fs", _WARMUP_INTERVAL_S)
-        await asyncio.sleep(_WARMUP_INTERVAL_S)
+        try:
+            llm = getattr(getattr(app, "state", None), "llm_client", None)
+            cfg: Config | None = getattr(getattr(app, "state", None), "config", None)
+            logger.info("warmup loop: starting sweep (llm=%s, cfg=%s, phase=%s)",
+                        llm is not None, cfg is not None,
+                        "startup" if startup_phase else "steady-state")
+            await warmup_resident_models(llm, cfg)
+            logger.info("warmup loop: sweep complete")
+            if startup_phase and await all_residents_loaded(llm, cfg):
+                startup_phase = False
+                logger.info("warmup loop: all residents loaded, switching to steady-state (%.0fs interval)",
+                            _WARMUP_INTERVAL_S)
+        except Exception:
+            logger.exception("warmup loop: sweep failed, retrying after backoff")
+        interval = _WARMUP_STARTUP_BACKOFF_S if startup_phase else _WARMUP_INTERVAL_S
+        await asyncio.sleep(interval)
 
 
 def _resolve_db_path(config: Config) -> Path:
@@ -89,16 +107,30 @@ def create_app(config: Config | None = None) -> FastAPI:
         # the right database, and unbind on shutdown so a later app instance
         # (e.g. the next test) doesn't inherit a closed connection.
         reset_debug_connection(app.state.db)
+        # Set up llm_client before background.start so warmup always has
+        # a client regardless of whether the soft-import succeeded.
+        if getattr(app.state, "llm_client", None) is None:
+            app.state.llm_client = LLMClient(
+                base_url=cfg.llama_swap.base_url,
+                timeout_s=cfg.llama_swap.timeout_s,
+            )
         if background_start is not None:
             await background_start(app)
         if start_rewarm is not None:
             await start_rewarm(app)  # async when present (sibling drift)
-        asyncio.create_task(_warmup_loop(app))
+        app.state._warmup_task = asyncio.create_task(_warmup_loop(app))
         try:
             yield
         finally:
             if background_stop is not None:
                 await background_stop(app)
+            task = getattr(app.state, "_warmup_task", None)
+            if task is not None and not task.done():
+                task.cancel()
+                try:
+                    await task
+                except (asyncio.CancelledError, Exception):
+                    pass
             reset_debug_connection(None)
             app.state.db.close()
 
