@@ -220,20 +220,25 @@ export function createChatView(): ViewHandle {
       box.appendChild(b);
     }
     if (scroll && sc) {
-      // Only auto-scroll if the user was near the bottom BEFORE the update
-      // AND is still near the bottom AFTER the layout settles. This prevents
-      // yanking the user back to the bottom if they scrolled up mid-stream
-      // (HANDOFF 2026-08-06 #3).
+      // Only auto-scroll if the user was near the bottom BEFORE the update.
+      // This prevents yanking the user back to the bottom if they scrolled
+      // up mid-stream (HANDOFF 2026-08-06 #3).
       if (wasNearBottom) {
+        const scrollTopAtUpdate = sc.scrollTop;
         // Double-rAF to ensure layout is fully committed before reading
-        // scrollHeight, then re-check position to avoid racing with user input.
+        // scrollHeight. Re-check scrollTop (not "near bottom") against its
+        // value at update time: streaming growth itself pushes scrollHeight
+        // well past any near-bottom threshold every time a chunk lands, so
+        // re-deriving "still near bottom" from the grown scrollHeight while
+        // scrollTop hasn't moved yet always fails and permanently pins the
+        // view at its pre-stream position (repro: new chat, scrollTop stuck
+        // at 0 while scrollHeight grew from 524 to 3364 over a stream).
+        // scrollTop changing between the two checks is what actually means
+        // "the user scrolled manually" -- that's the only case to respect.
         requestAnimationFrame(() => {
           requestAnimationFrame(() => {
-            if (sc) {
-              const stillNearBottom = sc.scrollHeight - sc.scrollTop - sc.clientHeight < 20;
-              if (stillNearBottom) {
-                sc.scrollTop = sc.scrollHeight;
-              }
+            if (sc && sc.scrollTop === scrollTopAtUpdate) {
+              sc.scrollTop = sc.scrollHeight;
             }
           });
         });
