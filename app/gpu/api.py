@@ -29,7 +29,7 @@ from fastapi.responses import PlainTextResponse
 from app.debug import new_trace, span
 from app.gpu.inventory import GPUInfo, fetch_inventory
 from app.gpu.swapgen import generate
-from app.warmup import warmup_resident_models
+from app.warmup import all_residents_loaded, warmup_resident_models
 
 router = APIRouter(prefix="/api/gpu", tags=["gpu"])
 
@@ -141,7 +141,19 @@ async def post_apply(request: Request) -> dict:
     # right now even though the poll above just returned OK. Re-warm before
     # replying so the next real request (e.g. the classifier on the very
     # next chat turn) doesn't eat a cold-start timeout.
+    # A single warmup pass right after /health goes OK can still race
+    # llama-swap's process spawn (health checks the proxy, not each
+    # llama-server), producing "group is shutting down" on the very models
+    # we're trying to warm -- and unlike the startup loop, this endpoint
+    # returns immediately after, with no periodic sweep to self-heal until
+    # _WARMUP_INTERVAL_S later. Retry a few times so a transient race
+    # doesn't leave residents cold for minutes after every apply.
     llm = getattr(request.app.state, "llm_client", None)
-    await warmup_resident_models(llm, config)
+    for attempt in range(3):
+        await warmup_resident_models(llm, config)
+        if await all_residents_loaded(llm, config):
+            break
+        if attempt < 2:
+            await asyncio.sleep(3.0)
 
     return {"ok": True, "health_url": health_url, "path": str(swap_path)}

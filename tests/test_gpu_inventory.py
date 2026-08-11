@@ -151,6 +151,7 @@ def test_apply_rewarms_resident_models_after_reload(tmp_path: Path, monkeypatch)
         warmed.append((llm, config))
 
     monkeypatch.setattr(gpu_api, "warmup_resident_models", fake_warmup)
+    monkeypatch.setattr(gpu_api, "all_residents_loaded", AsyncMock(return_value=True))
 
     sentinel_llm = object()
     app.state.llm_client = sentinel_llm

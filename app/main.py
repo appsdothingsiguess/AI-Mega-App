@@ -25,6 +25,17 @@ from app.llm_client import LLMClient
 from app.settings.api import router as settings_router
 from app.warmup import warmup_resident_models, all_residents_loaded, _STARTUP_BACKOFF_S as _WARMUP_STARTUP_BACKOFF_S
 
+# uvicorn's default logging config (dictConfig) only sets up the "uvicorn"/
+# "uvicorn.error"/"uvicorn.access" loggers -- it never touches the root
+# logger, which defaults to WARNING. Every app.* logger.info(...) call
+# (warmup loop included) is silently dropped in production as a result.
+# basicConfig is a no-op if a handler is already installed on root, so this
+# is safe regardless of import order relative to uvicorn's own setup.
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+)
+
 # Soft-import wave-2 peers that land via parallel merges. Missing packages
 # are expected until interface-gate blockers clear (app.gpu / app.background
 # not in this worktree; start_rewarm is async and must be awaited when present).
