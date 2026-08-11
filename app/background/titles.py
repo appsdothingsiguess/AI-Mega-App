@@ -155,7 +155,7 @@ async def _run_title_job(app: Any, chat_id: str) -> None:
                 raw = delta.content
 
         title = clean_title(raw)
-        sp.set(raw=raw, title=title)
+        sp.set(prompt=prompt, response=raw, raw=raw, title=title)
         if not title:
             sp.set(skipped=True, reason="empty_title")
             return
