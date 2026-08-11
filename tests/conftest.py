@@ -31,7 +31,29 @@ from fastapi.testclient import TestClient
 from app import config as config_mod
 from app.config import Config, DbConfig, DefaultsConfig, LlamaSwapConfig, ModelEntry
 from app.db import open_db
+from app.debug import trace as debug_trace_mod
 from app.main import create_app
+
+
+@pytest.fixture(autouse=True)
+def _isolate_debug_trace(tmp_path: Path) -> Iterator[None]:
+    """`app/debug/trace.py` lazily opens a module-global connection to
+    `config.db.path` (production `data/app.db` by default) the first time
+    any test calls `new_trace()`/`span()` without first binding it to a
+    tmp DB (e.g. any test building a bare FastAPI app + router, like
+    tests/test_gpu_inventory.py's `_make_app`, that never sets
+    `app.state.db`/calls `reset_debug_connection`). Observed live: a
+    `test_apply_no_existing_file_still_works` swapgen span landed in the
+    real production `data/app.db` after a local pytest run, visible in
+    the live Debug view. Force every test onto its own tmp DB by default
+    so a test that forgets to isolate can never write into the real one."""
+    conn = open_db(tmp_path / "debug-trace.db")
+    debug_trace_mod.reset_connection(conn)
+    try:
+        yield
+    finally:
+        debug_trace_mod.reset_connection(None)
+        conn.close()
 
 
 @pytest.fixture(autouse=True)
