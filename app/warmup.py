@@ -51,6 +51,7 @@ def resident_swap_names(cfg: Config) -> list[str]:
 
 
 _WARMUP_TIMEOUT_S = 60.0
+_STARTUP_BACKOFF_S = 15.0  # retry interval until all residents report loaded
 
 
 async def warmup_one(
@@ -89,3 +90,26 @@ async def warmup_resident_models(
             for name in names
         )
     )
+
+
+async def all_residents_loaded(llm: Any, cfg: Config) -> bool:
+    """Return True once every resident swap name reports loaded via
+    llama-swap's /v1/models status.  Safe to call when llm/cfg is None
+    (returns False) so the retry loop in _warmup_loop doesn't crash."""
+    if llm is None or cfg is None:
+        return False
+    names = resident_swap_names(cfg)
+    if not names:
+        return True  # vacuously true — nothing to load
+    try:
+        status = await llm.model_status()
+    except Exception:
+        logger.warning("warmup: model_status failed, will retry")
+        return False
+    all_ok = all(status.get(name, False) for name in names)
+    if all_ok:
+        logger.info("warmup: all %d resident models loaded", len(names))
+    else:
+        missing = [name for name in names if not status.get(name, False)]
+        logger.info("warmup: %d/%d residents loaded, retrying: %s", len(names) - len(missing), len(names), missing)
+    return all_ok

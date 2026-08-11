@@ -278,6 +278,7 @@ class ChatOrchestrator:
         attachments = attachments or []
         trace_id = new_trace(chat_id)
         accumulated: list[str] = []
+        accumulated_reasoning: list[str] = []
         usage_dict: dict[str, Any] | None = None
         timings_dict: dict[str, Any] | None = None
         route_info: dict[str, Any]
@@ -425,6 +426,8 @@ class ChatOrchestrator:
                             accumulated.append(delta.content)
                             tokens_out += 1
                             yield SSEEvent(event="token", data={"text": delta.content})
+                        if delta.reasoning_content:
+                            accumulated_reasoning.append(delta.reasoning_content)
                         if delta.usage is not None:
                             usage_dict = delta.usage.model_dump()
                         if delta.timings is not None:
@@ -439,6 +442,7 @@ class ChatOrchestrator:
                     usage=usage_dict,
                     timings=timings_dict,
                     response="".join(accumulated),
+                    reasoning="".join(accumulated_reasoning) if accumulated_reasoning else None,
                 )
 
             async with span(trace_id, "db", op="persist_assistant_message"):
@@ -481,14 +485,29 @@ class ChatOrchestrator:
         except LLMError as exc:
             async with span(trace_id, "sse_emit", event="error", kind=exc.kind):
                 yield SSEEvent(event="error", data={"kind": exc.kind, "detail": exc.detail})
+            if _on_turn_complete is not None:
+                try:
+                    await _on_turn_complete(chat_id)
+                except Exception:  # noqa: BLE001
+                    pass
         except TimeoutError as exc:
             async with span(trace_id, "sse_emit", event="error", kind="first_token_timeout"):
                 yield SSEEvent(
                     event="error", data={"kind": "first_token_timeout", "detail": str(exc)}
                 )
+            if _on_turn_complete is not None:
+                try:
+                    await _on_turn_complete(chat_id)
+                except Exception:  # noqa: BLE001
+                    pass
         except Exception as exc:  # noqa: BLE001 - last-resort terminal error
             async with span(trace_id, "sse_emit", event="error", kind="internal_error"):
                 yield SSEEvent(event="error", data={"kind": "internal_error", "detail": str(exc)})
+            if _on_turn_complete is not None:
+                try:
+                    await _on_turn_complete(chat_id)
+                except Exception:  # noqa: BLE001
+                    pass
         finally:
             if not persisted and accumulated:
                 try:

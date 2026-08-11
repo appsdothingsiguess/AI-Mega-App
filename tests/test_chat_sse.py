@@ -46,6 +46,7 @@ class FakeLLMClient:
     def __init__(
         self,
         chunks: list[str] | None = None,
+        reasoning_chunks: list[str] | None = None,
         usage: Usage | None = None,
         delay_before_first: float = 0.0,
         raise_error: Exception | None = None,
@@ -53,6 +54,7 @@ class FakeLLMClient:
         model_status: dict[str, bool] | None = None,
     ) -> None:
         self.chunks = chunks if chunks is not None else ["Hello", ", ", "world!"]
+        self.reasoning_chunks = reasoning_chunks or []
         self.usage = usage
         self.delay_before_first = delay_before_first
         self.raise_error = raise_error
@@ -82,6 +84,8 @@ class FakeLLMClient:
             await asyncio.sleep(self.delay_before_first)
         if self.raise_error is not None:
             raise self.raise_error
+        for piece in self.reasoning_chunks:
+            yield ChatDelta(reasoning_content=piece)
         for i, chunk in enumerate(self.chunks):
             is_last = i == len(self.chunks) - 1
             yield ChatDelta(
@@ -611,3 +615,118 @@ def test_chat_summary_compacts_old_turns_instead_of_raw_truncation(
     assert any("Earlier turns covered X, Y, Z." in m["content"] for m in sent)
     # cfg default summary_every_n_turns=6 -> 12 messages kept + 2 system msgs.
     assert len(sent) <= 14
+
+
+# ---------------------------------------------------------------------------
+# Error-path _on_turn_complete — WS-B: titles/summaries must fire on
+# error/timeout paths, not just the success path.
+# ---------------------------------------------------------------------------
+
+
+def test_on_turn_complete_called_on_llm_error(tmp_path: Path, monkeypatch) -> None:
+    """_on_turn_complete must fire when the LLM raises an LLMError."""
+    import app.chat.orchestrator as orchestrator_mod
+
+    captured: list[str] = []
+
+    async def fake_on_turn_complete(chat_id: str) -> None:
+        captured.append(chat_id)
+
+    monkeypatch.setattr(orchestrator_mod, "_on_turn_complete", fake_on_turn_complete)
+
+    fake = FakeLLMClient(raise_error=LLMError("connection", "refused"))
+    client = _make_client(tmp_path, fake)
+
+    chat_id = client.post("/api/chats", json={}).json()["id"]
+    resp = client.post(f"/api/chats/{chat_id}/messages", json={"content": "hi"})
+
+    events = _parse_sse(resp.text)
+    assert events[-1][0] == "error"
+    assert captured == [chat_id], f"_on_turn_complete not called on error path, captured={captured}"
+
+
+def test_on_turn_complete_called_on_first_token_timeout(tmp_path: Path, monkeypatch) -> None:
+    """_on_turn_complete must fire when the first token times out."""
+    import app.chat.orchestrator as orchestrator_mod
+
+    captured: list[str] = []
+
+    async def fake_on_turn_complete(chat_id: str) -> None:
+        captured.append(chat_id)
+
+    monkeypatch.setattr(orchestrator_mod, "_on_turn_complete", fake_on_turn_complete)
+    monkeypatch.setattr(orchestrator_mod, "FIRST_TOKEN_WARN_S", 0.01)
+
+    # LLM delays forever — triggers first_token_timeout.
+    fake = FakeLLMClient(chunks=["ok"], delay_before_first=99.0)
+    client = _make_client(tmp_path, fake, first_token_timeout_s=0.05)
+
+    chat_id = client.post("/api/chats", json={}).json()["id"]
+    resp = client.post(f"/api/chats/{chat_id}/messages", json={"content": "hi"})
+
+    events = _parse_sse(resp.text)
+    assert events[-1][0] == "error"
+    assert captured == [chat_id], f"_on_turn_complete not called on timeout path, captured={captured}"
+
+
+def test_on_turn_complete_called_on_internal_error(tmp_path: Path, monkeypatch) -> None:
+    """_on_turn_complete must fire on unexpected internal errors too."""
+    import app.chat.orchestrator as orchestrator_mod
+    import app.chat.history as history_mod
+
+    captured: list[str] = []
+
+    async def fake_on_turn_complete(chat_id: str) -> None:
+        captured.append(chat_id)
+
+    monkeypatch.setattr(orchestrator_mod, "_on_turn_complete", fake_on_turn_complete)
+
+    # Cause an unexpected error mid-stream by breaking the persistence path.
+    def broken_touch(*args, **kwargs):
+        raise RuntimeError("db failure")
+
+    monkeypatch.setattr(history_mod, "touch_chat", broken_touch)
+
+    fake = FakeLLMClient(chunks=["ok"])
+    client = _make_client(tmp_path, fake)
+
+    chat_id = client.post("/api/chats", json={}).json()["id"]
+    resp = client.post(f"/api/chats/{chat_id}/messages", json={"content": "hi"})
+
+    events = _parse_sse(resp.text)
+    assert events[-1][0] == "error"
+    assert captured == [chat_id], f"_on_turn_complete not called on internal error path, captured={captured}"
+
+
+# ---------------------------------------------------------------------------
+# reasoning_content → llm_stream span (WS-B, 2026-08-11)
+# ---------------------------------------------------------------------------
+
+
+def test_reasoning_content_recorded_in_llm_stream_span(tmp_path: Path) -> None:
+    """Reasoning/CoT content must appear in the llm_stream span's `reasoning`
+    field so the Debug view can display it later (no new SSE events)."""
+    fake = FakeLLMClient(
+        reasoning_chunks=["Let me think", " about this step by step."],
+        chunks=["The answer", " is 42."],
+    )
+    client = _make_client(tmp_path, fake)
+    trace_id = _run_turn(client, "what is 2+2")
+
+    spans = _spans_by_stage(client, trace_id)
+    llm_stream = spans["llm_stream"][0]
+    assert llm_stream["reasoning"] == "Let me think about this step by step."
+    # Regular content still recorded as before.
+    assert llm_stream["response"] == "The answer is 42."
+
+
+def test_reasoning_content_none_when_no_reasoning(tmp_path: Path) -> None:
+    """When no reasoning chunks are emitted, the span field is None."""
+    fake = FakeLLMClient(chunks=["plain", " reply"])
+    client = _make_client(tmp_path, fake)
+    trace_id = _run_turn(client, "hi")
+
+    spans = _spans_by_stage(client, trace_id)
+    llm_stream = spans["llm_stream"][0]
+    assert llm_stream.get("reasoning") is None
+    assert llm_stream["response"] == "plain reply"

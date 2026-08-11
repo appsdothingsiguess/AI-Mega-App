@@ -44,6 +44,12 @@ class ChatDelta(BaseModel):
     app/llm_client.py's LLMClient.chat()."""
 
     content: str | None = None
+    # Reasoning / CoT content from thinking-capable models (llama.cpp's
+    # ``reasoning_content`` delta field).  Separated from ``content`` so
+    # the Debug view can show the model's chain-of-thought when the SSE
+    # vocabulary stays frozen (no new events).  Owner-approved additive
+    # exception to the frozen-contract rule — WS-B, 2026-08-11.
+    reasoning_content: str | None = None
     tool_calls: list[ToolCallDelta] | None = None
     finish_reason: str | None = None
     usage: Usage | None = None

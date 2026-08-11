@@ -60,6 +60,9 @@ class ScriptedChat:
     """
 
     content_chunks: list[str] = field(default_factory=list)
+    # Reasoning/CoT chunks for thinking-capable models — emitted as
+    # ``delta.reasoning_content`` fragments interleaved with content.
+    reasoning_chunks: list[str] = field(default_factory=list)
     tool_calls: list[dict[str, Any]] = field(default_factory=list)
     finish_reason: str | None = "stop"
     usage: dict[str, int] | None = None
@@ -165,6 +168,8 @@ def _full_chat_body(script: ScriptedChat) -> dict:
         "role": "assistant",
         "content": "".join(script.content_chunks) or None,
     }
+    if script.reasoning_chunks:
+        message["reasoning_content"] = "".join(script.reasoning_chunks)
     if script.tool_calls:
         message["tool_calls"] = [
             {
@@ -189,6 +194,10 @@ async def _stream_chat(script: ScriptedChat) -> AsyncIterator[str]:
     # Role preamble chunk, matching real servers — carries no content or
     # tool-call info, exercised by LLMClient's "skip empty chunk" path.
     yield _sse({"choices": [{"index": 0, "delta": {"role": "assistant"}, "finish_reason": None}]})
+    # Emit reasoning chunks interleaved before content chunks (llama.cpp
+    # sends reasoning_content first, then regular content).
+    for piece in script.reasoning_chunks:
+        yield _sse({"choices": [{"index": 0, "delta": {"reasoning_content": piece}, "finish_reason": None}]})
     for piece in script.content_chunks:
         yield _sse({"choices": [{"index": 0, "delta": {"content": piece}, "finish_reason": None}]})
     for tc in script.tool_calls:
