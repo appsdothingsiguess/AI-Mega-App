@@ -4,7 +4,95 @@ Working notes for whichever Claude Code session picks this up next.
 Not a planning doc, not user-facing — just context that isn't obvious
 from the code alone. Delete or trim entries once they're stale.
 
-## TODO — model-picker shows "Auto" even when a chat has a persisted manual override
+## 2026-08-11 — session 3: override hydration, live-refresh, scroll, summary, timeout — all FIXED
+
+Sixth round of live bugs this day, reported in one batch. All fixed and
+committed to `main`; JS fixes are already live (static files, no restart
+needed), Python/config fixes need `sudo systemctl restart ai-mega-app`.
+
+**1. Model-picker "Auto" vs persisted override — FIXED (`d6a6dd0`).**
+Was logged as a TODO earlier this session (see below); fixed now.
+`ChatSummaryOut` + `list_chats` now include `model_override`; chat.ts
+hydrates `store.modelOverride` (and the picker label) from the opened
+chat's row instead of always defaulting to null/"Auto".
+
+**2. Title/summary never appear without a manual refresh — FIXED (`d08ce71`, `d79dba4`).**
+Two compounding bugs: (a) `app.state.emit_chat_sse` (what
+`_emit_title_sse` needs to push a live title update) is never set
+anywhere in `app/` — always a no-op — and is structurally unreachable
+anyway since the per-request SSE stream closes at `done`/`error` before
+the background title/summary job even starts. (b) the one `listChats()`
+refresh right after `done` only had a shot at catching the ~1-1.5s title
+job, never the summary job (17-40s on CPU `utility`, every
+`background.summary_every_n_turns` turns) — confirmed live: the "today
+weather forecast" chat's `chats.summary` WAS correctly generated
+server-side, just never fetched into the client in time. (c) even when
+fetched, nothing in `chat.ts` listened for store changes to re-render
+the summary banner — only the sidebar (`app.ts`) subscribed. Fixed:
+staggered `refreshChatsSoon()` refetches (0/2.5s/10s/30s/50s after each
+turn) plus a `chat.ts` store subscription that re-renders the summary
+banner live.
+
+**3. Auto-scroll stuck at top for an entire new-chat stream — FIXED (`2dfb95d`), live-reproduced with Playwright/Firefox.**
+`renderMessages`' double-rAF scroll guard captured "was near bottom"
+before the DOM update, then re-derived "still near bottom" from the
+**new, taller** `scrollHeight` against the still-stale `scrollTop` —
+streaming growth alone pushes `scrollHeight` well past the 20px
+threshold on nearly every chunk, so that check almost always failed and
+permanently pinned the view at its pre-stream scroll position. Repro:
+`scrollTop` stuck at 0 while `scrollHeight` grew 524px→3364px over a
+stream (script since deleted, was `scroll_repro.js` at repo root — used
+Firefox via Playwright per the existing tooling note further down this
+file). Fixed by comparing `scrollTop` against its own value at update
+time (did the *user* scroll) instead of re-deriving from content growth.
+Verified fixed with the same repro script post-fix (scrollTop tracked
+scrollHeight throughout, ~0-150px from bottom).
+
+**4. `first_token_timeout` stuck mid-conversation on a GPU0 swap — FIXED (`f0a5936`, owner-approved config bump).**
+Trace `e14cbbe6` (2026-08-11): `swap_wait` alone measured **28s** for
+`chat-default`'s GPU0 slot swap-in — the old `first_token_timeout_s: 30`
+(PLAN.md §4.1's 12.47s cold-load benchmark, long stale) left ~2s for the
+model to actually produce a token. Bumped to 90s, config.yaml only
+(mirrors the classifier timeout bump earlier this session, same
+underestimate class of bug). **Needs a restart to take effect.**
+
+**5. Also found and fixed opportunistically while chasing #2 above:**
+title-gen echoing the assistant's reply verbatim instead of summarizing
+(`a37fc1c`, exchange truncation), title spans not recording
+prompt/response for Debug (`3668ee1`), dangling trailing punctuation
+after title word-count truncation (`a43d9c3`), and **test pollution of
+the live production database** (`affea51`) — `tests/test_gpu_inventory.py`'s
+bare-FastAPI-app tests never isolated `app/debug/trace.py`'s
+lazily-opened global DB connection, so every local `pytest` run on this
+box was writing test spans straight into `data/app.db` (a stray
+`test_apply_no_existing_file...` swapgen trace surfaced this, spotted by
+the user in the live Debug view). Fixed with an autouse
+`_isolate_debug_trace` fixture in `tests/conftest.py`; 8 polluted rows
+cleaned out of `data/app.db` by hand.
+
+**General lesson for this whole session:** almost every live bug traced
+back to one of two patterns — (a) a background job's result only ever
+reaching the client via a *single* opportunistic refetch that assumed
+the job would finish faster than it actually does, or (b) a module-level
+lazily-initialized global resource (DB connection, logging config) with
+no forcing function to keep it isolated/configured in every context that
+touches it. Worth grepping for both patterns elsewhere before the next
+live test pass.
+
+## TODO — persist per-message usage/timing/trace so it survives a reload
+
+`assistant.traceId` / `tokensPerSecond` / `promptTokens` / `completionTokens`
+(`web/src/composer.ts` `ChatMsg` type) only ever exist in the in-memory
+object populated from the `done` SSE payload — `messages`/`MessageOut`
+never persists them, so a page reload has nothing to reconstruct them
+from ("trace and token count disappear after refresh", reported live
+2026-08-11). Needs a SQLite schema change (new `messages` columns or a
+sibling table) — per CLAUDE.md that's an "ask first" item, not done this
+session. Fix shape: persist `model`/`trace_id`/`usage`/`timings` on the
+assistant message row in `orchestrator.py`'s `db: persist_assistant_message`
+span, add the fields to `MessageOut`, and read them back in `loadHistory`.
+
+## TODO (RESOLVED same day, see "session 3" entry above, commit `d6a6dd0`) — model-picker shows "Auto" even when a chat has a persisted manual override
 
 User-reported live: Debug showed `route` span `source: "override", intent: "manual"`
 (chat locked to `coder-small`) for a chat whose composer UI still displayed
