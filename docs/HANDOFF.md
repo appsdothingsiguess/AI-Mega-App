@@ -4,9 +4,15 @@ Working notes for whichever Claude Code session picks this up next.
 Not a planning doc, not user-facing — just context that isn't obvious
 from the code alone. Delete or trim entries once they're stale.
 
-## 2026-08-11 — bug: warmup not leaving resident models loaded after deploy
+## 2026-08-11 — bug: warmup not leaving resident models loaded after deploy — FIXED
 
-**Reported live (post Wave-1 merge + real deploy). NOT FIXED.**
+**Root cause confirmed: hypothesis 1 (INFO logs invisible) was the whole story — the warmup loop was working correctly the entire time, just unobservable.**
+
+Fix (`30ee188`): added `logging.basicConfig(level=logging.INFO, ...)` in `app/main.py` — uvicorn's default logging config (dictConfig) only sets up the `uvicorn`/`uvicorn.error`/`uvicorn.access` loggers, never the root logger, so it stayed at default WARNING and silently dropped every `app.*` `logger.info(...)` call, including the warmup loop's own observability. Also hardened `app/gpu/api.py::post_apply` to retry its post-apply warmup up to 3x (checking `all_residents_loaded`) instead of a single shot, since a reload-race ("group is shutting down") can still hit the first attempt.
+
+**Live verification (2026-08-11 20:00, after `POST /api/gpu/apply` + `sudo systemctl restart ai-mega-app`):** journalctl now shows the full startup sweep — `warm-up starting`/`warm-up complete` for chat-default, dispatcher, utility, embed, classifier, then `warmup loop: all residents loaded, switching to steady-state (300s interval)` at 20:00:05, ~7s after restart. `curl :8080/v1/models` confirms all 5 residents `loaded`; coder/coder-small/vision correctly `unloaded` (non-resident swap group). Interestingly, the *previous* apply's post_apply warmup attempt (19:59:35) did hit the "group is shutting down" race on all 4 CPU/GPU1 residents — exactly hypothesis 2 — but the restart's own startup sweep recovered them cleanly regardless, so the retry hardening is defense in depth, not what fixed this particular symptom.
+
+**Original report below, kept for context:**
 
 Config regeneration is CORRECT (verified live): every `env:` pair now has
 `CUDA_DEVICE_ORDER=PCI_BUS_ID` beside `CUDA_VISIBLE_DEVICES`, `resident` group =
