@@ -30,6 +30,27 @@ populate) — do that next session before treating this as fully closed.
 
 **3. `post_apply` warmup hardening (`30ee188`, defense in depth, not the fix that mattered)** — see item below.
 
+**4. Test pollution of the LIVE production database — FOUND LIVE, FIXED (`affea51`).**
+User spotted a stray `swapgen` trace in the live Debug view pointing at
+a `.pytest-tmp/run/test_apply_no_existing_file_st0/...` path — a test
+span, in production data. Root cause: `app/debug/trace.py`'s
+`_connection()` lazily opens a module-global connection to
+`config.db.path` (real `data/app.db` by default) on first use; any test
+building a bare FastAPI app + router without setting `app.state.db` or
+calling `reset_debug_connection` (`tests/test_gpu_inventory.py`'s
+`_make_app` did exactly this) falls through and writes straight into
+whichever DB happens to be live at the time — the real one, when run on
+`ailab` outside a fully-isolated CI box. Fixed with an autouse
+`_isolate_debug_trace` fixture in `tests/conftest.py` (mirrors the
+existing `_isolate_overlay` pattern) that points every test at its own
+tmp DB by default. The 8 polluted trace rows this session's own pytest
+runs had already written to `data/app.db` were deleted by hand.
+**General lesson: any module with a lazily-opened global resource
+(`_conn`, similar patterns elsewhere) needs an autouse test fixture
+forcing isolation, not per-test opt-in — an opt-in pattern silently
+reverts to touching production the moment a new test forgets to call
+the reset hook.**
+
 ## 2026-08-11 — bug: warmup not leaving resident models loaded after deploy — FIXED
 
 **Root cause confirmed: hypothesis 1 (INFO logs invisible) was the whole story — the warmup loop was working correctly the entire time, just unobservable.**
