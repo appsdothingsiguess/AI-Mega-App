@@ -4,6 +4,21 @@ Working notes for whichever Claude Code session picks this up next.
 Not a planning doc, not user-facing — just context that isn't obvious
 from the code alone. Delete or trim entries once they're stale.
 
+## Where things stand (2026-08-11 — post-audit fix plan)
+
+Full audit completed; see `docs/AGENT_CONTEXT_MEGA.md` (facts, code-verified) and `docs/FIX_PLAN_2026-08-11.md` (execution). Four parallel workstreams in flight, one worktree each, disjoint FILE SCOPEs, all forked from `main` at `0170ca4`:
+
+- **WS-A fix/config-drift** — swapgen emits `CUDA_DEVICE_ORDER=PCI_BUS_ID` alongside every `CUDA_VISIBLE_DEVICES=N`; revert `settings.local.yaml` drift (coder-small residency/ttl_s, routing overlay attachments + code_task rules, classifier timeout 6→90s); settings.json legacy ollama tags → -16k/-24k.
+- **WS-B fix/backend-reliability** — classifier/utility hot at service start (warmup retry + stored task ref on `app.state`); `_on_turn_complete` on error/timeout paths; `reasoning_content` field on `ChatDelta` + parse in `llm_client` (no new SSE events — frozen vocab).
+- **WS-C fix/web-gaps** — retry affordance on error banner; response time + usage inline in `.msg-meta`; fix misleading `chat.ts:35-36` comment; real `npx tsc` build committed with `web/src/**`.
+- **WS-D docs/refresh** (this branch) — refresh stale "Phase 1 open / web unbuilt" prose in `AGENTS.md`/`CLAUDE.md`; add this HANDOFF entry.
+
+**Items audited FIXED in tree (do not redo; commits `8c4f7b4`, `53dac3a`, `0170ca4`, `96602e4`, `52f5b31`, `e9cc8fc`, `ad84232`, `492e260`, `e751a8b`, `652c910`, `fac6c8e`, `655f67d`, `e7a1a30`):** scroll stick-to-bottom (web/src/views/chat.ts:92-94,178-191); nav-interrupt / no-abort-on-unmount (chat.ts:32-42 + store `activeChatStreaming`); clipboard `execCommand` fallback (markdown.ts:87-99); stop button (composer.ts:152, chat.ts:381-389); `model_loading` banner (chat.ts:267-269,161-166); summary banner UI (chat.ts:70-86); `reasoner`→canonical swap-name alias (orchestrator.py:227-250,381); `list_models` live state from `/v1/models` (settings/api.py:111-125); GPU inventory trace spam removed (gpu/api.py:69-73); shutdown drain 8s (background/__init__.py:26,54-63); router kwargs (orchestrator.py:317-325); error-path partial persistence (orchestrator.py:481-503); warmup per-model 60s timeout + logging (warmup.py:59-74).
+
+**Still open (see FIX_PLAN for file:line):** warmup silent no-op risk (main.py:96 unstored task ref, `_warmup_loop` no try/except, `llm_client` only set by background.start); `_on_turn_complete` success-path only (orchestrator.py:456); `reasoning_content` dropped (types.py `ChatDelta` lacks field, llm_client._parse_stream_chunk:255 reads content only); web retry/usage-inline/thinking-display gaps; config drift (CUDA_DEVICE_ORDER missing, settings.local.yaml overlay drift, classifier timeout 6s, legacy ollama tags in settings.json).
+
+**Exploration note (deferred, after all fixes live):** MoE ctx headroom via `--n-cpu-moe` offload for `chat-default` (Qwen3.6-35B-A3B). Precedent: `qwen3-coder-30b` stable with `-ncmoe 20` in llm-stack config (~2.9GB/GPU headroom). See `docs/AGENT_CONTEXT_MEGA.md` §9.
+
 ## Where things stand (2026-08-06 — post-feature-implementation live re-test)
 
 Session implemented three user-requested features: regenerate button,
@@ -12,7 +27,7 @@ unnecessary GPU0 swaps). All features committed (8c4f7b4, 136 tests passing).
 User re-tested and reported 5 new issues. **Nothing in this entry is fixed
 yet except where noted.**
 
-### 1. Sticky routing works but doesn't visually show "loading model" when swap occurs
+### 1. Sticky routing works but doesn't visually show "loading model" when swap occurs — FIXED (commit 0170ca4 line of work; chat.ts:267-269,161-166)
 Swap-aware routing (prefer currently-loaded GPU0 model when classifier
 confidence < 0.8) is implemented and working — confirmed by user. However,
 when a swap DOES occur (classifier confidence >= 0.8, or no GPU0 model
@@ -43,7 +58,7 @@ then re-check the scroll position inside the callback. Reduced threshold from
 80px to 20px. Now only auto-scrolls if the user is STILL near the bottom after
 the layout settles.
 
-### 4. Can't tell if summarizer is doing anything in Debug mode
+### 4. Can't tell if summarizer is doing anything in Debug mode — FIXED (summary banner UI, chat.ts:70-86)
 User reports that the rolling summary feature doesn't show any visible
 activity in the Debug panel. The backend generates summaries every 6 turns
 (`background/summaries.py`, `config.yaml:233`), and the Debug view should
@@ -85,7 +100,7 @@ connections, e.g. the Debug panel's `/api/debug/stream`, to close; fixed
 live, confirmed working). User re-tested and reported 4 more issues.
 **Nothing in this entry is fixed yet except where noted.**
 
-### A. "All models unloaded after chat completion" — turned out to be a UI/API lie, not real unload
+### A. "All models unloaded after chat completion" — turned out to be a UI/API lie, not real unload — FIXED (`list_models` now queries `/v1/models`, settings/api.py:111-125)
 `app/settings/api.py::list_models()` (`GET /api/models`, backs the
 model-picker roster) **hardcodes `"loaded": False` for every model,
 always** — it's a stub predating real llama-swap wiring
@@ -206,7 +221,7 @@ classifier), or general box load. **Next step: reproduce live and check
 a timeout**, not a code fix — nothing in `classifier.py` looks wrong on
 read-through.
 
-### 2. GPU inventory spam in Debug — CONFIRMED BUG
+### 2. GPU inventory spam in Debug — FIXED (trace spam removed, gpu/api.py:69-73)
 `web/src/views/debug.ts:367` polls `/api/gpu/inventory` every 5s
 (`gpuTimer = setInterval(refreshTelemetry, 5000)`) while the Debug view
 is mounted, and `app/gpu/api.py:71`'s `get_inventory()` calls
@@ -232,7 +247,7 @@ message between them**, that would be a real bug — needs a live repro
 with the exact message sequence, because nothing in `orchestrator.py`
 forces a reload of an already-resident model.
 
-### 4. Copy-to-clipboard button visible but doesn't copy — CONFIRMED REGRESSION (I introduced this)
+### 4. Copy-to-clipboard button visible but doesn't copy — FIXED (clipboard `execCommand` fallback, markdown.ts:87-99)
 `navigator.clipboard.writeText()` (`web/src/markdown.ts`, added this
 session) requires a **secure context** — HTTPS or `localhost`. The app
 is served over plain HTTP at `http://192.168.0.89:8000` (LAN IP, not
@@ -245,7 +260,7 @@ silently). Also "should be instant" — current 1.5s "Copied!" revert
 delay is probably fine, but the real complaint is likely just "nothing
 visibly happens," which is the secure-context failure, not the delay.
 
-### 5. Navigating away mid-stream and back loses the response — CONFIRMED GAP
+### 5. Navigating away mid-stream and back loses the response — FIXED (error-path partial persistence, orchestrator.py:481-503)
 `chat.ts`'s `unmount()` calls `abort?.abort()`, killing the in-flight SSE
 connection. The assistant's streamed content only gets persisted to
 SQLite in `orchestrator.py`'s `db: persist_assistant_message` span,
@@ -258,7 +273,7 @@ generation resumable/backgrounded independent of the view's lifecycle
 (the latter matches how the title/summary background jobs already work
 — worth reusing that pattern).
 
-### 6. `reasoner`/`reasoner-alt` → 404 "no router for requested model" — CONFIRMED BUG, root cause found
+### 6. `reasoner`/`reasoner-alt` → 404 "no router for requested model" — FIXED (`reasoner`→canonical swap-name alias, orchestrator.py:227-250,381)
 `PLAN.md` §4.1 / `swapgen.py`'s own docstring say `reasoner` is
 "*same blob as chat-default*... enabled at the request layer, not a
 separate swap entry — routing chat→reasoner costs zero load time."
@@ -303,7 +318,7 @@ clientHeight < 80`) of the bottom *before* the update — i.e. "stick to
 bottom" only while already at the bottom, never yank someone back who
 scrolled away on purpose.
 
-### 9. No stop/interrupt button for in-flight generation — CONFIRMED MISSING FEATURE
+### 9. No stop/interrupt button for in-flight generation — FIXED (stop button wired, composer.ts:152, chat.ts:381-389)
 `chat.ts` already has an `AbortController` (`abort`) wired to cancel the
 SSE stream on unmount, but there's no UI control that calls
 `abort.abort()` while staying on the same view — `composer.ts`'s layout
@@ -377,7 +392,7 @@ are the sharpest, highest-confidence root causes; 1 and 3 need live
 repro before code changes; the "also flagged" section is scoping work,
 not urgent bugs).**
 
-## Where things stood (2026-08-02, later same day — CRITICAL ROUTER BUG)
+## Where things stood (2026-08-02, later same day — CRITICAL ROUTER BUG) — FIXED (router kwargs, orchestrator.py:317-325)
 
 **The Phase-2 router classifier has never actually run on live chat
 traffic, since it was first wired.** `app/chat/orchestrator.py` called
@@ -451,7 +466,7 @@ fallback_model) 422'd. Added `classifier: dict[str, Any] | None` to
 `app/settings/store.py::update_routing` (mirrors the existing `intents`
 handling).
 
-**Fourth: `systemctl restart ai-mega-app` can appear to hang ~15-40s.**
+**Fourth: `systemctl restart ai-mega-app` can appear to hang ~15-40s.** — FIXED (shutdown drain 8s, background/__init__.py:26,54-63)
 Not a deadlock — `app/background/__init__.py::stop()` deliberately awaits
 any in-flight background job before letting the app exit (title jobs are
 fast via `dispatcher`, but a summary job on CPU `utility` is documented at
