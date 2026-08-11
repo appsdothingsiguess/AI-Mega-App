@@ -23,7 +23,12 @@ from app.debug.api import router as debug_router
 from app.debug.trace import reset_connection as reset_debug_connection
 from app.llm_client import LLMClient
 from app.settings.api import router as settings_router
-from app.warmup import warmup_resident_models, all_residents_loaded, _STARTUP_BACKOFF_S as _WARMUP_STARTUP_BACKOFF_S
+from app.warmup import (
+    warmup_resident_models,
+    all_residents_loaded,
+    loaded_resident_names,
+    _STARTUP_BACKOFF_S as _WARMUP_STARTUP_BACKOFF_S,
+)
 
 # uvicorn's default logging config (dictConfig) only sets up the "uvicorn"/
 # "uvicorn.error"/"uvicorn.access" loggers -- it never touches the root
@@ -87,7 +92,13 @@ async def _warmup_loop(app: FastAPI) -> None:
             logger.info("warmup loop: starting sweep (llm=%s, cfg=%s, phase=%s)",
                         llm is not None, cfg is not None,
                         "startup" if startup_phase else "steady-state")
-            await warmup_resident_models(llm, cfg)
+            # Only re-ping models not already confirmed loaded — during the
+            # startup retry storm, re-pinging stragglers' already-warm
+            # siblings every _STARTUP_BACKOFF_S sends real completions that
+            # compete with live traffic for CPU (see HANDOFF 2026-08-11:
+            # this starved a background summary job to a 120s timeout).
+            already_loaded = await loaded_resident_names(llm, cfg) if startup_phase else set()
+            await warmup_resident_models(llm, cfg, skip=already_loaded)
             logger.info("warmup loop: sweep complete")
             if startup_phase and await all_residents_loaded(llm, cfg):
                 startup_phase = False

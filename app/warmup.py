@@ -77,19 +77,45 @@ async def warmup_one(
 
 async def warmup_resident_models(
     llm: Any, cfg: Config, *, timeout_s: float = _WARMUP_TIMEOUT_S,
+    skip: set[str] | None = None,
 ) -> None:
     """Ping every resident model once so llama-swap loads it eagerly, in
-    parallel so one slow cold start doesn't delay the others."""
+    parallel so one slow cold start doesn't delay the others.
+
+    ``skip`` excludes names already confirmed loaded (see
+    ``loaded_resident_names``) — re-pinging an already-loaded model sends a
+    real inference completion that competes with live traffic for no
+    benefit, which matters here because the startup retry loop below calls
+    this every _STARTUP_BACKOFF_S until convergence.
+    """
     if llm is None or cfg is None:
         return
     embed_names = {m.name for m in cfg.models if m.class_ == "embed"}
-    names = resident_swap_names(cfg)
+    names = [n for n in resident_swap_names(cfg) if n not in (skip or set())]
+    if not names:
+        return
     await asyncio.gather(
         *(
             warmup_one(llm, name, is_embed=name in embed_names, timeout_s=timeout_s)
             for name in names
         )
     )
+
+
+async def loaded_resident_names(llm: Any, cfg: Config) -> set[str]:
+    """Resident swap names llama-swap currently reports as loaded.
+
+    Best-effort: returns an empty set (never raises) if the status query
+    fails, so callers fall back to warming up everything.
+    """
+    if llm is None or cfg is None:
+        return set()
+    names = resident_swap_names(cfg)
+    try:
+        status = await llm.model_status()
+    except Exception:
+        return set()
+    return {n for n in names if status.get(n, False)}
 
 
 async def all_residents_loaded(llm: Any, cfg: Config) -> bool:
