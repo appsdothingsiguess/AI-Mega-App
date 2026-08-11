@@ -55,7 +55,7 @@ summary job is actually running (add logging to `summaries.py:110-130`);
 SSE stream; (4) check if the summary is being written to `chats.summary`
 in SQLite (query the DB directly to confirm).**
 
-### 5. Classifier timeout for trace_id: 31a0033c-59c9-451a-b495-2e24223f2ee9 — ROOT CAUSE FOUND
+### 5. Classifier timeout for trace_id: 31a0033c-59c9-451a-b495-2e24223f2ee9 — ROOT CAUSE FOUND, PARTIALLY FIXED
 **Root cause:** Classifier process was cold (not loaded yet) at 03:07:39.
 llama-swap logs show:
 - 03:07:39: classifier request arrived, proxy tried localhost:5801 → "connection refused"
@@ -64,14 +64,38 @@ llama-swap logs show:
 - 03:07:52: classifier finished loading (1m32s cold load!)
 The 6s timeout (`config.yaml:226`) is too short for a cold classifier load.
 The classifier is CPU-resident but still takes 1m32s to load on first request.
-**Fix options: (1) increase `routing.classifier.timeout_s` to 90s or more;
-(2) ensure classifier is eagerly warmed on startup (check `warmup.py` is
-actually pinging it); (3) add a "classifier cold" warning in the UI when
-the first request takes >10s.**
+
+**Why wasn't the classifier warmed on startup?** The warmup loop (`app/main.py:56-66`)
+should ping all resident models on startup, but journalctl shows NO warmup logs
+after the 02:59:46 restart. The warmup task is created (`asyncio.create_task`)
+but either isn't running or is failing silently before logging.
+
+**Partial fix (commit 0170ca4):** Added explicit logging to the warmup loop so we
+can see if it's running. Next restart should show "warmup loop: starting sweep"
+in journalctl. If it still doesn't appear, the task isn't being created or is
+crashing before the first log.
+
+**Remaining issue:** Even with warmup, the 6s classifier timeout is too short
+for a cold load (1m32s measured). **Fix options: (1) increase `routing.classifier.timeout_s`
+to 90s or more; (2) ensure warmup actually loads the classifier before the first
+request; (3) add a "classifier cold" warning in the UI when the first request
+takes >10s.**
+
+**User requirement:** "The classifier should always be hot including the 2 models
+on CPU. Everything depends on those models so swapping should never kill it.
+When the AI process spawns, the hot models should auto-load including chat-default
+since that will probably always be the first one used."
+
+This means:
+- CPU-resident models (classifier, dispatcher, utility, embed) must be eagerly
+  loaded on startup and never swapped out (ttl_s: 0 in config, which is correct)
+- chat-default (GPU0) should also be eagerly loaded since it's the default
+- The warmup must actually run and succeed for all resident models
 
 ### What was fixed in this session
 - **Commit 8c4f7b4**: Regenerate button, tokens/second display, swap-aware routing, warmup timeout, real loaded state, residency drift fix, drain timeout reduction
 - **Commit 53dac3a**: Scrolling fix (double-rAF + re-check), navigation interrupt fix (global streaming state)
+- **Commit 0170ca4**: Warmup logging, dedup logic fix
 
 ## Where things stand (2026-08-06 — post-restart-fix live re-test)
 
