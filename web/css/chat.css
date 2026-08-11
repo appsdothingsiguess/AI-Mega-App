@@ -224,11 +224,31 @@
   border: 1px solid rgba(232, 179, 57, 0.25);
 }
 
-.banner.error {
-  color: var(--error);
-  background: rgba(240, 87, 106, 0.08);
-  border: 1px solid rgba(240, 87, 106, 0.25);
-}
+.banner.error {
+  color: var(--error);
+  background: rgba(240, 87, 106, 0.08);
+  border: 1px solid rgba(240, 87, 106, 0.25);
+}
+
+.banner-retry-btn {
+  margin-left: auto;
+  padding: 2px 10px;
+  font-size: 11px;
+  font-family: var(--font-mono);
+  line-height: 1.5;
+  color: var(--error);
+  background: rgba(240, 87, 106, 0.12);
+  border: 1px solid rgba(240, 87, 106, 0.3);
+  border-radius: 5px;
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: background 0.15s, border-color 0.15s;
+}
+
+.banner-retry-btn:hover {
+  background: rgba(240, 87, 106, 0.2);
+  border-color: var(--error);
+}
 
 .spinner {
   width: 12px;
