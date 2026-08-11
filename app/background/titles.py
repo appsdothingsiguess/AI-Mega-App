@@ -78,13 +78,27 @@ def _eligible(conn: sqlite3.Connection, chat_id: str) -> bool:
     return (counts["n_user"] or 0) >= 1 and (counts["n_asst"] or 0) >= 1
 
 
+_EXCHANGE_TRUNCATE_CHARS = 400
+
+
+def _truncate(text: str, limit: int = _EXCHANGE_TRUNCATE_CHARS) -> str:
+    text = text.strip()
+    return text if len(text) <= limit else text[:limit].rstrip() + "..."
+
+
 def _first_exchange(conn: sqlite3.Connection, chat_id: str) -> str | None:
     msgs = history.list_messages(conn, chat_id)
     user = next((m for m in msgs if m["role"] == "user"), None)
     asst = next((m for m in msgs if m["role"] == "assistant"), None)
     if user is None or asst is None:
         return None
-    return f"User: {user['content']}\nAssistant: {asst['content']}"
+    # _TITLE_PROMPT's few-shot examples are two short sentences; real
+    # assistant replies (code blocks, long explanations) run far longer
+    # and confuse the small title_model into continuing the conversation
+    # instead of summarizing it (observed live: dispatcher just echoed the
+    # tail of a long reply verbatim). Truncating keeps the exchange shaped
+    # like the examples it's meant to pattern-match against.
+    return f"User: {_truncate(user['content'])}\nAssistant: {_truncate(asst['content'])}"
 
 
 def _set_title(conn: sqlite3.Connection, chat_id: str, title: str) -> bool:
