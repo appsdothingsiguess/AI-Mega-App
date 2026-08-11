@@ -4,6 +4,32 @@ Working notes for whichever Claude Code session picks this up next.
 Not a planning doc, not user-facing — just context that isn't obvious
 from the code alone. Delete or trim entries once they're stale.
 
+## 2026-08-11 — session: warmup fix, title-gen fix, title span prompt/response — FIXED, live-verified
+
+Follow-up session after Wave 1 merge, working through open HANDOFF items live on `ailab`.
+
+**1. Title-gen echoing the assistant's reply instead of a title — FIXED (`a37fc1c`).**
+Live repro: chat "hello who are you" → long Qwen self-intro got titled
+`"Hello! How can I assist you"` — the `dispatcher` model echoed the tail
+of the long assistant reply instead of summarizing it. Root cause:
+`_TITLE_PROMPT`'s few-shot examples (`app/background/titles.py`) are two
+short sentences each; real replies (code blocks, multi-paragraph answers)
+don't match that shape and confuse the small title model into continuing
+the conversation rather than titling it. Fix: `_first_exchange` now
+truncates each side of the exchange to 400 chars before building the
+prompt. Live-verified after redeploy: a new chat titled correctly
+("List Files in a Directory") on the first try.
+
+**2. Title spans showed "no prompt/response recorded" in Debug regardless of `debug.store_prompts` — FIXED (`3668ee1`).**
+`debug.store_prompts` was already `true` in `config.yaml:187` — the real
+bug was `titles.py` setting `raw`/`title` span fields, not the
+`prompt`/`response` keys `web/src/views/debug.ts:216-224` specifically
+looks for. Added `sp.set(prompt=prompt, response=raw, ...)`. Not yet
+live-verified (needs a restart + one more title job to confirm the tabs
+populate) — do that next session before treating this as fully closed.
+
+**3. `post_apply` warmup hardening (`30ee188`, defense in depth, not the fix that mattered)** — see item below.
+
 ## 2026-08-11 — bug: warmup not leaving resident models loaded after deploy — FIXED
 
 **Root cause confirmed: hypothesis 1 (INFO logs invisible) was the whole story — the warmup loop was working correctly the entire time, just unobservable.**
