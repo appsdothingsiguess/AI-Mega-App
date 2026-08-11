@@ -2,23 +2,28 @@
 import { createChat, getMessages, listChats, streamMessage } from "../api.js";
 import { addCopyButtons, escapeHtml, renderMarkdown } from "../markdown.js";
 import { navigate, replaceHash } from "../router.js";
-import { get, set } from "../store.js";
+import { get, set, subscribe } from "../store.js";
 import { applyModelPick, applyTitleToStore, chatLayoutHtml, refreshHealthModels, renderPickerMenu, routeHoverTitle, selectedModelLabel, } from "./composer.js";
-/** Refresh the chat list now and again after a delay.
+/** Refresh the chat list now and at staggered delays after.
  *
- * The auto-title job (app/background/titles.py) runs in a background queue
- * *after* the turn's SSE stream has already closed (done/error are terminal
- * per the frozen contract) -- there's no live channel left to push a title
- * update through even in principle (the server's own emit_chat_sse hook is
- * never wired to anything, so it's a no-op today regardless). An immediate
- * refresh right after `done` mostly loses the race against the ~1-1.5s the
- * title job takes; the delayed one catches it without requiring a manual
- * page reload. */
+ * Both the auto-title job (~1-1.5s, app/background/titles.py) and the
+ * rolling-summary job (17-40s on the CPU `utility` model every
+ * background.summary_every_n_turns turns, app/background/summaries.py) run
+ * in a background queue *after* the turn's SSE stream has already closed
+ * (done/error are terminal per the frozen contract) -- there's no live
+ * channel left to push either update through even in principle (the
+ * server's own emit_chat_sse hook every background job would need is never
+ * wired to anything). A single refresh shortly after `done` catches titles
+ * but always loses the race against a summary job, which read as "the
+ * summary banner never appears without navigating away and back". Stagger
+ * several refreshes to cover both without needing to know which job (if
+ * any) actually fired this turn. */
 function refreshChatsSoon() {
-    void listChats().then((chats) => set({ chats })).catch(() => { });
-    setTimeout(() => {
-        void listChats().then((chats) => set({ chats })).catch(() => { });
-    }, 2500);
+    for (const delayMs of [0, 2500, 10_000, 30_000, 50_000]) {
+        setTimeout(() => {
+            void listChats().then((chats) => set({ chats })).catch(() => { });
+        }, delayMs);
+    }
 }
 function formatElapsed(ms) {
     if (ms < 1000)
@@ -45,6 +50,7 @@ export function createChatView() {
     let loadingModel = null;
     let bannerError = null;
     let onDocClick = null;
+    let unsubscribe = null;
     // Track streaming state globally so it persists across view unmount/remount
     // (HANDOFF 2026-08-06 #2: navigating to Debug shouldn't interrupt streaming).
     let streaming = get().activeChatStreaming ?? false;
@@ -56,6 +62,9 @@ export function createChatView() {
         if (onDocClick)
             document.removeEventListener("click", onDocClick);
         onDocClick = null;
+        if (unsubscribe)
+            unsubscribe();
+        unsubscribe = null;
         root = null;
         route = null;
     };
@@ -474,6 +483,12 @@ export function createChatView() {
             route = r;
             set({ activeChatId: r.chatId });
             buildDom(el);
+            // Re-render the summary banner when store.chats changes (e.g. a
+            // rolling-summary background job finishing after refreshChatsSoon's
+            // delayed refetch) -- nothing else in this view listens for store
+            // updates, so without this the banner only ever appeared after a
+            // full remount (navigate away and back), never live.
+            unsubscribe = subscribe(() => renderSummaryBanner());
             await refreshHealthModels();
             if (r.chatId) {
                 // Hydrate the model picker from the chat's persisted override —
