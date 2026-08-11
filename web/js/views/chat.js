@@ -460,13 +460,28 @@ export function createChatView() {
             set({ activeChatId: r.chatId });
             buildDom(el);
             await refreshHealthModels();
-            syncPicker();
-            if (r.chatId)
+            if (r.chatId) {
+                // Hydrate the model picker from the chat's persisted override —
+                // store.modelOverride is otherwise pure client state that resets to
+                // null/"Auto" on every reload, silently diverging from what the
+                // backend actually enforces (HANDOFF: model-picker showed "Auto"
+                // for a chat Debug confirmed was locked to a manual override).
+                const chats = get().chats.length ? get().chats : await listChats().catch(() => []);
+                if (!get().chats.length)
+                    set({ chats });
+                const chat = chats.find((c) => c.id === r.chatId);
+                set({ modelOverride: chat?.model_override ?? null });
+                const label = root?.querySelector(".model-picker-label");
+                if (label)
+                    label.textContent = selectedModelLabel();
                 await loadHistory(r.chatId);
+            }
             else {
+                set({ modelOverride: null });
                 messages = [];
                 renderMessages(false);
             }
+            syncPicker();
         },
         unmount,
     };

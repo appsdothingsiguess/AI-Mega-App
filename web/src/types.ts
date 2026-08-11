@@ -29,6 +29,7 @@ export interface ChatSummary {
   title: string | null;
   updated_at: number;
   summary?: string | null;
+  model_override?: string | null;
 }
 
 export interface Message {

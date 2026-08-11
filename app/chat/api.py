@@ -36,6 +36,7 @@ class ChatSummaryOut(BaseModel):
     title: str | None
     updated_at: int
     summary: str | None = None
+    model_override: str | None = None
 
 
 class MessageOut(BaseModel):

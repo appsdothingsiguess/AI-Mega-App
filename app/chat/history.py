@@ -33,9 +33,18 @@ def create_chat(conn: sqlite3.Connection, project_id: str | None = None) -> dict
 def list_chats(conn: sqlite3.Connection) -> list[dict[str, Any]]:
     """id/title/updated_at for every chat, most recently updated first."""
     rows = conn.execute(
-        "SELECT id, title, updated_at, summary FROM chats ORDER BY updated_at DESC"
+        "SELECT id, title, updated_at, summary, model_override FROM chats ORDER BY updated_at DESC"
     ).fetchall()
-    return [{"id": r["id"], "title": r["title"], "updated_at": r["updated_at"], "summary": r["summary"]} for r in rows]
+    return [
+        {
+            "id": r["id"],
+            "title": r["title"],
+            "updated_at": r["updated_at"],
+            "summary": r["summary"],
+            "model_override": r["model_override"],
+        }
+        for r in rows
+    ]
 
 
 def get_chat(conn: sqlite3.Connection, chat_id: str) -> sqlite3.Row | None:
