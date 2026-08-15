@@ -4,6 +4,54 @@ Working notes for whichever Claude Code session picks this up next.
 Not a planning doc, not user-facing — just context that isn't obvious
 from the code alone. Delete or trim entries once they're stale.
 
+## 2026-08-15 — background jobs (title/summary) serialized behind each other — FIXED
+
+User reported a "clog": util/summarizer/title/big-model calls seemed to
+fight over "1 lane." Traced to `app/background/queue.py`'s `BackgroundQueue`
+being a **single-worker FIFO** — both `titles.py` and `summaries.py` submit
+jobs to the same queue, and the old `_run()` loop (`while True: item =
+await self._queue.get(); await self._execute(item)`) processed exactly one
+job at a time, system-wide, regardless of which model each job targeted.
+So a title job (`dispatcher`, GPU1) and a summary job (`utility`, CPU) —
+two entirely separate llama-server processes with nothing to contend
+over — always serialized behind each other purely because of this queue's
+design, not because of llama.cpp/llama-swap.
+
+Confirmed the main chat completion (the "big AI model") is NOT routed
+through this queue — it's awaited directly in the SSE request handler — so
+it isn't blocked by title/summary jobs at the code level; the perceived
+"big model" clog is more likely the CPU-thread-contention issue fixed
+earlier the same day (`e13718e`), not this queue.
+
+**Fix:** rewrote `BackgroundQueue` to run each submitted job as its own
+`asyncio.Task` (tracked in a `set` for `stop()`/`cancel()`/`drain()`)
+instead of a single consumer loop over an `asyncio.Queue`. Title and
+summary jobs (and any future background job type) now genuinely run
+concurrently. Kept the same public contract (`submit`/`start`/`stop`/
+`cancel`/`drain`) and per-job "one retry, then drop" semantics so
+`app/background/__init__.py` and all existing tests needed no changes
+beyond the queue implementation itself. SQLite access under concurrent
+jobs is safe as-is — `app/db.py`'s `connect()` already sets WAL mode +
+`busy_timeout=5000`, and `run_sync` offloads each blocking call to the
+default thread-pool executor, so concurrent writers retry instead of
+erroring.
+
+**Deferred (user chose not to do this now):** per-model `--parallel`/`-np`
+slots on llama-server so a *single* model can serve more than one
+concurrent request — every model in `config.yaml`/`swapgen.py` currently
+gets llama.cpp's default single slot. This is a separate, real bottleneck
+(e.g. two concurrent calls to the same `classifier` instance still queue
+inside llama.cpp itself) but costs extra VRAM/RAM per slot (KV cache
+duplicates per slot) and needs a per-model decision on slot count — logged
+here, not implemented.
+
+**Verification:** `pytest -q` → 157 passed (including the 8s
+shutdown-drain-timeout test in `test_background.py`, which still passes
+since `stop()`'s bounded-wait/cancel behavior is unchanged). `npx tsc
+--noEmit` clean. No config/schema/SSE changes — pure Python, no restart
+strictly required, though a restart is already pending for the earlier
+CPU-threads/warmup fixes today.
+
 ## 2026-08-15 — title-gen still echoing the exchange verbatim — ROOT CAUSE FOUND (dispatcher, not the classifier), FIX COMMITTED, NO RESTART NEEDED
 
 User re-reported "title generation and/or classifier behavior is still

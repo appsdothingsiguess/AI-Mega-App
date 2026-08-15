@@ -1,7 +1,8 @@
 """Background jobs: titles + rolling summaries (PLAN.md §4.15, FEATURES F18).
 
 Lifecycle hooks for settings-api / main: ``start`` / ``stop`` / ``on_turn_complete``.
-Jobs run on a sequential queue; failures never block the chat path.
+Jobs run concurrently (each submitted job is its own task); failures never
+block the chat path.
 """
 
 from __future__ import annotations
