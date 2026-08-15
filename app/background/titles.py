@@ -48,15 +48,20 @@ _TITLE_PROMPT = (
 def clean_title(raw: str, max_words: int = 6) -> str:
     """Deterministic title cleanup (mirrors scripts/postprocess_title.py).
 
-    Strips fence/quote wrapping, a Title: preamble, and trailing punct;
-    truncates overlong output. Never rejects a short title.
+    Strips fence/quote wrapping, a Title:/Chat: preamble, and trailing
+    punct; truncates overlong output. Never rejects a short title.
     """
     text = raw.strip()
     if text.startswith("```") and text.endswith("```") and len(text) >= 6:
         text = FENCE_RE.sub("", text).strip()
     while len(text) >= 2 and text[0] in "`\"'" and text[-1] == text[0]:
         text = text[1:-1].strip()
-    text = re.sub(r"^title:\s*", "", text, flags=re.IGNORECASE)
+    # dispatcher (Hammer 1.5B, a tool-calling model, not a generative one)
+    # sometimes prefixes its output with a label other than the exact
+    # "Title:" the few-shot examples teach -- observed live: "Chat: Hello!
+    # It sounds like you...". Strip any single-word label + colon so a
+    # leaked preamble doesn't become part of the stored title.
+    text = re.sub(r"^(?:title|chat|summary)\s*:\s*", "", text, flags=re.IGNORECASE)
     text = re.sub(r"[.!?]+$", "", text).strip()
     words = text.split()
     if len(words) > max_words:
@@ -66,6 +71,52 @@ def clean_title(raw: str, max_words: int = 6) -> str:
     # colon/semicolon that reads as a cut-off sentence rather than a title.
     text = re.sub(r"[.!?,:;]+$", "", text).strip()
     return text
+
+
+_WORD_RE = re.compile(r"[a-z0-9]+")
+
+
+def _normalize_words(text: str) -> list[str]:
+    return _WORD_RE.findall(text.lower())
+
+
+def is_echo(title: str, *sources: str) -> bool:
+    """True if `title` is just a verbatim/near-verbatim opening fragment of
+    one of `sources` rather than a synthesized summary.
+
+    Observed live (2026-08-15, real Debug spans): dispatcher (Hammer 1.5B)
+    frequently doesn't summarize short/casual exchanges at all -- it just
+    restates the user's or assistant's own text almost word-for-word (e.g.
+    raw "Meow! How are you doing? Meow!" -> title "Meow! How are you doing?
+    Meow", or a leaked "<project_instructions>" tag from the user message
+    verbatim). The 400-char truncation fix (a37fc1c) only stopped echoing
+    of *long* replies; short ones still slip through clean_title unchanged
+    since there's nothing to truncate. Compare normalized word prefixes so
+    punctuation/case differences (the model rarely drops the trailing "!")
+    don't mask the match.
+    """
+    title_words = _normalize_words(title)
+    if len(title_words) < 2:
+        return False
+    n = min(len(title_words), 6)
+    for source in sources:
+        if _normalize_words(source)[:n] == title_words[:n]:
+            return True
+    return False
+
+
+def _fallback_title(text: str, max_words: int = 6) -> str:
+    """Deterministic, non-LLM title used when generation echoes the input.
+
+    Not a summary -- just the opening words of the user's message, cleaned
+    the same way an LLM title would be. Guarantees the chat still gets a
+    real title (never re-attempts a job once ineligible) even when the
+    small title model fails to synthesize one.
+    """
+    words = re.sub(r"\s+", " ", text.strip()).split(" ")
+    snippet = " ".join(w for w in words[:max_words] if w)
+    snippet = re.sub(r"[.!?,:;]+$", "", snippet).strip()
+    return snippet or "New Chat"
 
 
 def _eligible(conn: sqlite3.Connection, chat_id: str) -> bool:
@@ -90,7 +141,8 @@ def _truncate(text: str, limit: int = _EXCHANGE_TRUNCATE_CHARS) -> str:
     return text if len(text) <= limit else text[:limit].rstrip() + "..."
 
 
-def _first_exchange(conn: sqlite3.Connection, chat_id: str) -> str | None:
+def _first_exchange(conn: sqlite3.Connection, chat_id: str) -> tuple[str, str, str] | None:
+    """Returns (prompt_exchange_text, raw_user_text, raw_assistant_text)."""
     msgs = history.list_messages(conn, chat_id)
     user = next((m for m in msgs if m["role"] == "user"), None)
     asst = next((m for m in msgs if m["role"] == "assistant"), None)
@@ -102,7 +154,10 @@ def _first_exchange(conn: sqlite3.Connection, chat_id: str) -> str | None:
     # instead of summarizing it (observed live: dispatcher just echoed the
     # tail of a long reply verbatim). Truncating keeps the exchange shaped
     # like the examples it's meant to pattern-match against.
-    return f"User: {_truncate(user['content'])}\nAssistant: {_truncate(asst['content'])}"
+    exchange = (
+        f"User: {_truncate(user['content'])}\nAssistant: {_truncate(asst['content'])}"
+    )
+    return exchange, user["content"], asst["content"]
 
 
 def _set_title(conn: sqlite3.Connection, chat_id: str, title: str) -> bool:
@@ -141,10 +196,11 @@ async def _run_title_job(app: Any, chat_id: str) -> None:
             sp.set(skipped=True, reason="not_eligible")
             return
 
-        exchange = await run_sync(_first_exchange, conn, chat_id)
-        if exchange is None:
+        exchange_data = await run_sync(_first_exchange, conn, chat_id)
+        if exchange_data is None:
             sp.set(skipped=True, reason="no_exchange")
             return
+        exchange, user_text, assistant_text = exchange_data
 
         prompt = _TITLE_PROMPT.format(exchange=exchange)
         raw = ""
@@ -159,7 +215,10 @@ async def _run_title_job(app: Any, chat_id: str) -> None:
                 raw = delta.content
 
         title = clean_title(raw)
-        sp.set(prompt=prompt, response=raw, raw=raw, title=title)
+        echo = bool(title) and is_echo(title, user_text, assistant_text)
+        if echo:
+            title = _fallback_title(user_text)
+        sp.set(prompt=prompt, response=raw, raw=raw, title=title, echo_detected=echo)
         if not title:
             sp.set(skipped=True, reason="empty_title")
             return
