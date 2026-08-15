@@ -271,6 +271,24 @@ export function createChatView() {
             const { id } = await createChat();
             // replaceHash (not navigate): navigate remounts and aborts in-flight SSE.
             route = { name: "chat", chatId: id, traceId: null };
+            // A model picked on the "New chat" screen only lives in
+            // store.modelOverride until now -- applyModelPick() skips persisting
+            // to the backend when there's no chatId yet (nothing to persist to).
+            // The first message still uses the right model (send() passes
+            // modelOverride explicitly in the request body), but without this the
+            // chat row's model_override column stays NULL, so re-hydrating on
+            // reload/revisit (chat.ts mount: `modelOverride: chat?.model_override
+            // ?? null`) silently drops back to "Auto" even though the user made
+            // an explicit pick -- reads as "model switch doesn't stick."
+            const pending = get().modelOverride;
+            if (pending) {
+                try {
+                    await applyModelPick(id, pending);
+                }
+                catch (err) {
+                    console.error("persist pending model pick", err);
+                }
+            }
             set({ chats: await listChats(), activeChatId: id });
             replaceHash(`#/chat/${id}`);
             setHeaderTitle("Chat");
