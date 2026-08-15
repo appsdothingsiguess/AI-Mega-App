@@ -32,6 +32,12 @@ try:
 except ImportError:  # BLOCKED: app.background absent — interface-gate
     _on_turn_complete = None
 
+try:
+    from app.background.summaries import last_summary_covered_count
+except ImportError:  # BLOCKED: app.background absent — interface-gate
+    def last_summary_covered_count(conn: sqlite3.Connection, chat_id: str) -> int:
+        return 0
+
 
 class ChatCompleter(Protocol):
     """The subset of LLMClient.chat's declared signature the orchestrator
@@ -58,36 +64,55 @@ _CHARS_PER_TOKEN = 3.5
 
 
 def _apply_summary_compaction(
-    history: list[dict[str, str]],
+    history: list[dict[str, Any]],
     summary: str | None,
     recent_turns: int,
+    covered_message_count: int,
 ) -> list[dict[str, str]]:
-    """Replace everything but the most recent `recent_turns` turns with the
-    chat's rolling summary (app/background/summaries.py), so a long chat's
-    context usage stays roughly flat instead of growing with turn count.
+    """Replace everything the rolling summary (app/background/summaries.py)
+    already covers with the summary itself, so a long chat's context usage
+    stays roughly flat instead of growing with turn count.
 
-    The summary regenerates from the full transcript every
-    config.background.summary_every_n_turns user turns, so it always covers
-    everything up to the last regeneration point; between regenerations at
-    most (summary_every_n_turns - 1) turns are unsummarized. Keeping a
-    `recent_turns`-turn tail (caller passes summary_every_n_turns) safely
-    covers that gap without needing to track an exact cutoff in the DB.
+    `covered_message_count` is exactly how many messages (in this same
+    stable created_at/rowid order) the most recent `summary` span folded
+    in -- 0 if this chat has never been summarized. Everything at that
+    position onward is the tail sent raw; everything before it is exactly
+    what the summary was built from, so there's no overlap between the two
+    (2026-08-15 fix -- previously a fixed-size tail was always kept
+    regardless of what the summary had just covered, so the two doubled up
+    on the same turns right after a regen).
+
+    This used to be a timestamp cutoff (the summary span's own started_at)
+    instead of an exact count. That broke the moment app/background/
+    summaries.py started capping how much a single regen can summarize (its
+    own ctx-budget fix, same date): a regen that could only afford the
+    oldest half of its delta still stamped "summarized as of now," so the
+    timestamp cutoff would treat the still-uncovered newer half as already
+    folded into the summary and silently drop it from every future prompt
+    -- real, silent context loss. A message count has no such ambiguity.
+
+    `covered_message_count` of 0 with a real `summary` still compacts
+    (matches the pre-2026-08-15 fixed-tail behavior) -- can only happen if
+    `summary` was written out of band with no matching span (e.g. a test
+    setting `chats.summary` directly), so there's nothing better to cut to.
 
     _truncate_to_ctx below stays as a hard safety net — it's the only thing
     protecting a model with no summary yet (early in a chat) or a very
     small ctx budget from an overflow.
     """
     if not summary:
-        return history
+        return [{"role": m["role"], "content": m["content"]} for m in history]
+
+    tail_source = history[covered_message_count:]
+
     recent_messages = recent_turns * 2  # each turn is a user + assistant pair
-    if len(history) <= recent_messages:
-        return history
-    tail = history[-recent_messages:] if recent_messages > 0 else []
+    tail = tail_source[-recent_messages:] if recent_messages > 0 else tail_source
+
     summary_msg = {
         "role": "system",
         "content": f"Summary of earlier conversation:\n{summary}",
     }
-    return [summary_msg] + tail
+    return [summary_msg] + [{"role": m["role"], "content": m["content"]} for m in tail]
 
 
 def _truncate_to_ctx(
@@ -352,16 +377,22 @@ class ChatOrchestrator:
 
             gpu = model_entry.gpu if model_entry else None
             async with span(trace_id, "llm_request", model=resolved_model, gpu=gpu) as sp:
-                messages = await run_sync(history.build_llm_messages, self.conn, chat_id)
+                raw_messages = await run_sync(history.list_messages, self.conn, chat_id)
                 # Primary context-growth control: once the background job
                 # (app/background/summaries.py) has produced a rolling
-                # summary, compact everything but the most recent turns into
-                # it so a long chat's context usage stays roughly flat
+                # summary, compact everything the summary already covers
+                # into it so a long chat's context usage stays roughly flat
                 # instead of growing without bound.
+                covered_message_count = 0
+                if chat_row["summary"]:
+                    covered_message_count = await run_sync(
+                        last_summary_covered_count, self.conn, chat_id
+                    )
                 messages = _apply_summary_compaction(
-                    messages,
+                    raw_messages,
                     chat_row["summary"],
                     self.config.background.summary_every_n_turns,
+                    covered_message_count,
                 )
                 # Stopgap: prepend a system prompt so local models understand
                 # they're a persistent assistant (full app/prompts/ is Phase 3+).

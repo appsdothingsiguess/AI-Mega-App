@@ -763,21 +763,29 @@ prompts:
 **What.** Two models, split by who waits on the result [FACT — PLAN §4.15, `docs/phase0-measurements.md` §12]:
 
 - **Titles → `dispatcher`** (Hammer2.1-1.5b, GPU1): 8/8 on the title rubric at **0.042s/call**, versus CPU `utility` at 1/8 and **43.5s**. The utility model hits the same thinking-budget trap as the reasoners and mostly returns nothing at a title-sized budget. The sidebar shows a title immediately, so this one is not "background."
-- **Rolling summary + compaction → `utility`** (Qwen3-8B, CPU): 17.6–21.8s per 100-token summary, fine for a job nobody awaits.
+- **Rolling summary + compaction → `utility-gpu` first, `utility` (CPU) fallback** (both Qwen3-8B, redesigned 2026-08-15 — see `docs/HANDOFF.md` this-session entry for the live benchmark that drove this). `utility-gpu` is GPU1-resident (always warm, alongside `dispatcher`): measured live ~2700 tok/s prefill / ~70 tok/s decode, ~14x CPU decode speed. `utility` (CPU) is the fallback if the GPU1 call errors: measured live ~55 tok/s prefill / ~5 tok/s decode — slow enough that a naive ctx-sized bite can exceed even a relaxed timeout (this is what the 2026-08-11 double-timeout incident actually was), so the CPU path is capped by a speed-derived token budget (`_time_budget_tokens` in `app/background/summaries.py`), not ctx alone. Both paths trigger on real `prompt_tokens` crossing `summary_context_fraction` of the tightest routable ctx (not a turn-count cadence — see the module docstring for the full incremental-summarization design), and summarize only the delta since the last regen.
 
 Title post-processing is deterministic and lives in code: `clean_title()` **truncates** overlong output and never penalizes a short title. The 8/8 depends on it — an earlier 4/8 was the rubric's fault for demanding an exact 5–8 word range with no recovery path for "too short." Also strip wrapping quotes and markdown code fences. All background; failures never block chat.
 
 **Modules & files.**
-- `app/background/queue.py` — tiny in-process task queue (post-turn jobs: title, summary, chat-search indexing, memory review) with per-job-type concurrency 1; `app/background/titles.py` — first-exchange → title prompt → `PATCH` chat + SSE `title` event; `app/background/summaries.py` — rolling `chats.summary` update every N turns; `app/chat/compaction.py` (`maybe_compact(chat)`) — in-turn (not background): when assembled context > threshold, replace oldest turns with summary block before `llm_request`.
+- `app/background/queue.py` — tiny in-process task queue (post-turn jobs: title, summary, chat-search indexing, memory review) with per-job-type concurrency 1; `app/background/titles.py` — first-exchange → title prompt → `PATCH` chat + SSE `title` event; `app/background/summaries.py` — rolling `chats.summary` update, triggered on real token pressure (not turn count — see module docstring), tries `utility-gpu` then `utility`; `app/chat/compaction.py` (`maybe_compact(chat)`) — in-turn (not background): when assembled context > threshold, replace oldest turns with summary block before `llm_request`.
 
 **Interfaces.** `queue.submit(job_type: str, payload)`; jobs read/write via repositories only. Compaction message shape: a synthetic assistant-side block `"[Summary of earlier conversation]\n…"` preserved at messages head [INFERENCE — pattern per PLAN]; compaction state stored as `chats` meta (`compacted_before_message_id`) so it's stable across turns.
 
 **Config keys.**
 ```yaml
-background:                           # Phase 2
-  title_model: dispatcher             # user-visible → fast model wins (0.042s)
-  summary_model: utility              # unattended → CPU is fine (~18-22s)
-  summary_every_n_turns: 6
+background:                                    # Phase 2, extended 2026-08-15
+  title_model: dispatcher                      # user-visible → fast model wins (0.042s)
+  summary_model: utility                       # CPU fallback
+  summary_model_gpu: utility-gpu                # GPU1 fast path, tried first
+  summary_every_n_turns: 6                      # fallback cadence, pre-usage-data only
+  summary_context_fraction: 0.5                 # primary trigger
+  summary_token_threshold: 4000                 # fallback if model ctx unresolved
+  summary_timeout_s: 180.0                      # decoupled from llama_swap.timeout_s (120s, tuned for chat)
+  summary_cpu_tokens_per_sec_prefill: 55.0       # measured live 2026-08-15
+  summary_cpu_tokens_per_sec_decode: 5.0
+  summary_gpu_tokens_per_sec_prefill: 2700.0
+  summary_gpu_tokens_per_sec_decode: 70.0
 compaction:                           # Phase 3 (in-turn, not background)
   enabled: true
   threshold_tokens: 24000

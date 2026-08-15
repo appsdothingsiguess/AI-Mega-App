@@ -12,6 +12,8 @@ Property tests cover the Phase-0 acceptance criteria enumerated in swapgen.py:
   5. --embedding (singular) on embed class
   6. --mmproj present for models with mmproj configured
   7. Disabled and file-deduped models absent
+  8. --parallel 1 on every model (single-slot pin; see swapgen.py docstring
+     for the 2026-08-15 multi-slot KV-cache-loss incident this prevents)
 """
 
 from __future__ import annotations
@@ -32,6 +34,9 @@ from app.gpu.swapgen import generate
 #   coder-small   (gpu=0, no ttl)
 #   vision        (gpu=0, mmproj, no ttl)
 #   dispatcher    (gpu=1, resident, ttl:0, --temp 0)
+#   utility-gpu   (gpu=1, resident, ttl:0, --reasoning off; shares the
+#                  qwen3-8b.gguf file with utility but a different device,
+#                  so the (file, gpu) dedup key keeps both entries)
 #   utility       (gpu=cpu, resident, ttl:0, --reasoning off)
 #   embed         (gpu=cpu, resident, ttl:0, --embedding)
 #   classifier    (gpu=cpu, resident, ttl:0, --reasoning off, --temp 0)
@@ -45,7 +50,7 @@ GOLDEN = f"""\
 # generated — do not hand-edit
 healthCheckTimeout: 120
 macros:
-  llama: {_BIN} --host 0.0.0.0 --port ${{PORT}} --jinja
+  llama: {_BIN} --host 0.0.0.0 --port ${{PORT}} --jinja --parallel 1
 models:
   chat-default:
     cmd: ${{llama}} -m {_BASE}/Qwen3.6-35B-A3B-UD-Q4_K_M.gguf -ngl 999 -c 32768 --reasoning off
@@ -64,6 +69,10 @@ models:
     cmd: ${{llama}} -m {_BASE}/Hammer2.1-1.5b-Q4_K_M.gguf -ngl 999 -c 4096 --temp 0
     env: ["CUDA_VISIBLE_DEVICES=1", "CUDA_DEVICE_ORDER=PCI_BUS_ID"]
     ttl: 0
+  utility-gpu:
+    cmd: ${{llama}} -m {_BASE}/qwen3-8b.gguf -ngl 999 -c 16384 --reasoning off
+    env: ["CUDA_VISIBLE_DEVICES=1", "CUDA_DEVICE_ORDER=PCI_BUS_ID"]
+    ttl: 0
   utility:
     cmd: ${{llama}} -m {_BASE}/qwen3-8b.gguf --device none -ngl 0 -c 8192 --reasoning off --threads 8
     env: ["CUDA_VISIBLE_DEVICES=", "CUDA_DEVICE_ORDER=PCI_BUS_ID"]
@@ -73,11 +82,11 @@ models:
     env: ["CUDA_VISIBLE_DEVICES=", "CUDA_DEVICE_ORDER=PCI_BUS_ID"]
     ttl: 0
   classifier:
-    cmd: ${{llama}} -m {_BASE}/Qwen3-1.7B-Q8_0.gguf --device none -ngl 0 -c 4096 --reasoning off --temp 0 --threads 4
+    cmd: ${{llama}} -m {_BASE}/Qwen3-1.7B-Q4_K_M.gguf --device none -ngl 0 -c 4096 --reasoning off --temp 0 --threads 16
     env: ["CUDA_VISIBLE_DEVICES=", "CUDA_DEVICE_ORDER=PCI_BUS_ID"]
     ttl: 0
 groups:
-  resident: {{ swap: false, exclusive: false, members: [dispatcher, utility, embed, classifier] }}
+  resident: {{ swap: false, exclusive: false, members: [dispatcher, utility-gpu, utility, embed, classifier] }}
   gpu0-main: {{ swap: true, members: [chat-default, coder, coder-small, vision] }}
 """
 
@@ -182,6 +191,19 @@ def test_mmproj_on_vision(generated):
             break
 
 
+def test_parallel_one_on_every_model(generated):
+    """Defect #8 (live incident 2026-08-15): --parallel 1 must be pinned in
+    the macro so every model uses a single llama-server slot. Without it
+    -np defaults to -1 (auto), which resolved to 4 slots for coder in
+    production and round-robin-scattered a single chat's turns across
+    slots with no session pinning -- every turn lost its KV-cache prefix
+    (cache_n=0) and paid a full 10-14s prompt reprocessing, misread in the
+    debug panel as a model swap."""
+    assert "--parallel 1" in generated
+    macro_line = [l for l in generated.splitlines() if l.strip().startswith("llama:")][0]
+    assert "--parallel 1" in macro_line
+
+
 def test_reasoner_deduped(generated):
     """reasoner shares chat-default's file; only chat-default is emitted as a swap entry."""
     lines = generated.splitlines()
@@ -196,8 +218,8 @@ def test_reasoner_alt_disabled(generated):
 
 
 def test_resident_group_membership(generated):
-    """resident group: CPU + GPU1 residents (dispatcher, utility, embed, classifier)."""
-    for name in ["dispatcher", "utility", "embed", "classifier"]:
+    """resident group: CPU + GPU1 residents (dispatcher, utility-gpu, utility, embed, classifier)."""
+    for name in ["dispatcher", "utility-gpu", "utility", "embed", "classifier"]:
         assert name in generated.split("resident:")[1].split("\n")[0]
 
 
@@ -207,6 +229,57 @@ def test_gpu0_main_membership(generated):
     for name in ["chat-default", "coder", "coder-small", "vision"]:
         assert name in gpu0_line
     assert "reasoner" not in gpu0_line
+
+
+def test_utility_gpu_in_resident_group(generated):
+    """utility-gpu is resident:true -> joins the always-loaded resident
+    group alongside dispatcher (both stay warm; VRAM math is documented in
+    config.yaml's utility-gpu comment -- this is why coder-small must NOT
+    also live on GPU1)."""
+    resident_line = generated.split("resident:")[1].split("\n")[0]
+    assert "utility-gpu" in resident_line
+    assert "dispatcher" in resident_line
+
+
+def test_gpu1_swap_group_omitted_when_empty(generated):
+    """No gpu==1, resident:false entries in the base roster (coder-small is
+    gpu=0, utility-gpu is resident) -- the gpu1-swap group must not appear
+    at all rather than being emitted empty."""
+    assert "gpu1-swap:" not in generated
+
+
+def test_gpu1_swap_group_appears_for_nonresident_gpu1_entry():
+    """A gpu=1, resident:false entry (the shape coder-small had before this
+    session's fix) must land in its own gpu1-swap group, separate from
+    dispatcher's swap:false resident group -- neither evicts the other.
+    Exercises the code path even though the current roster doesn't need it,
+    so a future on-demand GPU1 model doesn't silently fall into llama-swap's
+    implicit default group (swapgen.py defect #1)."""
+    original = config_mod.OVERLAY_PATH
+    config_mod.OVERLAY_PATH = Path("/nonexistent/settings.local.yaml")
+    try:
+        base = load_config()
+    finally:
+        config_mod.OVERLAY_PATH = original
+    models = [m.model_copy(deep=True) for m in base.models]
+    for m in models:
+        if m.name == "coder-small":
+            m.gpu = 1
+            m.resident = False
+    cfg = base.model_copy(update={"models": models})
+
+    generated = generate(cfg)
+    gpu1_line = [l for l in generated.splitlines() if "gpu1-swap:" in l][0]
+    assert "coder-small" in gpu1_line
+    assert "dispatcher" not in gpu1_line
+
+
+def test_utility_gpu_not_deduped_with_utility(generated):
+    """utility and utility-gpu share qwen3-8b.gguf but sit on different
+    devices (cpu vs gpu=1) -- both must survive dedup, which keys on
+    (file, gpu) precisely so this doesn't collapse like reasoner does."""
+    assert "  utility:" in generated
+    assert "  utility-gpu:" in generated
 
 
 def test_both_resident_ties_keep_first_in_list():

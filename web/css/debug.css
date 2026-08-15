@@ -89,6 +89,30 @@
   border-color: var(--warning);
 }
 
+/* Total chat context used this turn vs. the model's ctx window (real
+ * prompt_tokens from llama.cpp, never a client-side estimate) -- same
+ * signal the rolling-summary trigger watches, so it doubles as "how close
+ * is this chat to summarizing / truncating." */
+.context-usage {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  color: var(--text-secondary);
+  white-space: nowrap;
+}
+
+.context-usage.is-warm {
+  color: var(--warning);
+  border-color: var(--warning);
+}
+
+.context-usage.is-hot {
+  color: var(--error);
+  border-color: var(--error);
+}
+
 .swap-label {
   display: flex;
   align-items: center;

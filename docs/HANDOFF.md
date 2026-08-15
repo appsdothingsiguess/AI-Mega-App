@@ -4,6 +4,90 @@ Working notes for whichever Claude Code session picks this up next.
 Not a planning doc, not user-facing — just context that isn't obvious
 from the code alone. Delete or trim entries once they're stale.
 
+## 2026-08-15 — summarizer speed-aware budget + GPU1 fast path
+
+Follow-on to the ctx-budget rewrite earlier the same day (see the two
+entries below this one: the uncommitted `summaries.py` docstring, and the
+6th-message-hang root cause). That rewrite made `_fit_to_budget` ctx-aware
+but not *speed*-aware: it could build a bite that fits `utility`'s 8192 ctx
+but that CPU can't actually finish inside a timeout. Confirmed live: the
+2026-08-11 double-timeout incident (120s x2 retries) was exactly this —
+`utility`'s old `max_tokens: 1024` output cap alone costs ~205s at measured
+CPU decode speed, already exceeding any reasonable timeout before input
+tokens are even counted.
+
+**Live benchmark (ailab, real transcripts from `data/app.db`, chats
+`eee45b51…`/`e211ca01…`/`c33ddccd…`), via `chat/completions` against
+`utility` and `utility-gpu` directly, reading llama.cpp's own `timings`):**
+
+| model | device | depth (prompt_tokens) | prefill tok/s | decode tok/s |
+|---|---|---|---|---|
+| utility | CPU (`--threads 8`) | 729 | 61.0 | 5.50 |
+| utility | CPU | 1431 (719 cached) | 57.9 | 5.06 |
+| utility | CPU | 2827 (1421 cached) | 53.4 | 4.78 |
+| utility-gpu | GPU1 (3070) | 729 | 2446 | 73.3 |
+| utility-gpu | GPU1 | 1431 (719 cached) | 2922 | 72.2 |
+| utility-gpu | GPU1 | 2827 (1421 cached) | 2886 | 69.6 |
+| utility-gpu | GPU1 | 6402 (2815 cached) | 2664 | 64.0 |
+
+Rounded to `summary_cpu_tokens_per_sec_{prefill,decode} = 55.0, 5.0` and
+`summary_gpu_tokens_per_sec_{prefill,decode} = 2700.0, 70.0` in
+`BackgroundConfig` (`app/config.py`) — GPU1 decode is ~14x CPU.
+
+**Design:**
+- `app/background/summaries.py`: new `_time_budget_tokens()` derives a max
+  input-token budget from `(summary_timeout_s - safety_margin -
+  max_output_tokens/decode_tps) * prefill_tps`; `_fit_to_budget` now takes
+  `min(ctx_budget, time_budget)`. `_run_summary` tries `utility-gpu` first,
+  falls back to `utility` (CPU) on any `LLMError`/empty-content.
+- `utility`'s `max_tokens` dropped 1024 → 512 (config.yaml, settings.local.yaml)
+  — at 5 tok/s CPU decode, 1024 output tokens alone left a *negative* time
+  budget, meaning the CPU path could never summarize anything under a
+  reasonable timeout.
+- New `background.summary_timeout_s` (180s) decouples the summary call's
+  timeout from `llama_swap.timeout_s` (120s, tuned for interactive chat
+  first-token latency) — a summary job is async/fire-and-forget, nobody is
+  waiting on it. New `app.state.summary_llm_client` (separate `LLMClient`
+  instance/timeout from `app.state.llm_client`) in `app/background/__init__.py`.
+- New `utility-gpu` model entry (config.yaml, settings.local.yaml): same
+  `qwen3-8b.gguf` as `utility`, `gpu: 1`, **resident:true, ttl:0** (always
+  warm, like dispatcher/utility/embed/classifier already are — not a
+  swap-on-demand entry). This requires `coder-small` to live on GPU0 (its
+  default placement in config.yaml), not GPU1: measured live (nvidia-smi,
+  8192 MiB 3070) dispatcher alone = 1303 MiB, + utility-gpu (ctx 16384,
+  mid-generation) = 7253 MiB total, ~590 MiB free — no room left for
+  coder-small (needs another ~3650 MiB) to coexist. The live overlay
+  (`settings.local.yaml`) had actually put `coder-small` on GPU1 (`gpu: 1`)
+  even though the checked-in `config.yaml` default is GPU0 — moved it back.
+  Phase 0 rejected *permanent* co-residency of utility+embed alongside
+  dispatcher on GPU1 for compute contention (5-7x dispatcher latency hit,
+  `phase0-measurements.md` §8), but that was concurrent generation load
+  from two always-busy models; a summarizer that's loaded-and-idle between
+  rare token-pressure-triggered runs doesn't reproduce that — only VRAM
+  residency does, which fits the 8GB card with just dispatcher.
+- `app/gpu/swapgen.py`: two fixes needed to make `utility-gpu` possible.
+  (1) `_select_entries`'s dedup key was file path alone — `utility` and
+  `utility-gpu` share `qwen3-8b.gguf`, so the old key would have silently
+  collapsed them into one entry (whichever won resident-priority). Changed
+  the key to `(file, gpu)` — same file *and* same device is genuinely one
+  swap slot (reasoner/chat-default); same file, different device is two
+  separate processes. (2) Added a `gpu1-swap` group (`gpu==1 AND
+  resident:false`, only emitted when non-empty) for future on-demand-GPU1
+  models — not exercised by the current roster (`coder-small` is GPU0,
+  `utility-gpu` is resident) but while investigating this, found the *live*
+  deployed `llama-swap.yaml` had `coder-small` on GPU1 with **no group
+  membership at all** (a real pre-existing gap — it fell into llama-swap's
+  implicit default group, the exact defect swapgen.py's groups: block
+  exists to prevent). Fixed as a side effect of getting `_select_entries`
+  and the grouping logic right for this change.
+
+**Verification:** `python -m pytest -q` (168 passed, includes new
+`_time_budget_tokens`/GPU-fallback-routing/dedup-key/`gpu1-swap`-group
+tests), `npx tsc --noEmit` clean. Live-applied via `/api/gpu/apply` +
+`ai-mega-app.service` restart on ailab; confirmed via `nvidia-smi` and
+`GET /v1/models` that `dispatcher`+`utility-gpu` both load without evicting
+each other and `coder-small` loads cleanly on GPU0's `gpu0-main` group.
+
 ## 2026-08-15 — background jobs (title/summary) serialized behind each other — FIXED
 
 User reported a "clog": util/summarizer/title/big-model calls seemed to
@@ -1213,6 +1297,189 @@ before doing either.
    will outrank that turn in "most recent" ordering — the debug UI (or
    future features) needs to account for that whenever it assumes
    `traces[0]` means "the turn I just ran."**
+
+## 2026-08-15 — llama-server multi-slot KV-cache loss + summary redundancy/quality
+
+- **`-np`/`--parallel` defaulted to `-1` (auto) and resolved to 4 slots for
+  `coder` live** (confirmed via `GET /slots`). With no session pinning from
+  our client, a multi-turn chat's requests round-robin across slots and
+  almost never land on the same one twice, so the KV-cache prefix is lost
+  every turn even on a pure append. Traces `63825427`/`c7763bd7` showed
+  `cache_n=0` and 10-14s of full prompt reprocessing on consecutive turns,
+  misread in the debug panel as a model swap (the `model_loading` heuristic
+  fires on any first-token gap > `FIRST_TOKEN_WARN_S`, not just real swaps).
+  **Fix: `--parallel 1` pinned globally in the llama-swap macro**
+  (`app/gpu/swapgen.py`) — every model gets exactly one slot, guaranteeing
+  cache reuse across turns, and incidentally reclaims the 3x context memory
+  auto-mode had reserved per model. Needs a service restart (code change,
+  not config) + `/api/gpu/apply` to land.
+- **Rolling summary redundancy + quality, rewrote `app/background/summaries.py`:**
+  `_apply_summary_compaction` always kept the last `summary_every_n_turns`
+  raw turns in the prompt, but `_run_summary` regenerated from the *entire*
+  transcript every time — at the moment of regen the summary and the raw
+  tail covered the exact same turns, paying for that overlap twice, and a
+  small CPU model (`utility`, qwen3-8b) asked to re-compress an ever-larger
+  transcript into the same 1024-token budget every time trended toward
+  generic filler ("user expressed frustration... assistant apologized...").
+  Redesigned to match how Claude Code's own `/compact` works: trigger off
+  real context pressure, not a fixed cadence, and fold in only the delta —
+  - **Trigger**: real `usage.prompt_tokens` from the chat's most recent
+    `llm_stream` span (never a client-side estimate, PLAN.md §4.16) crossing
+    `background.summary_token_threshold` (default 4000). Falls back to the
+    old `summary_every_n_turns` cadence only when no usage data exists yet
+    for the chat (first turn, or a test harness seeding messages directly).
+  - **Delta**: only messages since the previous `summary` span's timestamp
+    get sent to the summarizer, folded into the prior summary — not the
+    whole transcript again. No new DB column: the timestamp comes from the
+    existing `traces`/`spans` tables (`summary` stage already carries
+    `chat_id`). Second-resolution `messages.created_at` vs ms-resolution
+    `spans.started_at` means same-wall-second messages are always treated
+    as "new" (inclusive floor) — occasional harmless re-inclusion beats
+    silently dropping a genuinely new message.
+  - **Prompt**: structured sections (key facts, decisions, user
+    preferences, open questions) instead of one free-form paragraph —
+    higher signal density at the same token budget.
+  - In-flight guard (`_in_flight` set) prevents duplicate concurrent
+    summary jobs for the same chat while a regen is running.
+  - **Trigger is ctx-relative, not a flat number**: threshold is
+    `summary_context_fraction` (0.5) of *the turn's own model's* ctx
+    (looked up from the `llm_stream` span's `model` field against
+    `cfg.models`), since the roster spans ctx 8192 (coder-small/vision) to
+    32768 (chat-default/reasoner) — a flat token count would be too eager
+    for the small end or too late for the large end. Falls back to the
+    flat `summary_token_threshold` (4000) only if that turn's model can't
+    be resolved against the current roster.
+  - **`_apply_summary_compaction`'s tail-vs-summary overlap in the live
+    chat prompt is now also closed** (`app/chat/orchestrator.py`): the
+    compacted tail excludes everything at or before the last `summary`
+    span's timestamp instead of always keeping a fixed
+    `summary_every_n_turns`-sized tail regardless of what the summary just
+    covered. Same zero-schema approach (query traces/spans by chat_id +
+    stage), same inclusive same-second floor for the second-vs-ms
+    resolution mismatch. Falls back to the old fixed-tail behavior when no
+    matching `summary` span exists (e.g. `chats.summary` set out of band
+    in a test) — still correct, just without the trim.
+
+## 2026-08-15 — classifier thread cap regressed routing latency 7x
+
+Live trace `91017f4d` (chat `c33ddccd`) showed `route` (classifier layer)
+taking 7633ms — and it wasn't a one-off: three consecutive turns in the
+same chat all landed at 6.9-7.6s. Confirmed live with a direct curl to the
+classifier port: 2.6s for a 15-token prompt / 20-token completion, no other
+CPU-resident model running concurrently (load average 1.0, no summary/embed
+span active in that window) — a genuine steady-state regression, not
+contention or a cold start (`journalctl`'s classifier health-check lines
+line up with normal per-request checks, not a restart).
+
+Root cause: the `--threads 4` cap applied to `classifier` in the earlier
+"CPU thread contention" fix (`e13718e`, same session as `utility`'s cap)
+had no dedicated justification — it was applied symmetrically alongside
+`utility` and `embed` without evidence classifier itself was the
+contention source. `utility`'s cap was justified: a summary run is
+long-lived (1024 max_tokens, 17-40s) and was observed starving concurrent
+GPU-side work. `classifier` is the opposite shape: it runs on the hot path
+for **every** chat turn's routing (not just during a rare concurrent
+summary), and each call is brief (max_tokens=64, ~1s even uncapped) — so
+capping it traded a rare, short contention risk for a 7x tax on every
+single turn. **Fix: raised classifier's `--threads` from 4 to 16** in both
+`config.yaml` and `settings.local.yaml` (the overlay had the same stale
+value and would have silently reasserted the regression). `utility` and
+`embed` caps are unchanged — no evidence either needs revisiting.
+
+## 2026-08-15 — classifier requantized Q8_0 → Q4_K_M
+
+`--threads 16` fixed the CPU-contention regression but the classifier still
+floored at ~14.5 tok/s CPU decode even fully warm — `Qwen3-1.7B-Q8_0.gguf`
+is ~2x heavier per token than a Q4 quant. Downloaded
+`Qwen3-1.7B-Q4_K_M.gguf` from `unsloth/Qwen3-1.7B-GGUF` (same repo family
+`download_models.sh` already uses for the big models; Qwen's own official
+GGUF repo only carries Q8_0, no Q4 variant). Re-ran
+`scripts/eval_router.py --base-url http://127.0.0.1:8080/v1 --min-accuracy 90`
+against the live swap: **92.59% (125/135)**, above the ≥90% gate and
+slightly above the old Q8_0 baseline (91.76%) — no accuracy regression.
+Live decode confirmed ~24.7 tok/s post-switch (vs ~14.5 tok/s), classifier
+calls now ~0.6-0.7s warm. `Qwen3-1.7B-Q8_0.gguf` is left on disk
+(`/home/john/llm-stack/models/gguf/`) for instant revert (swap `config.yaml`
++ `settings.local.yaml`'s classifier `file`/`quant` back and re-apply) if
+this quant ever regresses in practice.
+
+## 2026-08-15 — Debug view: total chat context usage chip
+
+Added a chip next to the route chip in the waterfall header
+(`web/src/views/debug.ts`'s `contextUsageHtml`, styled in `web/css/debug.css`)
+showing `<used>/<ctx> tok (<pct>%)` for the selected trace — real
+`prompt_tokens` from the `llm_stream` span's `usage` field (llama.cpp's own
+count) against that turn's model's ctx (fetched once via `listModels()`,
+keyed by alias). Turns amber at 50% usage, red at 90% — the same 50%
+threshold `app/background/summaries.py`'s trigger watches, so this chip
+doubles as "how close is this chat to summarizing." Falls back to a plain
+`<used> tok` chip if the model's ctx can't be resolved (roster fetch
+failed, or the span predates a roster entry). No server changes — this is
+purely reading data the backend already records.
+
+## 2026-08-15 — summarizer trigger: floor against the smallest routable ctx too
+
+User caught this from the new Debug context chip: two consecutive turns in
+the same chat showed different ctx denominators (32768 then 16384) because
+the router sent them to different models (`chat-default` then `coder`) --
+correct, since routing is per-turn. But that surfaced a real gap in the
+summarizer trigger: `maybe_enqueue_summary` only checked usage against
+*that turn's own model's* ctx. A chat sitting calmly at, say, 7% of
+chat-default's roomy 32768 ctx could get routed to `coder-small` (ctx 8192,
+or smaller still) the moment a message reads as a coding question, and
+that turn would blow straight past the small model's real budget with zero
+summarization warning -- landing in `_truncate_to_ctx`'s hard,
+unsummarized truncation instead of a graceful compaction.
+
+Fixed in `app/background/summaries.py`: added `_min_routable_ctx(cfg)`,
+which resolves every model named in `routing.intents` + the classifier's
+`fallback_model` against the roster and returns the smallest ctx among
+them -- the tightest budget the router could plausibly send the *next*
+turn to. `maybe_enqueue_summary` now thresholds against
+`min(this_turn's_model_ctx, min_routable_ctx) * summary_context_fraction`,
+so growth is judged against whichever is smaller: what's actually been
+used, or what could be used next. New test:
+`test_summary_threshold_uses_smallest_routable_ctx_as_floor`.
+
+## 2026-08-15 — summarizer overflowed its own ctx; cursor redesigned to an exact count
+
+User caught two failed `summary` spans back-to-back (traces `fe85c4f7`/
+`85b0fbc8`) both erroring `request (8616 tokens) exceeds the available
+context size (8192 tokens)`. Not a duplicate-trigger bug -- that's
+`BackgroundQueue`'s documented retry-once-on-failure firing a second,
+identical, immediately-failing attempt. The real bug: this chat's
+first-ever regen tried to summarize its entire 20-message backlog in one
+shot, and the formatted transcript (~8600 tokens) alone exceeded `utility`
+model's own ctx (8192) -- smaller than the chat model (`chat-default`,
+32768) being summarized. The request always 400'd, `chats.summary` never
+wrote, so every later turn kept re-triggering the same doomed oversized
+regen forever.
+
+Fix in `app/background/summaries.py`: `_fit_to_budget` now caps the delta
+sent to the summarizer at that model's own ctx budget, keeping the
+*oldest* prefix that fits and leaving the remainder for the next regen --
+a long backlog gets compacted in successive ctx-sized bites instead of
+failing outright.
+
+That in turn broke the "what's already summarized" cutoff, which used to
+be the summary span's own wall-clock `started_at` timestamp
+(`app/chat/orchestrator.py`'s `_apply_summary_compaction` and
+`app/background/summaries.py`'s delta filter both read it). A partial
+regen still stamps "ran just now," so a timestamp cutoff can't
+distinguish "covered by this regen" from "just happened to arrive after
+it" -- the still-uncovered newer half of an oversized delta would get
+silently treated as already-summarized and dropped from every future
+prompt. Replaced with `last_summary_covered_count`: an exact message count
+(in `history.list_messages`'s stable order) stored as a
+`covered_message_count` field inside the summary span's existing free-form
+data JSON -- still no new DB column, just no longer ambiguous. Both
+`_run_summary`'s delta computation and orchestrator's compaction tail now
+slice by this exact position instead of filtering by timestamp.
+
+New test: `test_summary_delta_exceeding_summarizer_ctx_splits_across_regens`
+reproduces the live scenario end-to-end (oversized first regen → partial
+summary → second regen picks up exactly the leftover, verified present in
+that call's actual prompt).
 
 ## Tooling notes
 

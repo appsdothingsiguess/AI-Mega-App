@@ -143,7 +143,43 @@ class RoutingConfig(_Strict):
 class BackgroundConfig(_Strict):
     title_model: str = "dispatcher"
     summary_model: str = "utility"
+    # GPU1 fast-path alias (see config.yaml utility-gpu, app/gpu/swapgen.py
+    # gpu1-swap group). Tried first; falls back to summary_model (CPU) on
+    # any LLMError (timeout, load failure, etc).
+    summary_model_gpu: str = "utility-gpu"
+    # Fallback cadence used only before any real llama.cpp usage data exists
+    # for a chat (its first turn, or a test harness that seeds messages
+    # directly). Once a turn's real prompt_tokens is on record,
+    # summary_token_threshold below takes over as the trigger.
     summary_every_n_turns: int = 6
+    # Primary trigger: summarize once a turn's real prompt_tokens (from
+    # llama.cpp's own `usage` field, never a client-side estimate, PLAN.md
+    # §4.16) crosses this fraction of *that turn's model's* ctx -- the
+    # roster spans ctx 8192 (coder-small/vision) to 32768 (chat-default/
+    # reasoner), so a flat token count is either too eager for the small
+    # end or too late for the large end. 0.5 leaves half the window for
+    # response + the next several turns of headroom before truncation.
+    summary_context_fraction: float = 0.5
+    # Fallback absolute threshold, used only when the turn's model can't be
+    # resolved (e.g. it was removed from the roster since that turn ran).
+    summary_token_threshold: int = 4000
+    # Background jobs are async/non-blocking (nobody is waiting on the
+    # stream), so they get their own timeout instead of sharing
+    # llama_swap.timeout_s (120s, tuned for interactive chat first-token
+    # latency). CPU utility is slow enough that reusing the chat timeout
+    # caused the 2026-08-11 double-timeout incident (120s x2 retries).
+    summary_timeout_s: float = 180.0
+    # Measured live 2026-08-15 on ailab against real transcripts from
+    # data/app.db (docs/HANDOFF.md this-session entry has the full table).
+    # utility (CPU, --threads 8): prefill ~55 tok/s, decode ~5 tok/s.
+    # utility-gpu (GPU1/3070): prefill ~2700 tok/s, decode ~70 tok/s, ~14x
+    # the CPU decode rate. These drive the speed-derived input-token budget
+    # in app/background/summaries.py -- ctx alone (8192/16384) is not a
+    # usable budget on CPU since generation alone can eat the whole timeout.
+    summary_cpu_tokens_per_sec_prefill: float = 55.0
+    summary_cpu_tokens_per_sec_decode: float = 5.0
+    summary_gpu_tokens_per_sec_prefill: float = 2700.0
+    summary_gpu_tokens_per_sec_decode: float = 70.0
 
 
 class Config(_Strict):

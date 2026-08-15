@@ -31,11 +31,22 @@ async def start(app: Any) -> None:
     """Attach LLM client + background queue and start the worker."""
     global _app
     _app = app
+    cfg = app.state.config
     if getattr(app.state, "llm_client", None) is None:
-        cfg = app.state.config
         app.state.llm_client = LLMClient(
             base_url=cfg.llama_swap.base_url,
             timeout_s=cfg.llama_swap.timeout_s,
+        )
+    if getattr(app.state, "summary_llm_client", None) is None:
+        # Separate client/timeout from interactive chat's llm_client: a
+        # summary job is async/non-blocking (nobody is waiting on the
+        # stream), so it gets background.summary_timeout_s (default 180s)
+        # instead of the 120s tuned for chat's first-token latency. Reusing
+        # the chat timeout caused the 2026-08-11 double-timeout incident on
+        # CPU-resident `utility`.
+        app.state.summary_llm_client = LLMClient(
+            base_url=cfg.llama_swap.base_url,
+            timeout_s=cfg.background.summary_timeout_s,
         )
     queue = BackgroundQueue()
     attach_queue(app, queue)

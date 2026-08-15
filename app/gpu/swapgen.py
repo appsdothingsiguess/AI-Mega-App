@@ -24,6 +24,21 @@ Flag spellings verified in PLAN.md §4.1 and docs/phase0-measurements.md:
   -ngl 999  (GPU placement)
   --mmproj  (vision models)
   --jinja  (global, in macro)
+  --parallel 1  (global, in macro; see note below)
+
+Live incident 2026-08-15 (traces 63825427/c7763bd7, chat eee45b51...): llama-
+server's `-np`/--parallel default is -1 ("auto"), which for coder resolved to
+4 slots (confirmed via GET /slots — id 0-3). This app is single-user and
+sends no slot/session pinning, so llama-swap/llama-server round-robins each
+request across slots; a multi-turn conversation almost never lands on the
+same slot twice, so its KV-cache prefix is gone every turn even when the
+prompt is a pure append. Observed cost: cache_n=0 and 10-14s of full prompt
+reprocessing on every turn once a chat exceeds a couple of exchanges,
+misread from the debug panel as a "model swap" (PLAN.md §4.2's model_loading
+heuristic fires on any first-token gap > FIRST_TOKEN_WARN_S, swap or not).
+Pinning --parallel 1 forces every model onto a single slot so consecutive
+turns in the same chat always hit the same KV cache, and incidentally
+reclaims the 3x extra context-memory auto mode had reserved per model.
 """
 
 from __future__ import annotations
@@ -77,31 +92,35 @@ def _build_cmd(m: ModelEntry) -> str:
 def _select_entries(config: Config) -> list[ModelEntry]:
     """Return enabled, deduplicated entries in config list order.
 
-    Deduplication: models sharing the same file path keep exactly one entry.
+    Deduplication key is (file, gpu), not file alone: models sharing the
+    same blob AND the same device are the same underlying llama-server
+    process (e.g. reasoner/chat-default, both gpu=0 — dedup to one swap
+    entry). Models sharing a blob but placed on *different* devices (e.g.
+    utility on cpu, utility-gpu on gpu=1) are genuinely separate processes
+    and must both survive — keying on file alone would silently drop one.
     Priority: resident:true over non-resident; ties broken by first in list.
-    This collapses reasoner (same blob as chat-default, thinking enabled at
-    the request layer) into chat-default — llama-swap sees one swap slot.
     """
-    file_to_canonical: dict[str, str] = {}
-    file_to_canonical_resident: dict[str, bool] = {}
+    key_to_canonical: dict[tuple[str, object], str] = {}
+    key_to_canonical_resident: dict[tuple[str, object], bool] = {}
     for m in config.models:
         if not m.enabled:
             continue
-        if m.file not in file_to_canonical:
-            file_to_canonical[m.file] = m.name
-            file_to_canonical_resident[m.file] = m.resident
-        elif m.resident and not file_to_canonical_resident[m.file]:
+        key = (m.file, m.gpu)
+        if key not in key_to_canonical:
+            key_to_canonical[key] = m.name
+            key_to_canonical_resident[key] = m.resident
+        elif m.resident and not key_to_canonical_resident[key]:
             # A resident entry displaces a non-resident one for the same
-            # file — but only once. If the canonical is already resident,
-            # it keeps priority (first-in-list wins the tie), so a second
-            # resident:true entry for the same file can't clobber it.
-            file_to_canonical[m.file] = m.name
-            file_to_canonical_resident[m.file] = True
+            # (file, gpu) — but only once. If the canonical is already
+            # resident, it keeps priority (first-in-list wins the tie), so a
+            # second resident:true entry can't clobber it.
+            key_to_canonical[key] = m.name
+            key_to_canonical_resident[key] = True
 
     return [
         m
         for m in config.models
-        if m.enabled and file_to_canonical.get(m.file) == m.name
+        if m.enabled and key_to_canonical.get((m.file, m.gpu)) == m.name
     ]
 
 
@@ -115,11 +134,17 @@ def generate(config: Config) -> str:
     """
     entries = _select_entries(config)
 
-    # Group membership (PLAN §4.1 shape):
+    # Group membership (PLAN §4.1 shape, extended 2026-08-15 for the
+    # summarizer GPU1 fast path):
     # resident = resident:true AND gpu != 0  (CPU + GPU1 always-loaded)
     # gpu0-main = gpu == 0  (big-model swap slot, one active at a time)
+    # gpu1-swap = gpu == 1 AND resident:false  (GPU1 on-demand swap slot,
+    #   separate from the resident group so it never evicts dispatcher and
+    #   dispatcher never blocks it — they coexist on the same card, VRAM
+    #   permitting; see utility-gpu in config.yaml)
     resident_names = [e.name for e in entries if e.resident and e.gpu != 0]
     gpu0_names = [e.name for e in entries if e.gpu == 0]
+    gpu1_swap_names = [e.name for e in entries if e.gpu == 1 and not e.resident]
 
     timeout = int(config.llama_swap.timeout_s)
 
@@ -127,7 +152,7 @@ def generate(config: Config) -> str:
         "# generated — do not hand-edit",
         f"healthCheckTimeout: {timeout}",
         "macros:",
-        f"  llama: {_LLAMA_BIN} --host 0.0.0.0 --port ${{PORT}} --jinja",
+        f"  llama: {_LLAMA_BIN} --host 0.0.0.0 --port ${{PORT}} --jinja --parallel 1",
         "models:",
     ]
 
@@ -161,5 +186,8 @@ def generate(config: Config) -> str:
         f"  resident: {{ swap: false, exclusive: false, members: [{res_members}] }}"
     )
     lines.append(f"  gpu0-main: {{ swap: true, members: [{gpu0_members}] }}")
+    if gpu1_swap_names:
+        gpu1_members = ", ".join(gpu1_swap_names)
+        lines.append(f"  gpu1-swap: {{ swap: true, members: [{gpu1_members}] }}")
 
     return "\n".join(lines) + "\n"

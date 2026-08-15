@@ -14,6 +14,7 @@ only so this wave's tests don't depend on unmerged work.
 from __future__ import annotations
 
 import json
+import time
 from collections.abc import AsyncIterator
 from pathlib import Path
 
@@ -615,6 +616,80 @@ def test_chat_summary_compacts_old_turns_instead_of_raw_truncation(
     assert any("Earlier turns covered X, Y, Z." in m["content"] for m in sent)
     # cfg default summary_every_n_turns=6 -> 12 messages kept + 2 system msgs.
     assert len(sent) <= 14
+
+
+def test_chat_summary_compaction_trims_tail_to_what_summary_doesnt_cover(
+    tmp_path: Path,
+) -> None:
+    """2026-08-15 fix: when a `summary` span records exactly when the
+    rolling summary was last regenerated, the compacted tail must exclude
+    everything at or before that point instead of always keeping a fixed
+    `summary_every_n_turns`-sized tail regardless of overlap -- otherwise
+    the raw tail and the summary cover the same turns twice on every turn
+    right after a regen."""
+    fake = FakeLLMClient(chunks=["ok"])
+    cfg = Config(
+        llama_swap=LlamaSwapConfig(base_url="http://127.0.0.1:8080/v1"),
+        db=DbConfig(path=str(tmp_path / "app.db")),
+        models=[
+            ModelEntry(
+                name="chat-default",
+                **{"class": "general"},
+                ctx=32768,
+                gpu=0,
+                tool_call="native",
+                max_tokens=1024,
+                file="/models/chat-default.gguf",
+                quant="Q4_K_M",
+            ),
+        ],
+        defaults=DefaultsConfig(
+            chat_model="chat-default",
+            utility_model="chat-default",
+            title_model="chat-default",
+        ),
+    )
+    app = create_app(config=cfg)
+    app.state.llm_client = fake
+    client = TestClient(app)
+    client.__enter__()
+
+    chat_id = client.post("/api/chats", json={}).json()["id"]
+    for i in range(10):
+        client.post(f"/api/chats/{chat_id}/messages", json={"content": f"turn {i}"})
+
+    app.state.db.execute(
+        "UPDATE chats SET summary = ? WHERE id = ?",
+        ("Earlier turns covered X, Y, Z.", chat_id),
+    )
+    trace_id = "test-summary-trace"
+    now_ms = int(time.time() * 1000)
+    app.state.db.execute(
+        "INSERT INTO traces (trace_id, chat_id, started_at) VALUES (?, ?, ?)",
+        (trace_id, chat_id, now_ms),
+    )
+    # covered_message_count = all 20 messages so far (10 turns * 2) -- the
+    # exact cursor _apply_summary_compaction now reads (2026-08-15: replaced
+    # the old timestamp cutoff, which couldn't tell "covered by this regen"
+    # from "just happened to land in the same wall-clock second").
+    app.state.db.execute(
+        "INSERT INTO spans (trace_id, stage, started_at, ended_at, data) "
+        "VALUES (?, 'summary', ?, ?, ?)",
+        (trace_id, now_ms, now_ms, json.dumps({"covered_message_count": 20})),
+    )
+    app.state.db.commit()
+
+    client.post(f"/api/chats/{chat_id}/messages", json={"content": "one more turn"})
+
+    sent = fake.seen_messages
+    assert sent is not None
+    assert any("Earlier turns covered X, Y, Z." in m["content"] for m in sent)
+    # Everything from before the summary regen must be gone from the raw
+    # tail -- only the new turn (plus the two system messages) remains.
+    assert not any("turn 0" in m["content"] for m in sent)
+    assert not any("turn 9" in m["content"] for m in sent)
+    assert any("one more turn" in m["content"] for m in sent)
+    assert len(sent) <= 3
 
 
 # ---------------------------------------------------------------------------

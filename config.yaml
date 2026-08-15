@@ -134,6 +134,38 @@ models:
     resident: true
     ttl_s: 0
     extra_flags: []
+  - name: utility-gpu
+    # Same model as `utility`, placed on GPU1 (3070) resident (ttl:0,
+    # always loaded) alongside dispatcher -- always-warm summaries, no swap
+    # latency, matching how dispatcher/utility/embed/classifier are already
+    # always-warm. This requires coder-small to live on GPU0 (its default
+    # placement in this file), not GPU1: measured live on ailab 2026-08-15
+    # (nvidia-smi, 8192 MiB 3070) -- dispatcher loaded alone = 1303 MiB,
+    # + utility-gpu loaded (ctx 16384, mid-generation) = 7253 MiB total,
+    # leaving only ~590 MiB free. coder-small loaded alongside dispatcher
+    # would need another ~3650 MiB (4951 MiB total measured for that pair)
+    # -- doesn't fit with utility-gpu too (1303+5950+3650 = ~10900 MiB >
+    # 8192 MiB card). Phase 0 tested *permanent* co-residency of utility+
+    # embed alongside dispatcher on GPU1 and rejected it for compute
+    # contention degrading dispatcher 5-7x (phase0-measurements.md §8) --
+    # that was concurrent generation load from two always-busy models
+    # (summary + embed both fired constantly); a summarizer that's merely
+    # loaded-and-idle between the rare token-pressure-triggered runs doesn't
+    # reproduce that contention, only VRAM residency does, which fits here.
+    class: utility
+    ctx: 16384
+    gpu: 1
+    tool_call: none
+    thinking: false
+    reasoning_off: true
+    max_tokens: 512
+    enabled: true
+    file: "/home/john/llm-stack/models/gguf/qwen3-8b.gguf"
+    quant: Q4_K_M
+    mmproj: null
+    resident: true
+    ttl_s: 0
+    extra_flags: []
   - name: utility
     class: utility
     ctx: 8192
@@ -141,7 +173,13 @@ models:
     tool_call: none
     thinking: false
     reasoning_off: true
-    max_tokens: 1024
+    # Was 1024. Measured live 2026-08-15 (docs/HANDOFF.md): CPU decode is
+    # ~5 tok/s, so 1024 output tokens alone costs ~205s -- with
+    # background.summary_timeout_s at 180s that leaves a *negative* input
+    # budget (_time_budget_tokens in summaries.py), meaning the CPU path
+    # could never actually summarize anything. 512 leaves real room for
+    # input tokens within the timeout.
+    max_tokens: 512
     enabled: true
     file: "/home/john/llm-stack/models/gguf/qwen3-8b.gguf"
     quant: Q4_K_M
@@ -180,12 +218,32 @@ models:
     reasoning_off: true
     max_tokens: 64
     enabled: true
-    file: "/home/john/llm-stack/models/gguf/Qwen3-1.7B-Q8_0.gguf"
-    quant: Q8_0
+    file: "/home/john/llm-stack/models/gguf/Qwen3-1.7B-Q4_K_M.gguf"
+    quant: Q4_K_M
     mmproj: null
     resident: true
     ttl_s: 0
-    extra_flags: ["--threads", "4"]
+    # 2026-08-15: switched from Q8_0 to Q4_K_M -- Q8_0's CPU decode floor
+    # (~14.5 tok/s even fully warm/threaded, confirmed live) put every
+    # routing call at 0.9-1s minimum regardless of thread count. Q4_K_M is
+    # ~2x lighter per token on CPU. This is a routing-model change, so it's
+    # gated on scripts/eval_router.py re-clearing the >=90% bar (PLAN.md
+    # §Phase 2 exit criterion) before being trusted in production -- the
+    # original Qwen3-1.7B-Q8_0.gguf file is left on disk for instant revert
+    # if it doesn't.
+    #
+    # Live incident 2026-08-15 (trace 91017f4d, chat c33ddccd): capping this
+    # to --threads 4 alongside utility/embed (same blanket contention fix,
+    # no dedicated justification) turned every classifier call -- which
+    # runs on the hot path for EVERY chat turn's routing, not just during a
+    # rare concurrent summary -- into a 7-7.6s stall, ~7x the documented
+    # 0.9-1.1s warm baseline (PLAN.md §4.1, phase0-measurements.md §12).
+    # Unlike utility's summary generation (long-running, 1024 max_tokens,
+    # 17-40s -- the actual documented contention source, config.yaml's
+    # utility comment above), classifier's calls are brief (max_tokens=64,
+    # ~1s even uncapped), so the contention window a higher thread count
+    # risks is short. Latency-critical + brief >> throughput-capped here.
+    extra_flags: ["--threads", "16"]
 
 defaults:
   chat_model: "chat-default"

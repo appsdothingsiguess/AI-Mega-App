@@ -1,5 +1,5 @@
 /** Debug view: trace list, waterfall, span detail, live /api/debug/stream. */
-import { getGpuInventory, getTrace, listTraces, streamDebugSpans, } from "../api.js";
+import { getGpuInventory, getTrace, listModels, listTraces, streamDebugSpans, } from "../api.js";
 import { escapeHtml } from "../markdown.js";
 import { get } from "../store.js";
 function chatLabel(chatId) {
@@ -40,6 +40,32 @@ function mb(n) {
     const v = Number(n);
     return Number.isFinite(v) ? `${(v / 1024).toFixed(1)}GB` : "—";
 }
+/** Total chat context used vs. that turn's model ctx window (real
+ *  prompt_tokens from llama.cpp's own usage field on the llm_stream span —
+ *  never a client-side estimate — against the roster's configured ctx for
+ *  the model that turn actually ran on). This is the same signal
+ *  app/background/summaries.py triggers rolling-summary compaction from,
+ *  so it doubles as "how close is this chat to summarizing / truncating." */
+function contextUsageHtml(t, modelCtx) {
+    const llmSpan = t.spans.find((s) => {
+        if (s.stage !== "llm_stream")
+            return false;
+        const usage = s.data?.usage;
+        return typeof usage?.prompt_tokens === "number";
+    });
+    if (!llmSpan)
+        return "";
+    const usage = llmSpan.data.usage;
+    const used = usage.prompt_tokens;
+    const model = typeof llmSpan.data?.model === "string" ? llmSpan.data.model : null;
+    const ctx = model ? modelCtx[model] : undefined;
+    if (!ctx) {
+        return `<span class="context-usage" title="model ctx unknown">${used} tok</span>`;
+    }
+    const pct = Math.round((used / ctx) * 100);
+    const cls = pct >= 90 ? "context-usage is-hot" : pct >= 50 ? "context-usage is-warm" : "context-usage";
+    return `<span class="${cls}" title="${used} of ${ctx} tokens used on ${escapeHtml(model ?? "")}">${used}/${ctx} tok (${pct}%)</span>`;
+}
 export function createDebugView() {
     let root = null;
     let traces = [];
@@ -50,6 +76,7 @@ export function createDebugView() {
     let abort = null;
     let gpus = [];
     let gpuTimer = null;
+    let modelCtx = {};
     const unmount = () => {
         live?.stop();
         live = null;
@@ -136,6 +163,7 @@ export function createDebugView() {
         meta.className = "waterfall-meta";
         meta.innerHTML = `<span class="mono">${escapeHtml(String(model))}</span>
       ${routeChipHtml(selected)}
+      ${contextUsageHtml(selected, modelCtx)}
       <span class="muted">${selected.spans.length} spans</span>`;
         pane.appendChild(meta);
         const id = document.createElement("div");
@@ -344,6 +372,13 @@ export function createDebugView() {
             }
             catch {
                 traces = [];
+            }
+            try {
+                const roster = await listModels();
+                modelCtx = Object.fromEntries(roster.map((m) => [m.alias, m.ctx]));
+            }
+            catch {
+                modelCtx = {};
             }
             render();
             if (route.traceId)
