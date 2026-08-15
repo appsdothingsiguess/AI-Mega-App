@@ -101,7 +101,11 @@ async def _run_summary(app: Any, chat_id: str) -> None:
         if not content:
             raise RuntimeError("summary model returned empty content")
         await run_sync(_set_summary, conn, chat_id, content)
-        fields: dict[str, Any] = {"chars": len(content)}
+        fields: dict[str, Any] = {
+            "chars": len(content),
+            "prompt": prompt_messages[-1]["content"],
+            "response": content,
+        }
         if usage is not None:
             fields["usage"] = usage.model_dump()
         sp.set(**fields)

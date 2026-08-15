@@ -142,7 +142,14 @@ models:
     mmproj: null
     resident: true
     ttl_s: 0
-    extra_flags: []
+    # CPU-only inference is memory-bandwidth-bound past ~8 threads on this
+    # box (32 cores total). Uncapped, llama-server defaults to grabbing
+    # most/all cores for the duration of a summary run, starving the CPU
+    # side (sampling/tokenization/streaming) of concurrent GPU-backed
+    # requests — observed as spurious swap_wait stalls on coder-small while
+    # a summary was in flight (2026-08-11, traces a2cfae1f/a0e31fde) even
+    # though ttl:0 kept it resident. Capping leaves headroom for the rest.
+    extra_flags: ["--threads", "8"]
   - name: embed
     class: embed
     ctx: 2048
@@ -157,7 +164,7 @@ models:
     mmproj: null
     resident: true
     ttl_s: 0
-    extra_flags: []
+    extra_flags: ["--threads", "4"]
   - name: classifier
     class: classifier
     ctx: 4096
@@ -172,7 +179,7 @@ models:
     mmproj: null
     resident: true
     ttl_s: 0
-    extra_flags: []
+    extra_flags: ["--threads", "4"]
 
 defaults:
   chat_model: "chat-default"

@@ -118,7 +118,7 @@ models:
   mmproj: null
   resident: true
   ttl_s: 0
-  extra_flags: []
+  extra_flags: ["--threads", "8"]
 - name: embed
   class: embed
   ctx: 2048
@@ -133,7 +133,7 @@ models:
   mmproj: null
   resident: true
   ttl_s: 0
-  extra_flags: []
+  extra_flags: ["--threads", "4"]
 - name: classifier
   class: classifier
   ctx: 4096
@@ -148,7 +148,7 @@ models:
   mmproj: null
   resident: true
   ttl_s: 0
-  extra_flags: []
+  extra_flags: ["--threads", "4"]
 routing:
   classifier:
     model: classifier

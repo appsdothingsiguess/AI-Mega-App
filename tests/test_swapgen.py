@@ -65,15 +65,15 @@ models:
     env: ["CUDA_VISIBLE_DEVICES=1", "CUDA_DEVICE_ORDER=PCI_BUS_ID"]
     ttl: 0
   utility:
-    cmd: ${{llama}} -m {_BASE}/qwen3-8b.gguf --device none -ngl 0 -c 8192 --reasoning off
+    cmd: ${{llama}} -m {_BASE}/qwen3-8b.gguf --device none -ngl 0 -c 8192 --reasoning off --threads 8
     env: ["CUDA_VISIBLE_DEVICES=", "CUDA_DEVICE_ORDER=PCI_BUS_ID"]
     ttl: 0
   embed:
-    cmd: ${{llama}} -m {_BASE}/nomic-embed-text-v2-moe.Q4_K_M.gguf --device none -ngl 0 --embedding -c 2048
+    cmd: ${{llama}} -m {_BASE}/nomic-embed-text-v2-moe.Q4_K_M.gguf --device none -ngl 0 --embedding -c 2048 --threads 4
     env: ["CUDA_VISIBLE_DEVICES=", "CUDA_DEVICE_ORDER=PCI_BUS_ID"]
     ttl: 0
   classifier:
-    cmd: ${{llama}} -m {_BASE}/Qwen3-1.7B-Q8_0.gguf --device none -ngl 0 -c 4096 --reasoning off --temp 0
+    cmd: ${{llama}} -m {_BASE}/Qwen3-1.7B-Q8_0.gguf --device none -ngl 0 -c 4096 --reasoning off --temp 0 --threads 4
     env: ["CUDA_VISIBLE_DEVICES=", "CUDA_DEVICE_ORDER=PCI_BUS_ID"]
     ttl: 0
 groups:
