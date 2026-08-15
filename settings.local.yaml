@@ -5,7 +5,7 @@ models:
   gpu: 0
   tool_call: native
   thinking: false
-  reasoning_off: false
+  reasoning_off: true
   max_tokens: 4096
   enabled: true
   file: /home/john/llm-stack/models/gguf/Qwen3.6-35B-A3B-UD-Q4_K_M.gguf

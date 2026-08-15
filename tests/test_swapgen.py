@@ -48,7 +48,7 @@ macros:
   llama: {_BIN} --host 0.0.0.0 --port ${{PORT}} --jinja
 models:
   chat-default:
-    cmd: ${{llama}} -m {_BASE}/Qwen3.6-35B-A3B-UD-Q4_K_M.gguf -ngl 999 -c 32768
+    cmd: ${{llama}} -m {_BASE}/Qwen3.6-35B-A3B-UD-Q4_K_M.gguf -ngl 999 -c 32768 --reasoning off
     env: ["CUDA_VISIBLE_DEVICES=0", "CUDA_DEVICE_ORDER=PCI_BUS_ID"]
     ttl: 0
   coder:

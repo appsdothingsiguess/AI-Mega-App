@@ -27,7 +27,13 @@ models:
     gpu: 0
     tool_call: native
     thinking: false
-    reasoning_off: false
+    # Qwen3.6 is hybrid-reasoning and self-triggers a full internal <think>
+    # block even with thinking:false at the request layer -- only
+    # llama-server's own --reasoning off flag reliably suppresses it (see
+    # the frozen rule in CLAUDE.md). Live trace 2026-08-15 (c132ba62) showed
+    # 851 completion tokens for a one-line reply, ~100s wall time, almost
+    # entirely invisible reasoning.
+    reasoning_off: true
     max_tokens: 4096
     enabled: true
     file: "/home/john/llm-stack/models/gguf/Qwen3.6-35B-A3B-UD-Q4_K_M.gguf"
