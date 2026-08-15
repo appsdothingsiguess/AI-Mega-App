@@ -4,6 +4,322 @@ Working notes for whichever Claude Code session picks this up next.
 Not a planning doc, not user-facing — just context that isn't obvious
 from the code alone. Delete or trim entries once they're stale.
 
+## 2026-08-15 — title-gen still echoing the exchange verbatim — ROOT CAUSE FOUND (dispatcher, not the classifier), FIX COMMITTED, NO RESTART NEEDED
+
+User re-reported "title generation and/or classifier behavior is still
+broken" despite prior sessions' fixes (a37fc1c truncation, 3668ee1 span
+recording, a43d9c3 punctuation strip). Scope: title-gen + classifier only
+(model-switch UI and the summarizer timeout are separate concurrent
+agents' work this session — see the entry below and `docs/FIX_PLAN_2026-08-11.md`).
+
+**Classifier: confirmed healthy, not the bug.** `routing.classifier.timeout_s:
+90.0` is live in both `config.yaml` and `settings.local.yaml` (the 6.0->90.0
+fix already landed). `orchestrator.py:318` still calls `_route(...,
+llm_client=self.llm_client, config=self.config, ...)` — the 2026-08-02
+silent-fallback regression has not recurred. Queried `data/app.db`'s `spans`
+table directly (`stage='route'`): the one non-override route in the
+retained window shows `source: 'classifier'`, `confidence: 0.97`,
+`latency_ms: 2562` — real classification, not a fallback. (Most other route
+spans are `source: 'override'` because the user has been manually pinned to
+`coder-small`, which is expected behavior, not a bug.)
+
+**Title-gen: real bug, still live.** Read all 11 recent `stage='title'`
+spans out of `data/app.db` directly. About half were fine ("Python Script:
+Printing Numbers 1 to 100...", "Today's Weather Forecast"), but the rest
+were the dispatcher model (Hammer2.1-1.5B, a tool-calling model, not a
+generative one) echoing the exchange almost verbatim instead of
+summarizing it:
+- raw `"Meow! How are you doing? Meow!"` -> stored title `"Meow! How are
+  you doing? Meow"` (word-for-word copy of the assistant's own reply)
+- raw `"Chat: Hello! It sounds like you might be trying..."` -> stored
+  title `"Chat: Hello! It sounds like you"` — model also leaked a
+  `"Chat:"` preamble that `clean_title` only stripped for `"Title:"`
+- raw `"<project_instructions>"` -> stored title `"<project_instructions>"`
+  verbatim — a persona/project-instructions block that this user's chats
+  inject as literal `user` message content got fed straight into the
+  title prompt and echoed back untouched (separate, narrower issue —
+  noted below, not fixed this session)
+
+Root cause: the a37fc1c truncation fix only stops echoing of *long*
+replies (nothing to truncate on a short one), so short/casual exchanges
+(chit-chat greetings) still slip straight through unchanged, and
+`clean_title` had no check for "is this actually a summary or just a
+restatement."
+
+**Fix (`app/background/titles.py`):**
+1. `clean_title` now also strips a leaked `"Chat:"`/`"Summary:"` preamble
+   (previously only `"Title:"`), regex generalized to
+   `^(?:title|chat|summary)\s*:\s*`.
+2. New `is_echo(title, *sources)` — normalizes to lowercase alnum words
+   and flags a title whose first ≤6 words exactly match the opening words
+   of the user or assistant text it was generated from. Deliberately
+   requires a full-prefix match (not just topic-word overlap) so a
+   legitimately synthesized title that happens to open with 2-3 similar
+   words (e.g. "The RTX 3090's VRAM Budget for..." vs a reply that also
+   opens "The RTX 3090's 24GB VRAM...") is not falsely flagged — verified
+   against that exact live pair in `tests/test_background.py`.
+3. `_first_exchange` now also returns the raw (untruncated) user/assistant
+   text alongside the formatted prompt string; `_run_title_job` runs
+   `is_echo` against both, and on a match writes a deterministic
+   fallback title (`_fallback_title`: first 6 words of the user's own
+   message, same punctuation cleanup as `clean_title`) instead of the
+   echoed garbage. The `title` span now also records `echo_detected` for
+   Debug visibility.
+
+Tests added to `tests/test_background.py`: `test_clean_title_strips_chat_preamble`,
+`test_is_echo_detects_verbatim_restatement`, `test_is_echo_detects_leaked_user_tag`,
+`test_is_echo_allows_similar_but_distinct_titles`, and an end-to-end
+`test_echoed_title_falls_back_to_deterministic` through
+`on_turn_complete`/queue drain. Full gate: `pytest -q` 157 passed,
+`npx tsc --noEmit` clean.
+
+**Not fixed this session (noted for whoever picks it up):** the
+`<project_instructions>` leak is a distinct, narrower bug — this user's
+chats apparently inject a persona/project-instructions block as literal
+`user`-role message content (rather than through a system-prompt channel),
+and `_first_exchange` picks up whatever the *first* user message in the
+chat is, instructions block included, with no awareness that it isn't real
+conversation content. `is_echo` will now stop it from becoming the literal
+stored title (falls back to a truncated echo of that same block instead,
+which is still not a good title), but the actual fix belongs wherever
+project instructions get woven into message history — outside this
+session's file scope (`app/chat/orchestrator.py`'s project-instructions
+handling / wherever project docs get injected, not the routing/classifier
+call sites this session was scoped to touch).
+
+**Deploy:** no restart needed — pure Python logic change in a background
+job, no config/schema/SSE changes.
+
+## 2026-08-15 — summarizer timeout (session-5 continuation) — FIXES VERIFIED, ONE COMMITTED, LIVE RESTART STILL NEEDED
+
+Continuation of the 2026-08-11 session-5 entry ("6th-message hang"). User
+still reported the rolling summary as "not working." Picked up the two
+unfinished threads from that entry plus an interrupted-session diff sitting
+in the working tree.
+
+**1. Warmup-storm fix (item 4 of the session-5 entry) — already landed.**
+Checked `app/warmup.py`/`app/main.py::_warmup_loop` against the description:
+`loaded_resident_names()` and the `skip` param on `warmup_resident_models()`
+are both present and wired into `_warmup_loop` (only re-pings stragglers
+during the startup phase). This is commit `f75d812` ("fix: skip re-pinging
+already-loaded residents during startup warmup"), already on `main`. Per
+the session-5 entry this was written but **not yet deployed** as of
+2026-08-11 (needed a restart the user hadn't approved) — status unchanged;
+still needs `sudo systemctl restart` + live re-trace to confirm the ping
+storm actually stops and the summary job's `utility` call stops timing out
+in practice.
+
+**2. Uncommitted diff found in the working tree — verified and committed.**
+Two changes were sitting uncommitted, apparently from an interrupted prior
+session, both in scope for this bug:
+- `app/background/summaries.py`: adds `prompt`/`response` fields to the
+  `summary` debug span, mirroring the already-committed title-span fix
+  (`3668ee1`). Reviewed — correct, low-risk, makes summary failures/timeouts
+  actually inspectable in the Debug panel instead of opaque `chars`-only
+  spans. Kept.
+- `config.yaml`/`settings.local.yaml`: caps `--threads` on the three
+  CPU-resident models (`utility: 8`, `embed: 4`, `classifier: 4`, out of 32
+  cores). Rationale in the `config.yaml` comment: uncapped CPU inference
+  was grabbing most/all cores during a summary run, starving concurrent
+  CPU-resident calls (classifier route lookups, embed) — a second,
+  independent contention path from the warmup-storm one, since it can
+  happen any time a summary and a classifier/embed call overlap, not just
+  during the post-restart warmup window. Verified `--threads` is a real
+  `llama-server` flag (`llama-server --help`), confirmed `app/gpu/swapgen.py`
+  already forwards `extra_flags` generically (no swapgen code change
+  needed), and confirmed `tests/test_swapgen.py`'s golden `cmd:` strings for
+  `utility`/`embed`/`classifier` were updated to match. `pytest -q` (152
+  passed) and `npx tsc --noEmit` both clean with the change in.
+  Judged sound and complementary to the warmup fix (that fix prevents the
+  storm from starting after a restart; this one bounds the blast radius if
+  CPU contention happens for any other reason) — committed both.
+- Left one unrelated hunk in `settings.local.yaml` (`ttl_s: null -> 0` on
+  the `coder` model, lines 55-61) uncommitted/unstaged — it was mixed into
+  the same working-tree diff but isn't a utility/embed/classifier/dispatcher
+  threads-cap change and isn't described anywhere in the session-5 or
+  interrupted-session context, so it wasn't reviewed here. Still present
+  in the working tree for whoever owns it.
+
+**Not independently re-reproduced live** (no GPU-box restart run this
+session, per instructions) — the fix is code+config verified and
+test-passing, but the actual timeout-under-contention behavior can only be
+confirmed post-restart with a live 6-turn chat, same as the session-5 entry
+already said. Next session: get the restart approved, replay a 6-message
+chat, confirm the `summary` span completes without `timeout` and check its
+new `prompt`/`response` fields render sensibly in the Debug panel.
+
+
+
+User reported model-switch is "still broken" despite the session-3
+`d6a6dd0` fix (hydrate picker from `chat.model_override` on open) and the
+override-resolution logic in `orchestrator.py:298-310` (explicit `model` or
+`chat_row["model_override"]` always wins, source `"override"`) both already
+being on `main` and passing their tests. Confirmed both of those really are
+in place and correct — this is a different, previously-undiscovered gap in
+the same feature, only visible in one specific sequence:
+
+**Repro:** open a brand-new chat (no `chatId` yet) → pick a model from the
+picker *before* sending anything → send the first message → the response
+correctly comes from the picked model (looks fixed!) → navigate away and
+back to the chat, or reload the page → picker shows "Auto" again and the
+next message silently goes back through classifier routing.
+
+**Root cause:** `applyModelPick()` (`web/src/views/composer.ts:103-114`)
+only calls `setChatModel()` (persists to `chats.model_override` via `POST
+/api/chats/{id}/model`) when a `chatId` already exists — correct, since
+there's no chat row to persist to yet on the "New chat" screen. But nothing
+ever went back and persisted that pending pick once the chat *was* created.
+`ensureChat()` (`web/src/views/chat.ts`, was ~line 268) created the row via
+plain `createChat()` (no model) and `send()`/`regenerate()` pass
+`model: get().modelOverride` straight through in the per-request SSE body
+— so `orchestrator.handle_message`'s `model` param carries the pick and the
+*first* turn resolves correctly — but `chat.model_override` in SQLite stays
+NULL forever. Any later re-hydration (`chat.ts` mount: `modelOverride:
+chat?.model_override ?? null`, the exact code path session 3 added) reads
+that NULL and silently resets to Auto. Reads exactly like "my model pick
+didn't take" even though it did, for one turn, then quietly reverted.
+
+**Fix (`web/src/views/chat.ts::ensureChat`):** after creating the chat row,
+if `store.modelOverride` is already set (a pre-send pick), call
+`applyModelPick(id, pending)` to persist it before returning — same
+`setChatModel` path the existing picker-on-an-open-chat flow already uses,
+just also triggered retroactively at the moment the chat starts existing.
+
+Rebuilt `web/js/views/chat.js` (`npx tsc`, committed with the source per
+CLAUDE.md's "one TS module, plain tsc" rule). No backend/config files
+touched (this was believed to possibly need a config/backend fix per the
+sticky-routing hypothesis in the task brief, but sticky routing only
+applies on the *classifier* path — the override path bypasses it entirely
+and was already correct; the bug was purely a frontend persistence gap).
+Verified: `.venv/bin/python -m pytest -q` 152 passed, `npx tsc --noEmit`
+clean. This is a static-file-only change — no `sudo systemctl restart`
+needed, should go live on next static asset refresh/deploy.
+
+## 2026-08-11 — session 5: 6th-message hang ("re-loads a model already loaded") — ROOT CAUSE IDENTIFIED, FIX WRITTEN BUT NOT DEPLOYED, hand to a more powerful model for full debug
+
+**User-reported symptom (live, casual chat):** every ~6 messages into a
+conversation, the app appears to reload a model that was already loaded and
+the UI hangs. User asked for this to be logged for a deeper debug pass by a
+more powerful model — this entry has everything gathered so far so that
+session doesn't have to re-derive it.
+
+**What's actually confirmed so far (this session), likely explains it fully
+but NOT yet live-verified post-fix:**
+
+1. `background.summary_every_n_turns` is `6` (`config.yaml:239`) — the
+   rolling-summary job (`app/background/summaries.py::maybe_enqueue_summary`)
+   fires exactly on the 6th user turn (`turn_count % every_n == 0`), and
+   again at 12, 18, etc. This lines up exactly with "after 6 messages."
+2. Root-caused via live trace inspection (chat id
+   `90beebb7454f4a659ab4a4aadcdde0d1`, "The RTX 3090's VRAM Budget for"):
+   at that chat's 6th user turn, the summary job's call to `utility`
+   **timed out after 120s, twice** (initial attempt + the one automatic
+   retry `summaries.py` allows) — confirmed via the `summary` span's stored
+   `error: "LLMError('timeout: ')", duration_ms: 120008` in both attempts.
+3. Cause of the timeout: `app/main.py::_warmup_loop`'s startup-phase retry
+   was stuck re-pinging **all 5** resident models (`chat-default`,
+   `dispatcher`, `utility`, `embed`, `classifier`) with real inference
+   completions every 15s, for ~10 minutes after a restart, because
+   `all_residents_loaded()`'s `/v1/models` status check kept lagging behind
+   the actual ping results and never converged. This is very likely what
+   reads to the user as "it reloads a model already loaded" — the warm-up
+   loop genuinely does keep re-issuing load/ping traffic to already-loaded
+   models, visible as repeated activity for models that shouldn't need it
+   again. That ping storm was competing for the same CPU cores as the
+   summary job's own call to `utility` (also CPU-resident), starving it.
+4. **Fix written this session** (`app/warmup.py`: new
+   `loaded_resident_names()` + a `skip` param on `warmup_resident_models()`;
+   `app/main.py::_warmup_loop` now checks which residents are already
+   loaded before each sweep and only re-pings the stragglers). `pytest -q`
+   (152 passed) and `npx tsc --noEmit` clean. **NOT YET DEPLOYED** — needs
+   `sudo systemctl restart ai-mega-app` (user hadn't approved the restart as
+   of this session's end).
+5. Separately observed same session, possibly related: a `route` span on
+   this same chat took **3694ms**, almost entirely the classifier call
+   (`classifier_ms: 3692`) — well above the documented ~0.9-1.1s warm
+   baseline. Plausibly the same warm-up-storm contention; not independently
+   confirmed. Worth re-checking after the warmup fix is deployed — if route
+   latency is still spiking to seconds post-fix, that's a distinct bug.
+6. Also separately observed same session (probably unrelated to the hang,
+   but worth the next session having it): `chat-default` has `thinking:
+   false` but `reasoning_off: false` in `config.yaml`/overlay. Since it's
+   Qwen3.6 (hybrid-reasoning capable), it self-triggers a full internal
+   `<think>` block regardless — one live trace showed 1925 total completion
+   tokens, only 683 of them the actual visible answer (1242 tokens of
+   invisible reasoning), inflating a response to 13.4s. Per `CLAUDE.md`'s
+   own frozen rule, only llama-server's `--reasoning off` flag reliably
+   suppresses this, not the `thinking` request flag alone. Not fixed —
+   user was deciding whether to flip `reasoning_off: true` for
+   `chat-default` when this session ended.
+
+**What's NOT yet confirmed:** whether the warmup-storm fix (item 4) is
+actually the *entire* explanation for "hangs after 6 messages," or just a
+major contributor. The next session should: (a) get the restart approved
+and deployed, (b) live-reproduce a 6-message chat and confirm the summary
+job completes without timing out and the route/classifier latency stays
+near baseline, (c) if the hang still reproduces post-fix, look harder at
+whether `POST /api/gpu/apply`-triggered reloads or something in the
+swap-aware routing (`orchestrator.py`, prefers currently-loaded GPU0 model)
+could itself be forcing a real swap around turn 6 for a reason unrelated to
+the background jobs. Don't assume item 4 alone is the full fix until
+live-reproduced.
+
+## 2026-08-11 — session 4: `reasoner-alt` (DeepSeek-R1) enabled, stale GGUF filename fixed — LIVE-VERIFIED
+
+User switched a chat to `reasoner` expecting DeepSeek-R1 and saw no
+load banner + assumed something was broken. Two separate things
+clarified/fixed:
+
+**1. `reasoner` is not DeepSeek — this is by design, not a bug.**
+`reasoner` (`config.yaml:39-54`) is the same Qwen3.6-35B-A3B blob as
+`chat-default`, thinking enabled at the request layer (comment already
+says this). Since `chat-default` was already loaded when the user
+switched, no swap occurred — that's why there was no loading banner.
+The actual DeepSeek-R1-Distill-Qwen-32B model is `reasoner-alt`, which
+was `enabled: false` by default (`PLAN.md` §4.1: off by default because
+Phase 0 measured 3/6 debug-diagnosis with confidently-wrong fixes,
+despite 7/7 on plain reasoning).
+
+**2. Real bug found while enabling `reasoner-alt`: stale GGUF filename.**
+`config.yaml`/`settings.local.yaml` both pointed `reasoner-alt.file` at
+`DeepSeek-R1-Distill-Qwen-32B-Q4_K_M.gguf`, which doesn't exist on disk
+— confirmed via `ls`. Actual files at `/home/john/llm-stack/models/gguf/`
+are `deepseek-r1-32b.gguf` and `deepseek-r1-32b-16k.gguf` (both 19.8GB,
+dated Jul 14 — a rename happened at some point after Phase 0 and
+`config.yaml` was never updated). This means `reasoner-alt` would have
+404'd or failed to load even if someone had flipped `enabled: true`
+before now. Picked the plain (non-`-16k`) file to match the existing
+`ctx: 8192` setting.
+
+**Fix:** `config.yaml` — corrected `file:` path only, left
+`enabled: false` (shipped default stays off per the Phase 0 decision,
+golden tests in `test_swapgen.py` assert this). `settings.local.yaml`
+(user override) — corrected `file:` path AND `enabled: true`, so
+`reasoner-alt` is live for this user without changing the repo default.
+`pytest` gate confirmed: flipping `enabled` in `config.yaml` itself
+breaks 3 golden swapgen tests (`test_golden`,
+`test_reasoner_alt_disabled`, `test_gpu0_main_membership`) — the overlay
+is the correct layer for a per-user enable, not the checked-in default.
+
+**Live-verified after user restarted `ai-mega-app` + `POST /api/gpu/apply`:**
+`reasoner-alt` appears in the regenerated `llama-swap.yaml`'s
+`gpu0-main` swap group (`cmd: ... -m .../deepseek-r1-32b.gguf ... -c
+8192`, `CUDA_VISIBLE_DEVICES=0`). Direct `curl` to
+`/v1/chat/completions` with `model: reasoner-alt` returned a real R1
+reasoning trace in `reasoning_content` (~14s cold load, ~38 tok/s
+generation) — confirms the fix works end-to-end, not just config-valid.
+
+**Note for later:** `get_config()` (`app/config.py:209-216`) caches the
+merged config in-process and only invalidates via
+`reset_config_cache()`, which Settings-UI writes call but a direct
+hand-edit of `settings.local.yaml`/`config.yaml` does not — any manual
+YAML edit needs a full service restart before `/api/gpu/apply` will
+pick it up, not just the apply call alone. Hit this live this session:
+first `apply` after editing the overlay silently used the stale cached
+config (missing `reasoner-alt`, and oddly also missing `coder-small`
+from `gpu0-main` — unexplained, worth checking next time it's
+reproducible) until the user restarted the service.
+
 ## 2026-08-11 — session 3: override hydration, live-refresh, scroll, summary, timeout — all FIXED
 
 Sixth round of live bugs this day, reported in one batch. All fixed and
