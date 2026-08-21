@@ -7,7 +7,7 @@ Personal AI platform: a claude.ai-parity web UI backed by local models on a dedi
 | Layer | Choice |
 |---|---|
 | Backend | Python 3.12, FastAPI, httpx, uvicorn (async, SSE-native) |
-| Inference | llama.cpp `llama-server` behind llama-swap (`:8080`, OpenAI-compatible; group `resident` = classifier/utility/embed on CPU + dispatcher on GPU1, group `gpu0-main` = one big model at a time on the 3090) |
+| Inference | llama.cpp `llama-server` behind llama-swap (`:8080`, OpenAI-compatible; group `resident` = classifier/utility/embed on CPU + dispatcher/utility-gpu on GPU1 (summarizer fast path, added 2026-08-15 — GPU1 has room for exactly these two, not a third model like coder-small), group `gpu0-main` = one big model at a time on the 3090, incl. coder-small) |
 | Frontend | TypeScript compiled by plain `tsc` → native ES modules; no React, no bundler, no framework |
 | Storage | SQLite (WAL) + FTS5 for text/chats/memories/traces + **Qdrant** for vectors, behind `VectorStore` |
 | Projects | Filesystem-first (`projects/<id>/instructions.md`, `docs/`) |
@@ -77,4 +77,4 @@ When blocked by scope or constraints: stop and report. A described blocker is su
 - **WS-C fix/web-gaps** — retry affordance on error banner, response time + usage inline in `.msg-meta`, fix misleading `chat.ts:35-36` comment, real `npx tsc` build committed with `web/src/**`.
 - **WS-D docs/refresh** (this branch) — refresh stale "Phase 1 open / web unbuilt" prose in `AGENTS.md`/`CLAUDE.md`, add 2026-08-11 entry to `docs/HANDOFF.md` marking audited-fixed items and recording the plan.
 
-All frontend work still builds to `docs/design-doc.md` (graphite/indigo dark system, compact density, IBM Plex Sans/Mono), enforced by `.cursor/rules/011-ui-design.mdc`. Placement truth: `gpu0-main` swap group = `[chat-default, coder, coder-small, vision]` (one at a time on 3090); `resident` group = `[dispatcher(GPU1), utility, embed, classifier (CPU)]`; `reasoner` = chat-default blob w/ thinking (deduped, never a swap entry).
+All frontend work still builds to `docs/design-doc.md` (graphite/indigo dark system, compact density, IBM Plex Sans/Mono), enforced by `.cursor/rules/011-ui-design.mdc`. Placement truth (updated 2026-08-15, see `docs/AGENT_CONTEXT_MEGA.md` §4): `gpu0-main` swap group = `[chat-default, coder, coder-small, vision]` (one at a time on 3090; coder-small must stay here, GPU1 has no room for it); `resident` group = `[dispatcher(GPU1), utility-gpu(GPU1, summarizer fast path), utility, embed, classifier (CPU)]`; `reasoner` = chat-default blob w/ thinking (deduped, never a swap entry).

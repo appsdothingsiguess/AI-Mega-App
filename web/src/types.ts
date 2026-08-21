@@ -96,6 +96,34 @@ export interface Trace {
   spans: Span[];
 }
 
+/** Rolling-summary trigger snapshot for one chat (GET
+ *  /api/debug/summary-status) -- mirrors
+ *  app/background/summaries.py:_trigger_state's return shape verbatim. */
+export interface LastSummarySpan {
+  started_at: number;
+  model: string | null;
+  device: string | null;
+  new_message_count: number | null;
+  covered_message_count: number | null;
+  time_budget_tokens: number | null;
+  chars: number | null;
+  error: string | null;
+}
+
+export interface SummaryStatus {
+  latest_tokens: number | null;
+  latest_model: string | null;
+  threshold_tokens: number | null;
+  will_trigger: boolean;
+  min_routable_ctx: number | null;
+  source: "token_ctx_fraction" | "token_flat_fallback" | "turn_count_fallback";
+  summary_every_n_turns?: number;
+  turn_count: number;
+  covered_message_count: number;
+  last_summary: LastSummarySpan | null;
+  in_flight: boolean;
+}
+
 /** Chat-facing model classes shown in the composer picker. */
 export const PICKER_CLASSES = ["general", "reasoning", "coding", "vision"] as const;
 

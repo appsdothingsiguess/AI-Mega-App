@@ -1,5 +1,5 @@
 /** Debug view: trace list, waterfall, span detail, live /api/debug/stream. */
-import { getGpuInventory, getTrace, listModels, listTraces, streamDebugSpans, } from "../api.js";
+import { getGpuInventory, getSummaryStatus, getTrace, listModels, listTraces, streamDebugSpans, } from "../api.js";
 import { escapeHtml } from "../markdown.js";
 import { get } from "../store.js";
 function chatLabel(chatId) {
@@ -66,6 +66,58 @@ function contextUsageHtml(t, modelCtx) {
     const cls = pct >= 90 ? "context-usage is-hot" : pct >= 50 ? "context-usage is-warm" : "context-usage";
     return `<span class="${cls}" title="${used} of ${ctx} tokens used on ${escapeHtml(model ?? "")}">${used}/${ctx} tok (${pct}%)</span>`;
 }
+/** Rolling-summary trigger panel (docs/FEATURES.md F19): how close this
+ *  chat is to the next auto-summary, and what the last regen actually did.
+ *  Mirrors app/background/summaries.py:_trigger_state's fields exactly so
+ *  "will it trigger" here can never drift from what actually happens. */
+function summaryStatusHtml(status) {
+    if (!status)
+        return "";
+    const rows = [];
+    if (status.source === "turn_count_fallback") {
+        const n = status.summary_every_n_turns ?? "?";
+        rows.push(`<div class="summary-status-row">
+        <span class="summary-label">summary trigger</span>
+        <span class="mono">turn ${status.turn_count} of ${n} (no usage data yet)</span>
+        ${status.will_trigger ? '<span class="summary-badge is-due">due next turn</span>' : ""}
+      </div>`);
+    }
+    else {
+        const used = status.latest_tokens ?? 0;
+        const threshold = status.threshold_tokens ?? 0;
+        const pct = threshold > 0 ? Math.min(100, Math.round((used / threshold) * 100)) : 0;
+        const barCls = status.will_trigger
+            ? "summary-fill is-due"
+            : pct >= 75
+                ? "summary-fill is-close"
+                : "summary-fill";
+        const floorNote = status.min_routable_ctx != null
+            ? ` title="threshold = ${escapeHtml(status.source === "token_ctx_fraction" ? "fraction of tightest routable ctx" : "flat fallback")}, min routable ctx = ${status.min_routable_ctx}"`
+            : "";
+        rows.push(`<div class="summary-status-row"${floorNote}>
+        <span class="summary-label">summary trigger</span>
+        <div class="summary-track"><div class="${barCls}" style="width:${pct}%"></div></div>
+        <span class="mono">${used}/${threshold} tok (${pct}%)</span>
+        ${status.will_trigger ? '<span class="summary-badge is-due">due next turn</span>' : ""}
+        ${status.in_flight ? '<span class="summary-badge is-running">running</span>' : ""}
+      </div>`);
+    }
+    const last = status.last_summary;
+    if (last) {
+        const when = new Date(last.started_at).toLocaleTimeString();
+        const device = last.device ?? "?";
+        const model = last.model ?? "?";
+        const coverage = last.new_message_count != null && last.covered_message_count != null
+            ? `covered ${last.new_message_count} new msg(s), ${last.covered_message_count} total`
+            : "";
+        const errNote = last.error ? ` — FAILED: ${escapeHtml(last.error)}` : "";
+        rows.push(`<div class="summary-status-meta muted">last regen ${escapeHtml(when)} via ${escapeHtml(model)} (${escapeHtml(device)}) — ${escapeHtml(coverage)}${errNote}</div>`);
+    }
+    else {
+        rows.push(`<div class="summary-status-meta muted">no summary yet for this chat</div>`);
+    }
+    return `<div class="summary-status">${rows.join("")}</div>`;
+}
 export function createDebugView() {
     let root = null;
     let traces = [];
@@ -77,6 +129,8 @@ export function createDebugView() {
     let gpus = [];
     let gpuTimer = null;
     let modelCtx = {};
+    let summaryStatus = null;
+    let summaryStatusChatId = null;
     const unmount = () => {
         live?.stop();
         live = null;
@@ -170,6 +224,11 @@ export function createDebugView() {
         id.className = "waterfall-id";
         id.textContent = `trace_id: ${selected.trace_id}`;
         pane.appendChild(id);
+        if (selected.chat_id && summaryStatusChatId === selected.chat_id) {
+            const summaryEl = document.createElement("div");
+            summaryEl.innerHTML = summaryStatusHtml(summaryStatus);
+            pane.appendChild(summaryEl.firstElementChild ?? summaryEl);
+        }
         const maxMs = Math.max(1, ...selected.spans.map(spanMs));
         for (const sp of selected.spans) {
             const ms = spanMs(sp);
@@ -329,6 +388,16 @@ export function createDebugView() {
         renderDetail();
         renderTelemetry();
     }
+    async function loadSummaryStatus(chatId) {
+        try {
+            summaryStatus = await getSummaryStatus(chatId);
+        }
+        catch {
+            summaryStatus = null;
+        }
+        summaryStatusChatId = chatId;
+        render();
+    }
     async function selectTrace(traceId) {
         try {
             selected = await getTrace(traceId);
@@ -346,6 +415,11 @@ export function createDebugView() {
         const hash = `#/debug?trace=${encodeURIComponent(traceId)}`;
         if (location.hash !== hash)
             history.replaceState(null, "", hash);
+        if (selected?.chat_id && selected.chat_id !== summaryStatusChatId) {
+            summaryStatus = null;
+            summaryStatusChatId = null;
+            void loadSummaryStatus(selected.chat_id);
+        }
         render();
     }
     function buildDom(el) {
@@ -390,7 +464,15 @@ export function createDebugView() {
             }
             live = streamDebugSpans((span) => mergeSpan(span), { signal: abort.signal });
             void refreshTelemetry();
-            gpuTimer = setInterval(() => void refreshTelemetry(), 5000);
+            gpuTimer = setInterval(() => {
+                void refreshTelemetry();
+                // Token pressure and last-regen state change as new turns stream
+                // in for the selected chat -- keep the summary-trigger panel live
+                // rather than frozen at whatever it showed when the trace was
+                // first opened.
+                if (selected?.chat_id)
+                    void loadSummaryStatus(selected.chat_id);
+            }, 5000);
         },
         unmount,
     };

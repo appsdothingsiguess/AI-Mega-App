@@ -118,6 +118,8 @@ Measured headroom at 32k ctx with `chat-default` on GPU0 and the dispatcher gene
 
 **Why `utility` and `embed` are on CPU, and the contradiction that looks like an error.** §5 measured CPU `utility` in isolation at 3.3 tok/s (42s for a 128-token summary) and called it a hard fail. §8 Test 3 re-measured it under real concurrent load with real transcripts: **17.6–21.8s for a 100-token summary**. Both numbers are real; they answer different questions, and the decision rests on the concurrent one — a background job nobody awaits synchronously. Moving `utility` to the 3070 makes it ~13x faster but **degrades the dispatcher's own latency 5–7x** (0.10s → 0.24–0.73s) through compute contention, and shrinks GPU1 headroom to ~370MB. Dispatch latency is the one thing on the critical path, so it wins. `embed` on CPU costs 11.7–34ms/call, comfortably inside budget; an `embed-gpu` alias exists as an explicit opt-in (~2.5ms) for anyone who wants it and accepts the contention.
 
+**2026-08-15 addendum — `utility-gpu` reopens the GPU1 question, narrowly.** The dispatcher-contention finding above was measured with `utility`+`embed` *both* resident and *both* firing constantly under load — an always-busy neighbor on the same compute. A summarizer that only runs when real token-pressure crosses a trigger (not every turn, not continuously) doesn't reproduce that: it's loaded-and-idle on GPU1 the overwhelming majority of the time, so it costs VRAM residency but not compute contention with `dispatcher` except during the rare ~1-3s a summary call is actually running. Added `utility-gpu` (GPU1-resident, same weights as `utility`) as the tried-first fast path for summaries (~14x CPU decode, measured live), with CPU `utility` as fallback. This does NOT reverse the CPU-residency decision for `embed` or for `utility`'s fallback role — only adds a second, narrower placement for the same weights. Full rationale + live benchmark table: `docs/HANDOFF.md` 2026-08-15 entry.
+
 **Locked roster — every row measured.** Speed floor: nothing under ~25 tok/s at its working quant. Full detail and raw logs: `docs/phase0-measurements.md` §2, §9, §13.
 
 | Alias | Model | Quant | VRAM | Measured | Where | Role |
@@ -339,7 +341,7 @@ Prompt templates and preferences (spec §17) live under Memory/prompts; project 
 Two models, split by who waits on the result [FACT — §12, §13]:
 
 - **Titles → `dispatcher` (Hammer2.1-1.5b, GPU1).** 8/8 on the title rubric at **0.042s/call**, versus CPU `utility` at 1/8 and **43.5s** — the utility model hits the same thinking-budget trap as the reasoners and mostly returns nothing at a title-sized budget. A ~760x latency difference on something the sidebar shows immediately settles it.
-- **Rolling summaries + compaction → `utility` (Qwen3-8B, CPU).** 17.6–21.8s per 100-token summary is fine for a job nobody awaits; this is the role CPU residency was chosen for.
+- **Rolling summaries + compaction → `utility-gpu` (Qwen3-8B, GPU1-resident) first, `utility` (Qwen3-8B, CPU) fallback.** Redesigned 2026-08-15: GPU1 fast path measured live at ~14x CPU decode speed; CPU path is time-budgeted (not ctx-budgeted alone — a naive ctx-sized bite can exceed even a relaxed timeout on CPU) and only used if the GPU1 call fails. 17.6–21.8s per 100-token summary is the original §4.1 finding for the CPU-only path, still the operative number for the fallback. See the §4.1 2026-08-15 addendum and `docs/HANDOFF.md` for the full design and benchmark table.
 
 Title post-processing is deterministic and lives in code, not in the rubric: `clean_title()` **truncates** overlong output and never penalizes a short title. The measured 8/8 depends on this — an earlier 4/8 was the rubric's fault, not the model's, for demanding an exact 5–8 word range with no recovery path. (Open, cosmetic: truncation is a naive word-cut, so ~3/8 titles end mid-phrase; clause-boundary truncation is a nice-to-have.) All background tasks; failures never block chat.
 
@@ -395,7 +397,7 @@ The ≥90% gate is **already met in the lab at 91.76%** — Phase 2's job is to 
 ## 7. Resolved decisions (owner answers, 2026-07-20) + remaining unknowns
 
 Resolved:
-1. **Hardware + placement (Phase-0 measured, locked):** single box — RTX 3090 (GPU0) + RTX 3070 (GPU1) + Ryzen 9 + 64GB. **Config B:** big models solo-pinned to GPU0 via `CUDA_VISIBLE_DEVICES` (no tensor-split), `dispatcher` resident on GPU1, `classifier`/`utility`/`embed` CPU-resident. PC2 stays future; no cross-box RPC (§4.1).
+1. **Hardware + placement (Phase-0 measured, locked):** single box — RTX 3090 (GPU0) + RTX 3070 (GPU1) + Ryzen 9 + 64GB. **Config B:** big models solo-pinned to GPU0 via `CUDA_VISIBLE_DEVICES` (no tensor-split), `dispatcher` resident on GPU1, `classifier`/`utility`/`embed` CPU-resident. PC2 stays future; no cross-box RPC (§4.1). (2026-08-15: `utility-gpu` added to GPU1 alongside `dispatcher` as the summarizer's fast path — narrow extension, not a reversal; see §4.1 addendum.)
 2. **Memory reference:** hermes-agent, including the self-improvement idea (§4.8).
 3. **Host:** Windows now, maybe Linux later — BrowserOS + optional opencode live there; backend stays on Ubuntu.
 4. **Per-task model config:** user-configurable in Settings, same pattern as the current app's tier table (§4.1 roster keeps the aliases).

@@ -17,6 +17,7 @@ from typing import Any
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import StreamingResponse
 
+from app.background.summaries import summary_status
 from app.db import run_sync
 from app.debug import bus
 
@@ -104,6 +105,17 @@ async def get_trace(request: Request, trace_id: str) -> dict[str, Any]:
     if result is None:
         raise HTTPException(status_code=404, detail="trace not found")
     return result
+
+
+@router.get("/summary-status")
+async def get_summary_status(request: Request, chat_id: str) -> dict[str, Any]:
+    """Rolling-summary trigger snapshot for one chat (docs/FEATURES.md F19):
+    current token pressure vs. the trigger threshold, whether the next turn
+    would enqueue a regen, and what the last regen actually did (device,
+    coverage). Read-only -- computed from the same logic
+    maybe_enqueue_summary acts on (app/background/summaries.py:_trigger_state),
+    never a duplicated/divergent copy."""
+    return await summary_status(request.app, chat_id)
 
 
 @router.get("/stream")

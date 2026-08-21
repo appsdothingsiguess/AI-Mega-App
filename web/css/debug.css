@@ -205,6 +205,77 @@
   font-family: var(--font-mono);
 }
 
+/* Rolling-summary trigger panel: how close this chat is to the next
+ * auto-summary, and what the last regen actually did (device, coverage).
+ * Mirrors app/background/summaries.py:_trigger_state exactly. */
+.summary-status {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 8px 12px;
+  margin-bottom: 16px;
+}
+
+.summary-status-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.summary-label {
+  font-size: 11px;
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+
+.summary-track {
+  width: 140px;
+  height: 6px;
+  background: var(--bg-elevated);
+  border-radius: 3px;
+  overflow: hidden;
+}
+
+.summary-fill {
+  height: 100%;
+  width: 0;
+  background: var(--accent);
+}
+
+.summary-fill.is-close {
+  background: var(--warning);
+}
+
+.summary-fill.is-due {
+  background: var(--error);
+}
+
+.summary-badge {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  padding: 1px 7px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  color: var(--text-secondary);
+  white-space: nowrap;
+}
+
+.summary-badge.is-due {
+  color: var(--error);
+  border-color: var(--error);
+}
+
+.summary-badge.is-running {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+
+.summary-status-meta {
+  font-size: 11px;
+  font-family: var(--font-mono);
+  margin-top: 6px;
+}
+
 .span-row {
   display: flex;
   align-items: center;

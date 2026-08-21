@@ -89,6 +89,9 @@ export async function listTraces(opts) {
 export async function getTrace(traceId) {
     return json(await fetch(`/api/debug/trace/${encodeURIComponent(traceId)}`));
 }
+export async function getSummaryStatus(chatId) {
+    return json(await fetch(`/api/debug/summary-status?chat_id=${encodeURIComponent(chatId)}`));
+}
 /** Parse one SSE block (event + data lines). */
 function parseBlock(block) {
     let event = "message";

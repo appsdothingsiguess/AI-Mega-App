@@ -412,6 +412,98 @@ async def _run_summary_guarded(app: Any, chat_id: str) -> None:
         _in_flight.discard(chat_id)
 
 
+def _trigger_state(
+    cfg: Any, latest: tuple[int, str | None] | None, turn_count: int
+) -> dict[str, Any]:
+    """Pure computation of the token-pressure trigger (or, absent usage
+    data, the turn-count fallback cadence) -- shared by maybe_enqueue_summary
+    (which acts on it) and the debug summary-status endpoint (which just
+    displays it, so the Debug panel can show "will trigger" without
+    duplicating -- and risking drifting from -- this logic."""
+    min_routable = _min_routable_ctx(cfg)
+    if latest is not None:
+        latest_tokens, latest_model = latest
+        model_entry = next((m for m in cfg.models if m.name == latest_model), None)
+        fraction = cfg.background.summary_context_fraction
+        candidate_ctxs = [m.ctx for m in (model_entry,) if m is not None]
+        if min_routable is not None:
+            candidate_ctxs.append(min_routable)
+        if candidate_ctxs:
+            # The smaller of "this turn's own model" and "the tightest ctx
+            # the router could send the next turn to" -- see
+            # _min_routable_ctx for why the latter matters even when the
+            # last turn ran on a roomy model.
+            threshold = min(candidate_ctxs) * fraction
+            source = "token_ctx_fraction"
+        else:
+            threshold = cfg.background.summary_token_threshold
+            source = "token_flat_fallback"
+        return {
+            "latest_tokens": latest_tokens,
+            "latest_model": latest_model,
+            "threshold_tokens": threshold,
+            "will_trigger": threshold > 0 and latest_tokens >= threshold,
+            "min_routable_ctx": min_routable,
+            "source": source,
+        }
+    every_n = cfg.background.summary_every_n_turns
+    return {
+        "latest_tokens": None,
+        "latest_model": None,
+        "threshold_tokens": None,
+        "will_trigger": every_n > 0 and turn_count % every_n == 0,
+        "min_routable_ctx": min_routable,
+        "source": "turn_count_fallback",
+        "summary_every_n_turns": every_n,
+    }
+
+
+def _last_summary_span(conn: sqlite3.Connection, chat_id: str) -> dict[str, Any] | None:
+    """The most recent `summary` span's data + timestamp, for the debug
+    summary-status endpoint -- when the last regen ran, which target it
+    used (device: cpu/gpu1), and whether it failed."""
+    row = conn.execute(
+        "SELECT s.data AS data, s.started_at AS started_at FROM spans s "
+        "JOIN traces t ON t.trace_id = s.trace_id "
+        "WHERE t.chat_id = ? AND s.stage = 'summary' "
+        "ORDER BY s.started_at DESC LIMIT 1",
+        (chat_id,),
+    ).fetchone()
+    if row is None or row["data"] is None:
+        return None
+    try:
+        data = json.loads(row["data"])
+    except (TypeError, ValueError):
+        return None
+    return {
+        "started_at": row["started_at"],
+        "model": data.get("model"),
+        "device": data.get("device"),
+        "new_message_count": data.get("new_message_count"),
+        "covered_message_count": data.get("covered_message_count"),
+        "time_budget_tokens": data.get("time_budget_tokens"),
+        "chars": data.get("chars"),
+        "error": data.get("error"),
+    }
+
+
+async def summary_status(app: Any, chat_id: str) -> dict[str, Any]:
+    """Read-only trigger/coverage snapshot for the Debug panel (docs/FEATURES.md
+    F19): current token pressure vs. the trigger threshold, whether the next
+    turn would enqueue a regen, and what the last regen actually did."""
+    cfg = app.state.config
+    conn = app.state.db
+
+    turn_count = await run_sync(_count_user_turns, conn, chat_id)
+    latest = await run_sync(_latest_usage, conn, chat_id)
+    state = _trigger_state(cfg, latest, turn_count)
+    state["turn_count"] = turn_count
+    state["covered_message_count"] = await run_sync(last_summary_covered_count, conn, chat_id)
+    state["last_summary"] = await run_sync(_last_summary_span, conn, chat_id)
+    state["in_flight"] = chat_id in _in_flight
+    return state
+
+
 async def maybe_enqueue_summary(app: Any, chat_id: str) -> None:
     """Enqueue a rolling summary when real llama.cpp context pressure (or,
     absent that, the turn-count fallback cadence) says it's time."""
@@ -424,30 +516,8 @@ async def maybe_enqueue_summary(app: Any, chat_id: str) -> None:
             return
 
         latest = await run_sync(_latest_usage, conn, chat_id)
-        if latest is not None:
-            latest_tokens, latest_model = latest
-            model_entry = next(
-                (m for m in cfg.models if m.name == latest_model), None
-            )
-            fraction = cfg.background.summary_context_fraction
-            candidate_ctxs = [m.ctx for m in (model_entry,) if m is not None]
-            min_routable = _min_routable_ctx(cfg)
-            if min_routable is not None:
-                candidate_ctxs.append(min_routable)
-            if candidate_ctxs:
-                # The smaller of "this turn's own model" and "the tightest
-                # ctx the router could send the next turn to" -- see
-                # _min_routable_ctx for why the latter matters even when
-                # the last turn ran on a roomy model.
-                threshold = min(candidate_ctxs) * fraction
-            else:
-                threshold = cfg.background.summary_token_threshold
-            if threshold <= 0 or latest_tokens < threshold:
-                return
-        else:
-            every_n = cfg.background.summary_every_n_turns
-            if every_n <= 0 or turn_count % every_n != 0:
-                return
+        if not _trigger_state(cfg, latest, turn_count)["will_trigger"]:
+            return
 
         if chat_id in _in_flight:
             return

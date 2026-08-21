@@ -224,3 +224,53 @@ def test_traces_and_trace_rest_endpoints(db_conn) -> None:
 
         resp = client.get("/api/debug/trace/does-not-exist")
         assert resp.status_code == 404
+
+
+def test_summary_status_rest_endpoint(db_conn) -> None:
+    """GET /api/debug/summary-status?chat_id= wraps
+    app.background.summaries.summary_status -- needs app.state.config too
+    (not just db), unlike the plain trace endpoints above."""
+    from fastapi.testclient import TestClient
+
+    from app.chat import history
+    from app.config import (
+        BackgroundConfig,
+        Config,
+        DbConfig,
+        DefaultsConfig,
+        LlamaSwapConfig,
+        ModelEntry,
+    )
+
+    chat_model = ModelEntry(
+        name="chat-default", **{"class": "general"}, ctx=4096, gpu=0,
+        tool_call="native", max_tokens=1024,
+        file="/models/chat-default.gguf", quant="Q4_K_M",
+    )
+    config = Config(
+        llama_swap=LlamaSwapConfig(base_url="http://fake/v1/", timeout_s=5.0),
+        db=DbConfig(path=":memory:"),
+        models=[chat_model],
+        defaults=DefaultsConfig(
+            chat_model="chat-default", utility_model="utility", title_model="dispatcher"
+        ),
+        background=BackgroundConfig(title_model="dispatcher", summary_model="utility"),
+    )
+
+    app = FastAPI()
+    app.state.db = db_conn
+    app.state.config = config
+    app.include_router(debug_api.router)
+
+    chat_id = history.create_chat(db_conn)["id"]
+    history.insert_message(db_conn, chat_id, "user", "hi", None)
+    history.insert_message(db_conn, chat_id, "assistant", "hello", "chat-default")
+
+    with TestClient(app) as client:
+        resp = client.get("/api/debug/summary-status", params={"chat_id": chat_id})
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["source"] == "turn_count_fallback"
+        assert body["will_trigger"] is False
+        assert body["last_summary"] is None
+        assert body["in_flight"] is False

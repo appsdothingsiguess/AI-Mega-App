@@ -34,7 +34,7 @@ A personal AI platform: a claude.ai-parity web UI backed by local models on a de
 | Projects | Filesystem-first (`projects/<id>/instructions.md`, `docs/`) |
 | Coding agent | `opencode serve` (delegated; never nested inside the chat tool loop) |
 | Browser | BrowserOS via MCP client (host machine, escalation path only, off by default) |
-| Placement | Big models solo-pinned to GPU0 (3090) via `CUDA_VISIBLE_DEVICES` — **never `--tensor-split`**, measured ~3x slower; `dispatcher` resident on GPU1 (3070); `classifier`/`utility`/`embed` CPU-resident |
+| Placement | Big models solo-pinned to GPU0 (3090) via `CUDA_VISIBLE_DEVICES` — **never `--tensor-split`**, measured ~3x slower; `coder-small` shares GPU0's swap slot (not GPU1 — no room there once `utility-gpu` is resident, see below); `dispatcher` + `utility-gpu` (summarizer GPU1 fast path, ~14x CPU decode) both resident on GPU1 (3070), ~590 MiB free at peak — no third model fits; `classifier`/`utility` (summarizer CPU fallback)/`embed` CPU-resident |
 
 Model names/aliases/routing labels always come from `config.yaml`, resolved at runtime — never hardcode a model name in prompts or code.
 

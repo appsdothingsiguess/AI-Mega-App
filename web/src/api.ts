@@ -7,6 +7,7 @@ import type {
   HealthModel,
   Message,
   Span,
+  SummaryStatus,
   Trace,
 } from "./types.js";
 
@@ -145,6 +146,12 @@ export async function listTraces(opts?: {
 
 export async function getTrace(traceId: string): Promise<Trace> {
   return json(await fetch(`/api/debug/trace/${encodeURIComponent(traceId)}`));
+}
+
+export async function getSummaryStatus(chatId: string): Promise<SummaryStatus> {
+  return json(
+    await fetch(`/api/debug/summary-status?chat_id=${encodeURIComponent(chatId)}`),
+  );
 }
 
 export interface SseHandlers {

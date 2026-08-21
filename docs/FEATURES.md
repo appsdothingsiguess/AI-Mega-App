@@ -810,6 +810,8 @@ compaction:                           # Phase 3 (in-turn, not background)
 
 **Interfaces.** Consumes A3's REST + SSE verbatim. Per-turn header shows: `route` source chip (override/rules/classifier/default + confidence), model, tok/s (`usage` + `timings` from llama.cpp [FACT]), swap-wait badge if `swap_wait` span present, dispatcher badge if `dispatcher` spans present ("who decided vs. who emitted" per step [FACT — PLAN §4.7]). Deep link: each chat message has a "debug" affordance → `#/debug?trace=<trace_id>`.
 
+**Summary-trigger panel (added 2026-08-15, F18 companion).** `GET /api/debug/summary-status?chat_id=` (`app/background/summaries.py:summary_status`) surfaces, for the trace's chat: current token usage vs. the trigger threshold (progress bar, red when due), which trigger source is active (`token_ctx_fraction`/`token_flat_fallback`/`turn_count_fallback`), whether a regen is in flight, and the last regen's outcome (timestamp, target model + device `cpu`/`gpu1`, messages covered, or the error if it failed). Computed from the exact same `_trigger_state` function `maybe_enqueue_summary` acts on — never a duplicated/divergent copy — so what the panel shows can't drift from what actually happens. Refreshes every 5s alongside GPU telemetry.
+
 **Config keys.** `debug:` (A3) drives it; `ui.debug_link_on_messages: true`.
 
 **Integration points.** Pure consumer of A3; every feature's spans appear here for free — that's the point. Per-model bench numbers (F2 `data/bench.json`) render in a models sub-tab.
