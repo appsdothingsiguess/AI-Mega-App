@@ -29,8 +29,15 @@ from app.gpu.swapgen import generate
 # ---------------------------------------------------------------------------
 # Golden YAML for the current checked-in config.yaml roster.
 # Trace: models emitted in config list order after dedup+enabled filter.
-#   chat-default  (gpu=0, resident, ttl:0)
-#   coder         (gpu=0, no ttl)
+#   chat-default  (gpu=0, resident, ttl:0) -- Qwen3.8-27B, 2026-08-21
+#   coder         (gpu=0, no ttl) -- also Qwen3.8-27B (owner request,
+#                  2026-08-21), but via a *symlinked* copy of the same file
+#                  (Qwen3.8-27B-UD-Q4_K_XL-coder.gguf) so the (file, gpu)
+#                  dedup key does NOT collapse it into chat-default -- the
+#                  routing table's code_task intent needs `coder` to remain
+#                  a real, addressable swap-group member. gpu0-main's
+#                  swap:true already guarantees only one of the group is
+#                  resident in VRAM at a time, so this costs nothing extra.
 #   coder-small   (gpu=0, no ttl)
 #   vision        (gpu=0, mmproj, no ttl)
 #   dispatcher    (gpu=1, resident, ttl:0, --temp 0)
@@ -40,11 +47,21 @@ from app.gpu.swapgen import generate
 #   utility       (gpu=cpu, resident, ttl:0, --reasoning off)
 #   embed         (gpu=cpu, resident, ttl:0, --embedding)
 #   classifier    (gpu=cpu, resident, ttl:0, --reasoning off, --temp 0)
-# Dropped: reasoner (same file as chat-default, which is resident — request-
-# layer thinking, not a swap entry); reasoner-alt (enabled:false).
+# Dropped: reasoner (same *literal* file as chat-default, both gpu=0, chat-
+# default wins dedup priority as resident:true — request-layer thinking, not
+# a separate swap entry, PLAN.md §4.1; reasoner switched to Qwen3.8-27B
+# alongside chat-default on 2026-08-21 to preserve this relationship);
+# reasoner-alt (enabled:false).
 # ---------------------------------------------------------------------------
 _BASE = "/home/john/llm-stack/models/gguf"
 _BIN = "/home/john/llm-stack/engine/llama.cpp/build/bin/llama-server"
+_QWEN38_FLAGS = (
+    '--reasoning on --reasoning-preserve --chat-template-kwargs '
+    '\'{"reasoning_effort":"medium"}\' --reasoning-budget 5000 '
+    '--spec-type ngram-mod,draft-mtp --spec-draft-n-max 2 --cache-type-k q4_1 '
+    '--cache-type-v q4_1 --flash-attn on --temp 1.0 --top-p 0.95 '
+    '--top-k 20 --min-p 0.0'
+)
 
 GOLDEN = f"""\
 # generated — do not hand-edit
@@ -53,11 +70,11 @@ macros:
   llama: {_BIN} --host 0.0.0.0 --port ${{PORT}} --jinja --parallel 1
 models:
   chat-default:
-    cmd: ${{llama}} -m {_BASE}/Qwen3.6-35B-A3B-UD-Q4_K_M.gguf -ngl 999 -c 32768 --reasoning off
+    cmd: ${{llama}} -m {_BASE}/Qwen3.8-27B-UD-Q4_K_XL.gguf -ngl 999 -c 262144 {_QWEN38_FLAGS}
     env: ["CUDA_VISIBLE_DEVICES=0", "CUDA_DEVICE_ORDER=PCI_BUS_ID"]
     ttl: 0
   coder:
-    cmd: ${{llama}} -m {_BASE}/Qwen3-Coder-30B-A3B-Instruct-Q5_K_M.gguf -ngl 999 -c 16384
+    cmd: ${{llama}} -m {_BASE}/Qwen3.8-27B-UD-Q4_K_XL-coder.gguf -ngl 999 -c 262144 {_QWEN38_FLAGS}
     env: ["CUDA_VISIBLE_DEVICES=0", "CUDA_DEVICE_ORDER=PCI_BUS_ID"]
   coder-small:
     cmd: ${{llama}} -m {_BASE}/qwen2.5-coder-7b.gguf -ngl 999 -c 8192
@@ -70,7 +87,7 @@ models:
     env: ["CUDA_VISIBLE_DEVICES=1", "CUDA_DEVICE_ORDER=PCI_BUS_ID"]
     ttl: 0
   utility-gpu:
-    cmd: ${{llama}} -m {_BASE}/qwen3-8b.gguf -ngl 999 -c 16384 --reasoning off
+    cmd: ${{llama}} -m {_BASE}/qwen3-8b.gguf -ngl 999 -c 16384 --reasoning off --cache-type-k q4_1 --cache-type-v q4_1
     env: ["CUDA_VISIBLE_DEVICES=1", "CUDA_DEVICE_ORDER=PCI_BUS_ID"]
     ttl: 0
   utility:

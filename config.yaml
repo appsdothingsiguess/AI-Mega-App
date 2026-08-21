@@ -23,28 +23,70 @@ db:
 models:
   - name: chat-default
     class: general
-    ctx: 32768
+    ctx: 262144
     gpu: 0
     tool_call: native
-    thinking: false
-    # Qwen3.6 is hybrid-reasoning and self-triggers a full internal <think>
-    # block even with thinking:false at the request layer -- only
-    # llama-server's own --reasoning off flag reliably suppresses it (see
-    # the frozen rule in CLAUDE.md). Live trace 2026-08-15 (c132ba62) showed
-    # 851 completion tokens for a one-line reply, ~100s wall time, almost
-    # entirely invisible reasoning.
-    reasoning_off: true
-    max_tokens: 4096
+    # 2026-08-21: switched from Qwen3.6-35B-A3B to Qwen3.8-27B-UD-Q4_K_XL.
+    # Unlike Qwen3.6, thinking is wanted here (reasoning_effort:medium via
+    # chat-template-kwargs, capped by reasoning-budget) rather than suppressed
+    # -- so thinking:true / reasoning_off:false. Native MTP spec-decoding
+    # (checkpoint has qwen35.nextn_predict_layers=1 baked in, no separate
+    # draft model needed) + q4_1 KV to afford the model's full 262144-token
+    # ctx on the 3090 alone (no tensor-split needed, unlike the old 35B-A3B
+    # entry). Live-benchmarked on this box: ~59 tok/s median across 4 varied
+    # prompts, 262144 ctx uses 23422/24576 MiB (~1.1GB margin -- tight,
+    # revisit if a long real conversation OOMs where the short benchmark
+    # didn't). Sampler values (temp/top-p/top-k/min-p) are Unsloth's
+    # published Qwen3.8 "Thinking Mode" recommendation -- an earlier
+    # temp:0.65/top-k:15/min-p:0.05 pass turned out to be misattributed (that
+    # was never Unsloth's thinking-mode number), reverted same day.
+    # --spec-type tried and rejected: draft-dflash alone loaded but produced
+    # zero draft stats (silently fell back to plain autoregressive, ~36 tok/s
+    # -- worse than no speculation at all) -- this GGUF has no dflash-
+    # compatible draft weights, only the native MTP nextn.* head. ngram-mod
+    # alongside draft-mtp measured statistically even with draft-mtp alone
+    # (~59 tok/s both ways) -- kept since it never regressed a single sample.
+    thinking: true
+    reasoning_off: false
+    max_tokens: 8192
     enabled: true
-    file: "/home/john/llm-stack/models/gguf/Qwen3.6-35B-A3B-UD-Q4_K_M.gguf"
-    quant: Q4_K_M
+    file: "/home/john/llm-stack/models/gguf/Qwen3.8-27B-UD-Q4_K_XL.gguf"
+    quant: Q4_K_XL
     mmproj: null
     resident: true
     ttl_s: 0
-    extra_flags: []
+    extra_flags:
+      - "--reasoning"
+      - "on"
+      - "--reasoning-preserve"
+      - "--chat-template-kwargs"
+      - '''{"reasoning_effort":"medium"}'''
+      - "--reasoning-budget"
+      - "5000"
+      - "--spec-type"
+      - "ngram-mod,draft-mtp"
+      - "--spec-draft-n-max"
+      - "2"
+      - "--cache-type-k"
+      - "q4_1"
+      - "--cache-type-v"
+      - "q4_1"
+      - "--flash-attn"
+      - "on"
+      - "--temp"
+      - "1.0"
+      - "--top-p"
+      - "0.95"
+      - "--top-k"
+      - "20"
+      - "--min-p"
+      - "0.0"
   - name: reasoner
     # Same blob as chat-default, thinking enabled at the request layer —
-    # not a separate swap entry (PLAN.md §4.1).
+    # not a separate swap entry (PLAN.md §4.1). 2026-08-21: follows
+    # chat-default's switch to Qwen3.8-27B for the same reason -- keeping it
+    # on the old Qwen3.6-35B-A3B file would silently break the dedup and turn
+    # it into a real (and redundant) second swap-slot entry.
     class: reasoning
     ctx: 32768
     gpu: 0
@@ -53,8 +95,8 @@ models:
     reasoning_off: false
     max_tokens: 8192
     enabled: true
-    file: "/home/john/llm-stack/models/gguf/Qwen3.6-35B-A3B-UD-Q4_K_M.gguf"
-    quant: Q4_K_M
+    file: "/home/john/llm-stack/models/gguf/Qwen3.8-27B-UD-Q4_K_XL.gguf"
+    quant: Q4_K_XL
     mmproj: null
     resident: false
     ttl_s: null
@@ -76,19 +118,56 @@ models:
     extra_flags: []
   - name: coder
     class: coding
-    ctx: 16384
+    ctx: 262144
     gpu: 0
     tool_call: native
-    thinking: false
+    # 2026-08-21: switched to Qwen3.8-27B (same weights as chat-default) per
+    # owner request. `file` points at a symlink (Qwen3.8-27B-UD-Q4_K_XL-
+    # coder.gguf -> the real file) rather than the identical path chat-default
+    # uses -- gpu/swapgen.py dedups same (file, gpu) pairs into one swap-slot
+    # process (see reasoner-vs-chat-default note in the pre-2026-08-21 history),
+    # which would silently drop `coder` from the generated config and break
+    # the code_task routing intent entirely. The symlink keeps `coder` a
+    # distinct, addressable gpu0-main swap member; `swap: true` on that group
+    # already guarantees only one of {chat-default, coder, ...} is resident in
+    # VRAM at a time, so this costs no extra VRAM despite "two" entries. Old
+    # Qwen3-Coder-30B-A3B-Instruct Q5_K_M weights left on disk, untouched --
+    # revert by restoring `file` to that path.
+    thinking: true
     reasoning_off: false
-    max_tokens: 4096
+    max_tokens: 8192
     enabled: true
-    file: "/home/john/llm-stack/models/gguf/Qwen3-Coder-30B-A3B-Instruct-Q5_K_M.gguf"
-    quant: Q5_K_M
+    file: "/home/john/llm-stack/models/gguf/Qwen3.8-27B-UD-Q4_K_XL-coder.gguf"
+    quant: Q4_K_XL
     mmproj: null
     resident: false
     ttl_s: null
-    extra_flags: []
+    extra_flags:
+      - "--reasoning"
+      - "on"
+      - "--reasoning-preserve"
+      - "--chat-template-kwargs"
+      - '''{"reasoning_effort":"medium"}'''
+      - "--reasoning-budget"
+      - "5000"
+      - "--spec-type"
+      - "ngram-mod,draft-mtp"
+      - "--spec-draft-n-max"
+      - "2"
+      - "--cache-type-k"
+      - "q4_1"
+      - "--cache-type-v"
+      - "q4_1"
+      - "--flash-attn"
+      - "on"
+      - "--temp"
+      - "1.0"
+      - "--top-p"
+      - "0.95"
+      - "--top-k"
+      - "20"
+      - "--min-p"
+      - "0.0"
   - name: coder-small
     class: coding
     ctx: 8192
@@ -165,7 +244,13 @@ models:
     mmproj: null
     resident: true
     ttl_s: 0
-    extra_flags: []
+    # 2026-08-21: fp16 KV cache at ctx 16384 needs 2304 MiB; dispatcher's
+    # ~1303 MiB resident footprint on the same 8GB 3070 only leaves ~1.9GB
+    # free, so utility-gpu OOM'd on every load attempt (confirmed live:
+    # cudaMalloc failed: out of memory allocating the KV buffer). q4_1
+    # quantized KV quarters that to ~576 MiB, matching the pattern already
+    # used on chat-default/coder.
+    extra_flags: ["--cache-type-k", "q4_1", "--cache-type-v", "q4_1"]
   - name: utility
     class: utility
     ctx: 8192
