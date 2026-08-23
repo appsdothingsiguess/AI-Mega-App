@@ -35,6 +35,14 @@ This is a human-run, live-box regression checklist for fixes merged in this sess
 **Pass:** exactly one terminal context error; no chat-model request after safe-fit refusal; recovery is queue-owned; newest user message remains in history.  
 **Fail:** a truncated success, duplicate terminal events, missing newest message, or an untracked long-running summary request.
 
+**UX acceptance note:** while summary/compaction recovery is running, the UI
+should show visible progress for the user: an animated progress indicator,
+current phase (for example, “Compacting conversation” or “Recovering context”),
+and a completed/failed state. This should feel like the progress treatment in
+Codex and Claude Code, rather than a silent wait. The Debug view remains the
+source of detailed technical status; the chat view needs a clear user-facing
+animation and accessible text fallback.
+
 ## 3. Invalid/poisoned summaries are never accepted as truth
 
 **Staging only. Covers:** summary SHA/count validation and failure handling.
