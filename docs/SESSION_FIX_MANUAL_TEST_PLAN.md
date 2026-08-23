@@ -4,7 +4,7 @@ This is a human-run, live-box regression checklist for fixes merged in this sess
 
 ## Setup and evidence
 
-1. Record `git rev-parse --short HEAD`; expected revision is `ae5e65e` or a descendant.
+1. Record `git rev-parse --short HEAD`; expected revision is `55d184b` or a descendant. Confirm the session-fix repair is included with `git merge-base --is-ancestor ae5e65e HEAD` (exit status `0`).
 2. Open the chat UI and `#/debug` in separate tabs.
 3. Watch the service with `sudo journalctl -fu ai-mega-app`.
 4. For every case record time, chat ID, trace ID, selected model, result, and a Debug-waterfall screenshot.
