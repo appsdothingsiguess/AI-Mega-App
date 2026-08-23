@@ -106,7 +106,7 @@ async def _stream_completion(
     gpu = entry.gpu if entry else None
     async with span(trace_id, "llm_stream", model=resolved_model, gpu=gpu) as sp:
         tokens_out = 0
-        slow_first_token = False
+        first_token_delayed = False
         rewarm_reported = False
         swap_span = None
         # A slow first token alone is not lifecycle evidence: a loaded model
@@ -118,8 +118,8 @@ async def _stream_completion(
                 agen.__aiter__(), seams.first_token_warn_s, config.llm.first_token_timeout_s,
             ):
                 if kind == "loading":
+                    first_token_delayed = True
                     if swap_pending:
-                        slow_first_token = True
                         if swap_span is None:
                             swap_span = span(trace_id, "swap_wait", model=resolved_model)
                             await swap_span.__aenter__()
@@ -130,7 +130,7 @@ async def _stream_completion(
                     swap_span = None
                 delta = value
                 assert delta is not None
-                if bool(delta.content or delta.reasoning_content or delta.tool_calls) and not slow_first_token and not rewarm_reported:
+                if bool(delta.content or delta.reasoning_content or delta.tool_calls) and not first_token_delayed and not rewarm_reported:
                     rewarm_reported = True
                     if seams.mark_gpu0_activity is not None:
                         try:

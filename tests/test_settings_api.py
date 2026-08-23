@@ -14,7 +14,7 @@ from app.config import Config, reset_config_cache
 from app.main import create_app
 from app.settings import store as store_mod
 from app.types import RouteResult
-from tests.test_chat_sse import FakeLLMClient, _parse_sse
+from tests.chat_fixtures import FakeLLMClient, _parse_sse
 
 MINIMAL_MODEL = {
     "name": "chat-default",

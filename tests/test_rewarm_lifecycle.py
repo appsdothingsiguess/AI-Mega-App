@@ -24,7 +24,7 @@ from app.config import (
 )
 from app.db import open_db
 from app.gpu.rewarm import mark_gpu0_activity, start_rewarm, stop_rewarm
-from tests.test_chat_sse import FakeLLMClient
+from tests.chat_fixtures import FakeLLMClient
 
 
 def _model(name: str, gpu: int | str, file: str, *, resident: bool = False) -> ModelEntry:
