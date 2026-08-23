@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import asyncio
 import sqlite3
+import threading
 import time
 from pathlib import Path
 
@@ -96,6 +98,41 @@ async def test_run_sync_executes_blocking_call_off_loop(tmp_path: Path) -> None:
         row = await run_sync(fetch_one, conn, "SELECT 1")
         assert row[0] == 1
     finally:
+        conn.close()
+
+
+@pytest.mark.asyncio
+async def test_run_sync_serializes_concurrent_work_for_shared_connection(
+    tmp_path: Path,
+) -> None:
+    conn = open_db(tmp_path / "app.db")
+    started = threading.Event()
+    release = threading.Event()
+    state = {"active": 0, "max_active": 0}
+    state_lock = threading.Lock()
+
+    def blocking_query(c: sqlite3.Connection) -> int:
+        with state_lock:
+            state["active"] += 1
+            state["max_active"] = max(state["max_active"], state["active"])
+            started.set()
+        release.wait(timeout=1)
+        with state_lock:
+            state["active"] -= 1
+        return c.execute("SELECT 1").fetchone()[0]
+
+    try:
+        first = asyncio.create_task(run_sync(blocking_query, conn))
+        assert await asyncio.to_thread(started.wait, 1)
+        second = asyncio.create_task(run_sync(blocking_query, conn))
+        await asyncio.sleep(0.02)
+        assert state["max_active"] == 1
+        release.set()
+        assert await first == 1
+        assert await second == 1
+        assert state["max_active"] == 1
+    finally:
+        release.set()
         conn.close()
 
 

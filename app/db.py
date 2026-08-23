@@ -13,11 +13,20 @@ from __future__ import annotations
 import asyncio
 import functools
 import sqlite3
+import threading
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
 SCHEMA_PATH = Path(__file__).resolve().parent / "schema.sql"
+
+# ``check_same_thread=False`` is necessary because repository calls run in the
+# default executor, but it does not make one sqlite3.Connection safe for
+# concurrent executor calls.  The app owns one connection, so serialize those
+# calls at this boundary rather than requiring every repository helper to
+# coordinate independently.  A threading lock belongs here (not an asyncio
+# lock) because the protected work executes in executor threads.
+_EXECUTOR_DB_LOCK = threading.Lock()
 
 
 def connect(path: str | Path) -> sqlite3.Connection:
@@ -60,8 +69,15 @@ def check_connection(conn: sqlite3.Connection) -> bool:
 
 async def run_sync[T](func: Callable[..., T], *args: Any, **kwargs: Any) -> T:
     """Run a blocking sqlite3 call in the default executor so it never
-    blocks the event loop. Feature repository modules build their query
-    helpers as plain sync functions and await run_sync(helper, conn, ...)."""
+    blocks the event loop. Calls are serialized because the app shares one
+    sqlite connection across request and background executor work. Feature
+    repository modules build their query helpers as plain sync functions and
+    await run_sync(helper, conn, ...)."""
     loop = asyncio.get_running_loop()
     call = functools.partial(func, *args, **kwargs)
-    return await loop.run_in_executor(None, call)
+
+    def locked_call() -> T:
+        with _EXECUTOR_DB_LOCK:
+            return call()
+
+    return await loop.run_in_executor(None, locked_call)
