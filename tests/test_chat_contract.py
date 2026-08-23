@@ -1,0 +1,265 @@
+from tests.chat_fixtures import *  # noqa: F401,F403
+from tests.chat_fixtures import _make_client, _parse_sse, _test_config
+
+
+def test_basic_turn_matches_golden_transcript(tmp_path: Path) -> None:
+    fake = FakeLLMClient(
+        chunks=["Hello", ", ", "world!"],
+        usage=Usage(prompt_tokens=5, completion_tokens=3, total_tokens=8),
+    )
+    client = _make_client(tmp_path, fake)
+
+    chat_id = client.post("/api/chats", json={}).json()["id"]
+    resp = client.post(f"/api/chats/{chat_id}/messages", json={"content": "hi"})
+    assert resp.status_code == 200
+    assert resp.headers["content-type"].startswith("text/event-stream")
+
+    events = _parse_sse(resp.text)
+    kinds = [e for e, _ in events]
+    assert kinds == ["token", "token", "token", "done"]
+
+    done_data = events[-1][1]
+    assert done_data["model"] == "chat-default"
+    assert done_data["usage"] == {"prompt_tokens": 5, "completion_tokens": 3, "total_tokens": 8}
+    message_id = done_data["message_id"]
+    trace_id = done_data["trace_id"]
+
+    normalized = resp.text.replace(message_id, "<MESSAGE_ID>").replace(trace_id, "<TRACE_ID>")
+    golden = (GOLDEN_DIR / "basic_turn.txt").read_text()
+    assert normalized.strip() == golden.strip()
+
+
+def test_wiring_proof_spans_exist_for_trace(tmp_path: Path) -> None:
+    """End-to-end proof: create a chat, send a message, and confirm the
+    turn's spans are retrievable via GET /api/debug/trace/{id} — not just a
+    unit-level assertion on the orchestrator."""
+    fake = FakeLLMClient(chunks=["hi"])
+    client = _make_client(tmp_path, fake)
+
+    chat_id = client.post("/api/chats", json={}).json()["id"]
+    resp = client.post(f"/api/chats/{chat_id}/messages", json={"content": "hi"})
+    events = _parse_sse(resp.text)
+    done_data = next(data for ev, data in events if ev == "done")
+    trace_id = done_data["trace_id"]
+
+    trace_resp = client.get(f"/api/debug/trace/{trace_id}")
+    assert trace_resp.status_code == 200
+    body = trace_resp.json()
+    assert body["trace_id"] == trace_id
+    stages = [s["stage"] for s in body["spans"]]
+    assert stages == ["route", "db", "llm_request", "llm_stream", "db", "sse_emit"]
+
+
+def test_llm_error_becomes_terminal_error_event(tmp_path: Path) -> None:
+    fake = FakeLLMClient(raise_error=LLMError("llm_unreachable", "connection refused"))
+    client = _make_client(tmp_path, fake)
+
+    chat_id = client.post("/api/chats", json={}).json()["id"]
+    resp = client.post(f"/api/chats/{chat_id}/messages", json={"content": "hi"})
+
+    events = _parse_sse(resp.text)
+    assert [e for e, _ in events] == ["error"]
+    assert events[0][1] == {"kind": "llm_unreachable", "detail": "connection refused"}
+
+
+def test_model_loading_emitted_only_when_swap_status_reports_cold(tmp_path: Path, monkeypatch) -> None:
+    import app.chat.orchestrator as orchestrator_mod
+
+    monkeypatch.setattr(orchestrator_mod, "FIRST_TOKEN_WARN_S", 0.02)
+    fake = FakeLLMClient(
+        chunks=["slow"], delay_before_first=0.1, model_status={"chat-default": False},
+    )
+    client = _make_client(tmp_path, fake, first_token_timeout_s=5)
+
+    chat_id = client.post("/api/chats", json={}).json()["id"]
+    resp = client.post(f"/api/chats/{chat_id}/messages", json={"content": "hi"})
+
+    events = _parse_sse(resp.text)
+    kinds = [e for e, _ in events]
+    assert "model_loading" in kinds
+    assert kinds[-1] == "done"
+    loading_data = next(data for ev, data in events if ev == "model_loading")
+    assert loading_data == {"model": "chat-default"}
+
+
+def test_slow_first_token_on_loaded_model_does_not_claim_swap(tmp_path: Path, monkeypatch) -> None:
+    import app.chat.orchestrator as orchestrator_mod
+
+    monkeypatch.setattr(orchestrator_mod, "FIRST_TOKEN_WARN_S", 0.02)
+    fake = FakeLLMClient(
+        chunks=["slow"], delay_before_first=0.1, model_status={"chat-default": True},
+    )
+    client = _make_client(tmp_path, fake, first_token_timeout_s=5)
+
+    chat_id = client.post("/api/chats", json={}).json()["id"]
+    events = _parse_sse(client.post(f"/api/chats/{chat_id}/messages", json={"content": "hi"}).text)
+
+    assert [event for event, _ in events] == ["token", "done"]
+
+
+def test_connection_error_after_loading_warn_is_terminal_error(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """Regression: if the backend fails after the model_loading warn window
+    has fired, the stream must end with SSE `error`, not a silent empty `done`.
+
+    Before the fix, asyncio.wait_for cancelled the in-flight __anext__ at the
+    warn boundary, leaving the async generator exhausted (StopAsyncIteration)
+    so the turn ended as a phantom `done` with zero tokens.
+    """
+    import app.chat.orchestrator as orchestrator_mod
+
+    # Warn window is very short; backend "fails" after the warn has already fired.
+    monkeypatch.setattr(orchestrator_mod, "FIRST_TOKEN_WARN_S", 0.02)
+    fake = FakeLLMClient(
+        delay_before_first=0.1,
+        raise_error=LLMError("connection", "backend killed"),
+        model_status={"chat-default": False},
+    )
+    client = _make_client(tmp_path, fake, first_token_timeout_s=5)
+
+    chat_id = client.post("/api/chats", json={}).json()["id"]
+    resp = client.post(f"/api/chats/{chat_id}/messages", json={"content": "hi"})
+
+    events = _parse_sse(resp.text)
+    kinds = [e for e, _ in events]
+    # model_loading fires first (warn window elapsed), then error (not done).
+    assert "model_loading" in kinds, f"expected model_loading in {kinds}"
+    assert kinds[-1] == "error", f"expected terminal error, got {kinds}"
+    error_data = next(data for ev, data in events if ev == "error")
+    assert error_data["kind"] == "connection"
+
+
+def test_send_message_to_unknown_chat_returns_404(tmp_path: Path) -> None:
+    client = _make_client(tmp_path, FakeLLMClient())
+    resp = client.post("/api/chats/does-not-exist/messages", json={"content": "hi"})
+    assert resp.status_code == 404
+
+
+def test_model_override_persists_and_is_used(tmp_path: Path) -> None:
+    fake = FakeLLMClient(chunks=["ok"])
+    client = _make_client(tmp_path, fake)
+
+    chat_id = client.post("/api/chats", json={}).json()["id"]
+    set_resp = client.post(f"/api/chats/{chat_id}/model", json={"model": "chat-default"})
+    assert set_resp.status_code == 200
+    assert set_resp.json()["model_override"] == "chat-default"
+
+    resp = client.post(f"/api/chats/{chat_id}/messages", json={"content": "hi"})
+    events = _parse_sse(resp.text)
+    done_data = next(data for ev, data in events if ev == "done")
+    assert done_data["model"] == "chat-default"
+
+    messages = client.get(f"/api/chats/{chat_id}/messages").json()
+    assert [m["role"] for m in messages] == ["user", "assistant"]
+    assert messages[1]["model"] == "chat-default"
+
+
+def test_model_aliases_are_validated_before_override_or_turn_persistence(
+    tmp_path: Path,
+) -> None:
+    """Unknown and disabled aliases must never reach the turn loop."""
+    fake = FakeLLMClient(chunks=["should not run"])
+    cfg = _test_config(tmp_path / "app.db")
+    disabled = ModelEntry(
+        name="disabled-model",
+        **{"class": "general"},
+        ctx=4096,
+        gpu=0,
+        tool_call="native",
+        max_tokens=1024,
+        enabled=False,
+        file="/models/disabled.gguf",
+        quant="Q4_K_M",
+    )
+    app = create_app(config=cfg.model_copy(update={"models": [*cfg.models, disabled]}))
+    app.state.llm_client = fake
+    client = TestClient(app)
+    client.__enter__()
+    try:
+        chat_id = client.post("/api/chats", json={}).json()["id"]
+
+        for alias in ("missing-model", "disabled-model", ""):
+            override = client.post(f"/api/chats/{chat_id}/model", json={"model": alias})
+            assert override.status_code == 422
+            send = client.post(
+                f"/api/chats/{chat_id}/messages",
+                json={"content": "hi", "model": alias},
+            )
+            assert send.status_code == 422
+
+        assert client.get(f"/api/chats/{chat_id}/messages").json() == []
+        assert fake.all_models == []
+    finally:
+        client.__exit__(None, None, None)
+
+
+def test_attachments_are_rejected_before_turn_persistence(tmp_path: Path) -> None:
+    fake = FakeLLMClient(chunks=["should not run"])
+    client = _make_client(tmp_path, fake)
+    chat_id = client.post("/api/chats", json={}).json()["id"]
+
+    response = client.post(
+        f"/api/chats/{chat_id}/messages",
+        json={"content": "describe this", "attachments": ["image.png"]},
+    )
+
+    assert response.status_code == 422
+    assert "Phase 3" in response.json()["detail"]
+    assert client.get(f"/api/chats/{chat_id}/messages").json() == []
+    assert fake.all_models == []
+
+
+def test_no_override_forwards_llm_client_and_config_to_router(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """Regression: the orchestrator's call to app.router.route() must pass
+    llm_client and config, not just (chat, text, attachments). Omitting
+    them silently defaults llm_client to None inside route(), which skips
+    the classifier layer entirely on every real turn -- every message
+    routes to routing.classifier.fallback_model regardless of content,
+    with source="classifier"/confidence=None/near-zero latency (looks like
+    a real classifier decision in the debug panel but isn't one)."""
+    import app.chat.orchestrator as orchestrator_mod
+    from app.types import RouteResult
+
+    captured: dict = {}
+
+    async def fake_route(chat, text, attachments, **kwargs):
+        captured.update(kwargs)
+        # The router reports *why* it decided through this out-dict; the
+        # orchestrator must merge it into its own route span.
+        details = kwargs.get("details")
+        if details is not None:
+            details.update({"layer": "classifier"})
+        return RouteResult(
+            model="chat-default", source="classifier", intent="chat",
+            latency_ms=1.0, confidence=0.9,
+        )
+
+    monkeypatch.setattr(orchestrator_mod, "_route", fake_route)
+
+    fake = FakeLLMClient(chunks=["ok"])
+    client = _make_client(tmp_path, fake)
+    chat_id = client.post("/api/chats", json={}).json()["id"]
+    client.post(f"/api/chats/{chat_id}/messages", json={"content": "hi"})
+
+    assert captured["llm_client"] is fake
+    assert captured["config"] is not None
+    assert "details" in captured
+
+def test_history_endpoint_lists_chats(tmp_path: Path) -> None:
+    client = _make_client(tmp_path, FakeLLMClient())
+    chat_id = client.post("/api/chats", json={}).json()["id"]
+    resp = client.get("/api/chats")
+    assert resp.status_code == 200
+    ids = [c["id"] for c in resp.json()]
+    assert chat_id in ids
+
+
+# ---------------------------------------------------------------------------
+# Debug observability: the Debug view's prompt/response tabs and tok/s
+# readout are fed from span data. If nothing writes those fields the tabs
+# are permanently empty, which is how it shipped (docs/HANDOFF.md).
+# ---------------------------------------------------------------------------
+
