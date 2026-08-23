@@ -41,20 +41,16 @@ GpuAssignment = Literal[0, 1, "cpu"]
 class _Strict(BaseModel):
     model_config = {"extra": "forbid"}
 
-
 class ServerConfig(_Strict):
     host: str = "0.0.0.0"
     port: int = 8000
-
 
 class LlamaSwapConfig(_Strict):
     base_url: str
     timeout_s: float = 120
 
-
 class DbConfig(_Strict):
     path: str = "data/app.db"
-
 
 class ModelEntry(_Strict):
     name: str
@@ -75,20 +71,16 @@ class ModelEntry(_Strict):
 
     model_config = {"extra": "forbid", "populate_by_name": True}
 
-
 class DefaultsConfig(_Strict):
     chat_model: str
     utility_model: str
     title_model: str
 
-
 class LlmConfig(_Strict):
     first_token_timeout_s: float = 30
 
-
 class DebugConfig(_Strict):
     store_prompts: bool = True
-
 
 class GpuConfig(_Strict):
     rewarm_default_after_min: int = 10
@@ -96,7 +88,6 @@ class GpuConfig(_Strict):
     swap_yaml_path: str = "/home/john/llm-stack/serving/llama-swap/config.yaml"
     reload_on_change: bool = True
     vram_guard: bool = True
-
 
 class RoutingRule(_Strict):
     keywords: list[str]
@@ -112,7 +103,6 @@ class RoutingRule(_Strict):
                 )
         return v
 
-
 class RoutingIntents(_Strict):
     chat: str = "chat-default"
     chit_chat: str = "chat-default"
@@ -120,7 +110,6 @@ class RoutingIntents(_Strict):
     reasoning_task: str = "reasoner"
     vision_task: str = "vision"
     tool_call_needed: str = "chat-default"
-
 
 class RoutingClassifierConfig(_Strict):
     model: str = "classifier"
@@ -130,7 +119,6 @@ class RoutingClassifierConfig(_Strict):
     confidence_threshold: float = 0.5
     fallback_model: str = "chat-default"
 
-
 class RoutingConfig(_Strict):
     rules: list[RoutingRule] = Field(default_factory=list)
     attachments: dict[str, str] = Field(default_factory=dict)
@@ -138,7 +126,6 @@ class RoutingConfig(_Strict):
     classifier: RoutingClassifierConfig = Field(
         default_factory=RoutingClassifierConfig
     )
-
 
 class BackgroundConfig(_Strict):
     title_model: str = "dispatcher"
@@ -181,7 +168,6 @@ class BackgroundConfig(_Strict):
     summary_gpu_tokens_per_sec_prefill: float = 2700.0
     summary_gpu_tokens_per_sec_decode: float = 70.0
 
-
 class Config(_Strict):
     server: ServerConfig = Field(default_factory=ServerConfig)
     llama_swap: LlamaSwapConfig
@@ -194,14 +180,12 @@ class Config(_Strict):
     routing: RoutingConfig = Field(default_factory=RoutingConfig)
     background: BackgroundConfig = Field(default_factory=BackgroundConfig)
 
-
 def _read_yaml(path: Path) -> dict[str, Any]:
     if not path.exists():
         return {}
     with path.open("r", encoding="utf-8") as fh:
         loaded = yaml.safe_load(fh)
     return loaded or {}
-
 
 def _deep_merge(base: dict[str, Any], overlay: dict[str, Any]) -> dict[str, Any]:
     """Merge `overlay` onto `base`, overlay values winning. Nested dicts merge
@@ -216,11 +200,65 @@ def _deep_merge(base: dict[str, Any], overlay: dict[str, Any]) -> dict[str, Any]
     return merged
 
 
+def _merge_overlay(base: dict[str, Any], overlay: dict[str, Any]) -> dict[str, Any]:
+    """Merge legacy full lists or sparse ``models: {alias: patch}`` overlays."""
+    model_patches = overlay.get("models")
+    base_models = base.get("models")
+    if not isinstance(model_patches, dict) or not isinstance(base_models, list):
+        return _deep_merge(base, overlay)
+    patches = dict(model_patches)
+    merged_models: list[dict[str, Any]] = []
+    for entry in base_models:
+        if not isinstance(entry, dict):
+            return _deep_merge(base, overlay)
+        name = entry.get("name")
+        if not isinstance(name, str):
+            return _deep_merge(base, overlay)
+        patch = patches.pop(name, {})
+        if not isinstance(patch, dict):
+            raise ConfigError(f"models.{name}", "patch must be a mapping")
+        merged_models.append(_deep_merge(entry, patch))
+    if patches:
+        unknown = next(iter(patches))
+        raise ConfigError(f"models.{unknown}", "model does not exist in base config")
+    merged = _deep_merge(base, {key: value for key, value in overlay.items() if key != "models"})
+    merged["models"] = merged_models
+    return merged
+
+
 def _first_error_key_path(exc: ValidationError) -> tuple[str, str]:
     errors = exc.errors()
     first = errors[0]
     key_path = ".".join(str(part) for part in first["loc"]) or "<root>"
     return key_path, first["msg"]
+
+
+def _validate_model_references(config: Config) -> None:
+    """Reject references to absent or disabled model aliases explicitly."""
+    names: set[str] = set()
+    for index, model in enumerate(config.models):
+        if model.name in names:
+            raise ConfigError(f"models.{index}.name", "duplicate model alias")
+        names.add(model.name)
+    enabled = {model.name for model in config.models if model.enabled}
+    references = {
+        **{f"defaults.{field}": getattr(config.defaults, field) for field in ("chat_model", "utility_model", "title_model")},
+        **{f"routing.intents.{field}": getattr(config.routing.intents, field) for field in RoutingIntents.model_fields},
+        "routing.classifier.model": config.routing.classifier.model,
+        "routing.classifier.fallback_model": config.routing.classifier.fallback_model,
+        **{f"background.{field}": getattr(config.background, field) for field in ("title_model", "summary_model", "summary_model_gpu")},
+    }
+    for key_path, alias in references.items():
+        if alias not in enabled:
+            reason = "model is disabled" if alias in names else "model does not exist"
+            raise ConfigError(key_path, f"{reason}: {alias!r}")
+    valid_intents = set(RoutingIntents.model_fields)
+    for index, rule in enumerate(config.routing.rules):
+        if rule.intent not in valid_intents:
+            raise ConfigError(f"routing.rules.{index}.intent", "unknown routing intent")
+    for attachment, intent in config.routing.attachments.items():
+        if intent not in valid_intents:
+            raise ConfigError(f"routing.attachments.{attachment}", "unknown routing intent")
 
 
 def load_config(path: Path = CONFIG_PATH) -> Config:
@@ -231,12 +269,14 @@ def load_config(path: Path = CONFIG_PATH) -> Config:
         raise ConfigError(str(path), "file not found")
     base = _read_yaml(path)
     overlay = _read_yaml(OVERLAY_PATH)
-    merged = _deep_merge(base, overlay)
+    merged = _merge_overlay(base, overlay)
     try:
-        return Config.model_validate(merged)
+        config = Config.model_validate(merged)
     except ValidationError as exc:
         key_path, reason = _first_error_key_path(exc)
         raise ConfigError(key_path, reason) from exc
+    _validate_model_references(config)
+    return config
 
 
 _cached_config: Config | None = None

@@ -23,7 +23,7 @@ from app.config import (
     Config,
     ConfigError,
     _deep_merge,
-    _first_error_key_path,
+    _merge_overlay,
     _read_yaml,
     load_config,
     reset_config_cache,
@@ -43,13 +43,24 @@ def get_effective() -> Config:
 
 
 def _validate_merged(overlay: dict[str, Any]) -> Config:
+    # Use the public loader path so sparse-model merge and cross-field
+    # reference validation are exactly the same for reads and writes.
     base = _read_yaml(CONFIG_PATH)
-    merged = _deep_merge(base, overlay)
+    merged = _merge_overlay(base, overlay)
     try:
-        return Config.model_validate(merged)
+        config = Config.model_validate(merged)
     except ValidationError as exc:
+        from app.config import _first_error_key_path
+
         key_path, reason = _first_error_key_path(exc)
         raise ConfigError(key_path, reason) from exc
+    # Temporarily validate through load_config's shared reference checker
+    # without touching disk. Kept as an import-local to avoid widening the
+    # public configuration API solely for the settings writer.
+    from app.config import _validate_model_references
+
+    _validate_model_references(config)
+    return config
 
 
 def _write_atomic(data: dict[str, Any]) -> None:
@@ -66,20 +77,43 @@ def _write_atomic(data: dict[str, Any]) -> None:
 def update_model(name: str, patch: dict[str, Any]) -> Config:
     """Patch one model's ``gpu`` / ``resident`` / ``ttl_s`` / ``enabled``.
 
-    Overlay ``models`` is replaced wholesale with the patched full roster.
+    New overlays store only the changed fields under ``models.<alias>``.
+    Legacy full-roster overlays are read compatibly and migrated to sparse
+    patches on the next model write.
     Raises ``KeyError`` if ``name`` is missing; ``ConfigError`` if the
     merged result fails validation (overlay left unchanged).
     """
     effective = get_effective()
-    roster = [m.model_dump(by_alias=True) for m in effective.models]
-    idx = next((i for i, m in enumerate(roster) if m.get("name") == name), None)
-    if idx is None:
+    if not any(model.name == name for model in effective.models):
         raise KeyError(f"unknown model: {name!r}")
 
     applied = {k: v for k, v in patch.items() if k in _MODEL_PATCH_KEYS}
-    roster[idx] = {**roster[idx], **applied}
+    overlay = dict(read_overlay())
+    model_patches = overlay.get("models", {})
+    if isinstance(model_patches, list):
+        base_models = {
+            model["name"]: model for model in _read_yaml(CONFIG_PATH).get("models", [])
+        }
+        sparse: dict[str, dict[str, Any]] = {}
+        for legacy in model_patches:
+            if not isinstance(legacy, dict) or not isinstance(legacy.get("name"), str):
+                continue
+            base = base_models.get(legacy["name"])
+            if base is None:
+                continue
+            delta = {
+                key: value for key, value in legacy.items()
+                if key != "name" and base.get(key) != value
+            }
+            if delta:
+                sparse[legacy["name"]] = delta
+        model_patches = sparse
+    elif not isinstance(model_patches, dict):
+        raise ConfigError("models", "overlay models must be a mapping or list")
 
-    overlay = {**read_overlay(), "models": roster}
+    sparse = {alias: dict(values) for alias, values in model_patches.items()}
+    sparse[name] = {**sparse.get(name, {}), **applied}
+    overlay["models"] = sparse
     validated = _validate_merged(overlay)
     _write_atomic(overlay)
     reset_config_cache()

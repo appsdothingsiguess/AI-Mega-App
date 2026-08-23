@@ -27,10 +27,18 @@ MINIMAL_MODEL = {
     "quant": "Q4_K_M",
 }
 
+REQUIRED_ALIASES = (
+    "coder", "reasoner", "vision", "classifier", "dispatcher", "utility",
+    "utility-gpu",
+)
+
 MINIMAL_CONFIG: dict = {
     "llama_swap": {"base_url": "http://127.0.0.1:8080/v1"},
     "db": {"path": "app.db"},
-    "models": [MINIMAL_MODEL],
+    "models": [
+        MINIMAL_MODEL,
+        *[{**MINIMAL_MODEL, "name": alias} for alias in REQUIRED_ALIASES],
+    ],
     "defaults": {
         "chat_model": "chat-default",
         "utility_model": "chat-default",
@@ -91,8 +99,24 @@ def test_overlay_round_trip(
 
     assert overlay_path.is_file()
     overlay = yaml.safe_load(overlay_path.read_text(encoding="utf-8"))
-    overlay_models = {m["name"]: m for m in overlay["models"]}
-    assert overlay_models["chat-default"]["gpu"] == "cpu"
+    assert overlay["models"] == {"chat-default": {"gpu": "cpu"}}
+
+
+def test_model_write_migrates_legacy_full_roster_to_sparse_overlay(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _, overlay_path = _patch_config_paths(monkeypatch, tmp_path)
+    legacy = [dict(model) for model in MINIMAL_CONFIG["models"]]
+    legacy[0]["resident"] = True
+    write_yaml(overlay_path, {"models": legacy})
+    client = _settings_client(tmp_path)
+
+    response = client.put("/api/settings/models/chat-default", json={"gpu": "cpu"})
+    assert response.status_code == 200
+    overlay = yaml.safe_load(overlay_path.read_text(encoding="utf-8"))
+    assert overlay["models"] == {
+        "chat-default": {"resident": True, "gpu": "cpu"}
+    }
 
 
 def test_invalid_write_rejected(
@@ -236,12 +260,14 @@ def test_list_models_hides_disabled_aliases(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     disabled = {**MINIMAL_MODEL, "name": "disabled-model", "enabled": False}
-    base = {**MINIMAL_CONFIG, "models": [MINIMAL_MODEL, disabled]}
+    base = {**MINIMAL_CONFIG, "models": [*MINIMAL_CONFIG["models"], disabled]}
     _patch_config_paths(monkeypatch, tmp_path, base)
     client = _settings_client(tmp_path)
     try:
         response = client.get("/api/models")
         assert response.status_code == 200
-        assert [model["alias"] for model in response.json()] == ["chat-default"]
+        aliases = [model["alias"] for model in response.json()]
+        assert "disabled-model" not in aliases
+        assert "chat-default" in aliases
     finally:
         client.__exit__(None, None, None)

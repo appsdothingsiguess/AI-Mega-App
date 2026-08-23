@@ -26,9 +26,17 @@ MINIMAL_MODEL = {
     "quant": "Q4_K_M",
 }
 
+REQUIRED_ALIASES = (
+    "coder", "reasoner", "vision", "classifier", "dispatcher", "utility",
+    "utility-gpu",
+)
+
 MINIMAL_CONFIG: dict = {
     "llama_swap": {"base_url": "http://127.0.0.1:8080/v1"},
-    "models": [MINIMAL_MODEL],
+    "models": [
+        MINIMAL_MODEL,
+        *[{**MINIMAL_MODEL, "name": alias} for alias in REQUIRED_ALIASES],
+    ],
     "defaults": {
         "chat_model": "chat-default",
         "utility_model": "chat-default",
@@ -95,6 +103,37 @@ def test_overlay_merge_precedence(tmp_path: Path, monkeypatch: pytest.MonkeyPatc
     assert cfg.models[0].name == "chat-default"  # base untouched otherwise
 
 
+def test_sparse_model_overlay_preserves_new_base_models(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    base_path = tmp_path / "config.yaml"
+    overlay_path = tmp_path / "settings.local.yaml"
+    base = {**MINIMAL_CONFIG, "models": [*MINIMAL_CONFIG["models"], {
+        **MINIMAL_MODEL, "name": "new-base-model"
+    }]}
+    write_yaml(base_path, base)
+    write_yaml(overlay_path, {"models": {"chat-default": {"gpu": "cpu"}}})
+    monkeypatch.setattr(config_mod, "OVERLAY_PATH", overlay_path)
+
+    cfg = load_config(base_path)
+    models = {model.name: model for model in cfg.models}
+    assert models["chat-default"].gpu == "cpu"
+    assert "new-base-model" in models
+
+
+def test_sparse_model_overlay_unknown_alias_has_precise_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    base_path = tmp_path / "config.yaml"
+    overlay_path = tmp_path / "settings.local.yaml"
+    write_yaml(base_path, MINIMAL_CONFIG)
+    write_yaml(overlay_path, {"models": {"gone": {"enabled": False}}})
+    monkeypatch.setattr(config_mod, "OVERLAY_PATH", overlay_path)
+
+    with pytest.raises(ConfigError, match="models.gone"):
+        load_config(base_path)
+
+
 def test_no_overlay_file_uses_base_only(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     base_path = tmp_path / "config.yaml"
     write_yaml(base_path, MINIMAL_CONFIG)
@@ -141,14 +180,15 @@ def test_model_entry_new_fields_round_trip(
     cfg_data = dict(MINIMAL_CONFIG)
     cfg_data["models"] = [
         {
-            **MINIMAL_MODEL,
+            **MINIMAL_CONFIG["models"][0],
             "file": "/models/chat.gguf",
             "quant": "Q5_K_M",
             "mmproj": "/models/chat-mmproj.gguf",
             "resident": True,
             "ttl_s": 0,
             "extra_flags": ["--cache-type-k", "q8_0"],
-        }
+        },
+        *MINIMAL_CONFIG["models"][1:],
     ]
     base_path = tmp_path / "config.yaml"
     write_yaml(base_path, cfg_data)
@@ -259,6 +299,37 @@ def test_routing_rule_single_word_rejected_via_config(tmp_path: Path) -> None:
     write_yaml(base_path, bad)
     with pytest.raises(ConfigError):
         load_config(base_path)
+
+
+@pytest.mark.parametrize(
+    ("section", "value", "key_path"),
+    [
+        ("defaults", {"chat_model": "missing"}, "defaults.chat_model"),
+        ("routing", {"intents": {"code_task": "missing"}}, "routing.intents.code_task"),
+        ("routing", {"classifier": {"model": "missing"}}, "routing.classifier.model"),
+        ("background", {"summary_model": "missing"}, "background.summary_model"),
+    ],
+)
+def test_model_references_must_exist_and_be_enabled(
+    tmp_path: Path, section: str, value: dict, key_path: str
+) -> None:
+    bad = {**MINIMAL_CONFIG, section: {**MINIMAL_CONFIG.get(section, {}), **value}}
+    base_path = tmp_path / "config.yaml"
+    write_yaml(base_path, bad)
+    with pytest.raises(ConfigError) as exc_info:
+        load_config(base_path)
+    assert exc_info.value.key_path == key_path
+
+
+def test_disabled_model_reference_has_precise_error(tmp_path: Path) -> None:
+    models = [dict(model) for model in MINIMAL_CONFIG["models"]]
+    models[0]["enabled"] = False
+    base_path = tmp_path / "config.yaml"
+    write_yaml(base_path, {**MINIMAL_CONFIG, "models": models})
+    with pytest.raises(ConfigError) as exc_info:
+        load_config(base_path)
+    assert exc_info.value.key_path == "defaults.chat_model"
+    assert "disabled" in exc_info.value.reason
 
 
 # ---------------------------------------------------------------------------
