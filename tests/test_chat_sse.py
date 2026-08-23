@@ -208,11 +208,13 @@ def test_llm_error_becomes_terminal_error_event(tmp_path: Path) -> None:
     assert events[0][1] == {"kind": "llm_unreachable", "detail": "connection refused"}
 
 
-def test_model_loading_emitted_when_first_token_is_slow(tmp_path: Path, monkeypatch) -> None:
+def test_model_loading_emitted_only_when_swap_status_reports_cold(tmp_path: Path, monkeypatch) -> None:
     import app.chat.orchestrator as orchestrator_mod
 
     monkeypatch.setattr(orchestrator_mod, "FIRST_TOKEN_WARN_S", 0.02)
-    fake = FakeLLMClient(chunks=["slow"], delay_before_first=0.1)
+    fake = FakeLLMClient(
+        chunks=["slow"], delay_before_first=0.1, model_status={"chat-default": False},
+    )
     client = _make_client(tmp_path, fake, first_token_timeout_s=5)
 
     chat_id = client.post("/api/chats", json={}).json()["id"]
@@ -224,6 +226,21 @@ def test_model_loading_emitted_when_first_token_is_slow(tmp_path: Path, monkeypa
     assert kinds[-1] == "done"
     loading_data = next(data for ev, data in events if ev == "model_loading")
     assert loading_data == {"model": "chat-default"}
+
+
+def test_slow_first_token_on_loaded_model_does_not_claim_swap(tmp_path: Path, monkeypatch) -> None:
+    import app.chat.orchestrator as orchestrator_mod
+
+    monkeypatch.setattr(orchestrator_mod, "FIRST_TOKEN_WARN_S", 0.02)
+    fake = FakeLLMClient(
+        chunks=["slow"], delay_before_first=0.1, model_status={"chat-default": True},
+    )
+    client = _make_client(tmp_path, fake, first_token_timeout_s=5)
+
+    chat_id = client.post("/api/chats", json={}).json()["id"]
+    events = _parse_sse(client.post(f"/api/chats/{chat_id}/messages", json={"content": "hi"}).text)
+
+    assert [event for event, _ in events] == ["token", "done"]
 
 
 def test_connection_error_after_loading_warn_is_terminal_error(
@@ -243,6 +260,7 @@ def test_connection_error_after_loading_warn_is_terminal_error(
     fake = FakeLLMClient(
         delay_before_first=0.1,
         raise_error=LLMError("connection", "backend killed"),
+        model_status={"chat-default": False},
     )
     client = _make_client(tmp_path, fake, first_token_timeout_s=5)
 
@@ -495,13 +513,14 @@ def test_route_span_records_why_not_just_what(tmp_path: Path, monkeypatch) -> No
     assert data["fallback_reason"] == "timeout"
 
 
-def test_slow_first_token_emits_swap_wait_span(tmp_path: Path, monkeypatch) -> None:
-    """A model_loading wait is llama-swap loading the slot — it gets its own
-    span so the Debug view can show the swap badge (docs/FEATURES.md F1)."""
+def test_evidenced_cold_model_emits_swap_wait_span(tmp_path: Path, monkeypatch) -> None:
+    """Only an explicit cold swap status gets the Debug swap badge."""
     import app.chat.orchestrator as orchestrator_mod
 
     monkeypatch.setattr(orchestrator_mod, "FIRST_TOKEN_WARN_S", 0.02)
-    fake = FakeLLMClient(chunks=["hi"], delay_before_first=0.15)
+    fake = FakeLLMClient(
+        chunks=["hi"], delay_before_first=0.15, model_status={"chat-default": False},
+    )
     client = _make_client(tmp_path, fake, first_token_timeout_s=5)
     trace_id = _run_turn(client)
 

@@ -27,6 +27,7 @@ class TurnSeams:
     model_entry: Callable[[str], ModelEntry | None]
     canonical_swap_name: Callable[[str], str]
     preferred_model: Callable[[], Awaitable[str | None]]
+    swap_pending: Callable[[str], Awaitable[bool]]
     stream_with_loading: Callable[..., AsyncIterator[tuple[str, ChatDelta | None]]]
     first_token_warn_s: float
 
@@ -108,16 +109,21 @@ async def _stream_completion(
         slow_first_token = False
         rewarm_reported = False
         swap_span = None
+        # A slow first token alone is not lifecycle evidence: a loaded model
+        # can spend a long time prefilling a large prompt.  Snapshot
+        # llama-swap's explicit unloaded status before the request instead.
+        swap_pending = await seams.swap_pending(resolved_model)
         try:
             async for kind, value in seams.stream_with_loading(
                 agen.__aiter__(), seams.first_token_warn_s, config.llm.first_token_timeout_s,
             ):
                 if kind == "loading":
-                    slow_first_token = True
-                    if swap_span is None:
-                        swap_span = span(trace_id, "swap_wait", model=resolved_model)
-                        await swap_span.__aenter__()
-                    yield SSEEvent(event="model_loading", data={"model": resolved_model})
+                    if swap_pending:
+                        slow_first_token = True
+                        if swap_span is None:
+                            swap_span = span(trace_id, "swap_wait", model=resolved_model)
+                            await swap_span.__aenter__()
+                        yield SSEEvent(event="model_loading", data={"model": resolved_model})
                     continue
                 if swap_span is not None:
                     await swap_span.__aexit__(None, None, None)

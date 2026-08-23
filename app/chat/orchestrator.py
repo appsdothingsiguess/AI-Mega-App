@@ -97,6 +97,26 @@ class ChatOrchestrator:
         loaded = [name for name in gpu0 if status.get(name)]
         return loaded[0] if len(loaded) == 1 else None
 
+    async def _swap_pending(self, model: str) -> bool:
+        """Whether llama-swap explicitly reports this GPU0 swap slot cold.
+
+        Absence, query failure, and a loaded status are deliberately all
+        non-evidence.  In those cases a delayed first token can be prompt
+        prefill, so the UI and trace must not claim a model swap happened.
+        """
+        entry = self._model_entry(model)
+        if entry is None or entry.gpu != 0 or entry.resident:
+            return False
+        model_status = getattr(self.llm_client, "model_status", None)
+        if model_status is None:
+            return False
+        try:
+            status = await model_status()
+        except Exception:
+            return False
+        canonical = self._canonical_swap_name(model)
+        return status.get(canonical) is False
+
     async def handle_message(
         self, chat_id: str, text: str, model: str | None = None,
         attachments: list[str] | None = None,
@@ -107,6 +127,7 @@ class ChatOrchestrator:
             mark_gpu0_activity=_mark_gpu0_activity, model_entry=self._model_entry,
             canonical_swap_name=self._canonical_swap_name,
             preferred_model=self._get_preferred_model,
+            swap_pending=self._swap_pending,
             stream_with_loading=_stream_with_loading,
             first_token_warn_s=FIRST_TOKEN_WARN_S,
         )
