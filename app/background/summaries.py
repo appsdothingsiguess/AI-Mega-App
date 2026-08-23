@@ -1,48 +1,9 @@
-"""Rolling chat summaries — incremental, token-triggered (PLAN.md §4.15,
-FEATURES F18).
+"""Incremental, token-triggered rolling summaries (PLAN §4.15; FEATURES F18).
 
-Model alias comes only from ``config.background.summary_model``; never a
-hardcoded literal. Failures stay inside the background queue (retry once).
-
-Design (rewritten 2026-08-15, see docs/HANDOFF.md for the incident this
-replaces): the previous version re-summarized the *entire* transcript from
-scratch every regen and always kept the same fixed-size raw tail in the
-compacted prompt (app/chat/orchestrator.py:_apply_summary_compaction) --
-right at the moment a summary regenerated, the summary and the tail covered
-the exact same turns, so every subsequent request paid for that overlap
-twice. It also triggered purely on a fixed turn-count cadence, regardless
-of how much real content that was.
-
-This version:
-  - Triggers on real llama.cpp prompt_tokens (from the most recent
-    llm_stream span for the chat) crossing summary_context_fraction (0.5
-    by default) of the *smaller* of: that turn's own model's ctx, and the
-    tightest ctx among every model the router could plausibly send the
-    *next* turn to (_min_routable_ctx). The roster spans ctx 8192-32768
-    and routing picks per-turn, not once per chat -- checking only the
-    last-used model's ctx would let a chat sitting comfortably under
-    threshold on a roomy model (chat-default, 32768) sail past a much
-    tighter model's real budget (coder-small, 8192) the moment the very
-    next message reads as a coding question, with zero warning. Falls back
-    to the turn-count cadence only when no usage data exists yet for the
-    chat (first turn, or a test harness that seeds messages directly
-    without going through the orchestrator), and to a flat
-    summary_token_threshold if neither ctx can be resolved.
-  - Summarizes only the messages *since the last summary regen* (found via
-    the previous `summary` span's timestamp -- no new DB column; traces/
-    spans already carry chat_id and started_at) instead of the whole
-    transcript, folding them into the prior summary.
-  - Caps the delta sent to the summarizer at the summarizer *model's own*
-    ctx budget (2026-08-15 fix, live incident traces fe85c4f7/85b0fbc8: a
-    chat's first-ever regen sent its entire 20-message, ~8600-token
-    transcript to `utility`, whose own ctx is 8192 -- smaller than the
-    chat model it was summarizing. The request 400'd, retried once
-    (BackgroundQueue's standard retry), 400'd again identically, and
-    because the summary never wrote, every later turn kept re-triggering
-    the same doomed oversized regen forever. Fix keeps the *oldest* delta
-    messages that fit the budget and leaves the rest for the next regen,
-    so a long unsummarized backlog gets compacted in successive
-    ctx-sized bites instead of failing outright.
+Each run folds the oldest budget-fitting unsummarized prefix into the prior
+summary. Coverage is committed only with fingerprint metadata owned by
+``summary_coverage``; invalid state restarts conservatively from raw history.
+Model aliases and budgets come exclusively from config.
 """
 
 from __future__ import annotations
@@ -54,6 +15,7 @@ import time
 from typing import Any
 
 from app.background.queue import get_queue
+from app.background.summary_coverage import coverage_fields, trusted_covered_count
 from app.chat import history
 from app.db import run_sync
 from app.debug import new_trace, span
@@ -96,9 +58,8 @@ def _min_routable_ctx(cfg: Any) -> int | None:
     (ctx 8192) the moment a message reads as a coding question -- checking
     growth only against whichever model happened to serve the *last* turn
     would let raw history sail right past a smaller model's real budget
-    with zero warning, landing straight in _truncate_to_ctx's hard
-    (unsummarized) truncation instead of a graceful compaction. This is
-    the safety floor maybe_enqueue_summary pairs with the per-turn check."""
+    with zero warning. This is the safety floor maybe_enqueue_summary pairs
+    with the per-turn check and lossless prompt-fit refusal."""
     routing = getattr(cfg, "routing", None)
     if routing is None:
         return None
@@ -140,39 +101,6 @@ def _latest_usage(conn: sqlite3.Connection, chat_id: str) -> tuple[int, str | No
     if not isinstance(tokens, (int, float)):
         return None
     return int(tokens), data.get("model")
-
-
-def last_summary_covered_count(conn: sqlite3.Connection, chat_id: str) -> int:
-    """How many messages (in history.list_messages's stable
-    created_at/rowid order) the most recent `summary` span actually folded
-    in, or 0 if this chat has never been summarized.
-
-    An exact position in that stable order -- not a timestamp -- because
-    _fit_to_budget below can summarize only an oldest prefix of a delta
-    that's too big for the summarizer's own ctx, leaving some already-new
-    messages uncovered. A timestamp cutoff (the span's own started_at, the
-    original design) can't distinguish "covered by this regen" from "just
-    happened to arrive after it" when that happens, and orchestrator.py's
-    compaction would then wrongly treat the shortfall as already-summarized
-    and silently drop it from every future prompt. A message count has no
-    such ambiguity, and needs no new DB column: it's just another field in
-    the summary span's existing free-form data JSON. app/chat/orchestrator.py
-    reads this same helper for its own tail-compaction cutoff."""
-    row = conn.execute(
-        "SELECT s.data AS data FROM spans s "
-        "JOIN traces t ON t.trace_id = s.trace_id "
-        "WHERE t.chat_id = ? AND s.stage = 'summary' "
-        "ORDER BY s.started_at DESC LIMIT 1",
-        (chat_id,),
-    ).fetchone()
-    if row is None or row["data"] is None:
-        return 0
-    try:
-        data = json.loads(row["data"])
-    except (TypeError, ValueError):
-        return 0
-    count = data.get("covered_message_count")
-    return int(count) if isinstance(count, (int, float)) else 0
 
 
 def _set_summary(conn: sqlite3.Connection, chat_id: str, summary: str) -> None:
@@ -296,7 +224,10 @@ async def _run_summary(app: Any, chat_id: str) -> None:
         return
 
     prior = chat_row["summary"]
-    covered_so_far = await run_sync(last_summary_covered_count, conn, chat_id)
+    trusted_count = await run_sync(
+        trusted_covered_count, conn, chat_id, messages, prior
+    )
+    covered_so_far = trusted_count if trusted_count is not None else 0
     all_new_messages = messages[covered_so_far:]
 
     if not all_new_messages:
@@ -358,7 +289,8 @@ async def _run_summary(app: Any, chat_id: str) -> None:
             trace_id, "summary", model=model_entry.name, device=device, chat_id=chat_id
         ) as sp:
             try:
-                content = ""
+                content_parts: list[str] = []
+                finish_reason: str | None = None
                 usage = None
                 async for delta in llm.chat(
                     model=model_entry.name,
@@ -368,11 +300,19 @@ async def _run_summary(app: Any, chat_id: str) -> None:
                     stream=False,
                 ):
                     if delta.content:
-                        content = delta.content.strip()
+                        content_parts.append(delta.content)
+                    if delta.finish_reason is not None:
+                        finish_reason = delta.finish_reason
                     if delta.usage is not None:
                         usage = delta.usage
+                content = "".join(content_parts).strip()
                 if not content:
                     raise RuntimeError("summary model returned empty content")
+                if finish_reason != "stop":
+                    raise RuntimeError(
+                        "summary model did not complete cleanly "
+                        f"(finish_reason={finish_reason!r})"
+                    )
             except (LLMError, RuntimeError) as exc:
                 last_error = exc
                 sp.set(error=str(exc), time_budget_tokens=time_budget)
@@ -387,11 +327,11 @@ async def _run_summary(app: Any, chat_id: str) -> None:
             fields: dict[str, Any] = {
                 "chars": len(content),
                 "new_message_count": len(new_messages),
-                "covered_message_count": covered_message_count,
                 "time_budget_tokens": time_budget,
                 "prompt": prompt_messages[-1]["content"],
                 "response": content,
             }
+            fields.update(coverage_fields(messages, covered_message_count, content))
             if usage is not None:
                 fields["usage"] = usage.model_dump()
             sp.set(**fields)
@@ -498,7 +438,16 @@ async def summary_status(app: Any, chat_id: str) -> dict[str, Any]:
     latest = await run_sync(_latest_usage, conn, chat_id)
     state = _trigger_state(cfg, latest, turn_count)
     state["turn_count"] = turn_count
-    state["covered_message_count"] = await run_sync(last_summary_covered_count, conn, chat_id)
+    messages = await run_sync(history.list_messages, conn, chat_id)
+    chat_row = await run_sync(history.get_chat, conn, chat_id)
+    trusted_count = await run_sync(
+        trusted_covered_count,
+        conn,
+        chat_id,
+        messages,
+        chat_row["summary"] if chat_row is not None else None,
+    )
+    state["covered_message_count"] = trusted_count or 0
     state["last_summary"] = await run_sync(_last_summary_span, conn, chat_id)
     state["in_flight"] = chat_id in _in_flight
     return state
@@ -519,19 +468,38 @@ async def maybe_enqueue_summary(app: Any, chat_id: str) -> None:
         if not _trigger_state(cfg, latest, turn_count)["will_trigger"]:
             return
 
-        if chat_id in _in_flight:
-            return
-
-        queue = get_queue(app)
-        if queue is None:
-            logger.warning("summary not enqueued: background queue missing")
-            return
-
-        _in_flight.add(chat_id)
-
-        def factory() -> Any:
-            return _run_summary_guarded(app, chat_id)
-
-        queue.submit(factory)
+        _submit_summary(app, chat_id)
     except Exception:
         logger.exception("maybe_enqueue_summary failed for chat %s", chat_id)
+
+
+def _submit_summary(app: Any, chat_id: str) -> bool:
+    """Submit through the one existing tracked queue/in-flight path."""
+    if chat_id in _in_flight:
+        return False
+    queue = get_queue(app)
+    if queue is None:
+        logger.warning("summary not enqueued: background queue missing")
+        return False
+
+    _in_flight.add(chat_id)
+
+    def factory() -> Any:
+        return _run_summary_guarded(app, chat_id)
+
+    queue.submit(factory)
+    return True
+
+
+async def enqueue_summary_recovery(app: Any, chat_id: str) -> bool:
+    """Force a tracked regen after lossless context cannot fit.
+
+    Unlike ``maybe_enqueue_summary``, this bypasses the pressure trigger:
+    the attempted prompt has already proven that recovery is required.
+    It still shares the same queue and per-chat in-flight guard.
+    """
+    try:
+        return _submit_summary(app, chat_id)
+    except Exception:
+        logger.exception("summary recovery enqueue failed for chat %s", chat_id)
+        return False

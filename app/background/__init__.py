@@ -12,7 +12,10 @@ import logging
 from typing import Any
 
 from app.background.queue import BackgroundQueue, attach_queue, get_queue
-from app.background.summaries import maybe_enqueue_summary
+from app.background.summaries import (
+    enqueue_summary_recovery as _enqueue_summary_recovery,
+    maybe_enqueue_summary,
+)
 from app.background.titles import maybe_enqueue_title
 from app.llm_client import LLMClient
 
@@ -95,4 +98,13 @@ async def on_turn_complete(chat_id: str) -> None:
         logger.exception("on_turn_complete summary enqueue failed for %s", chat_id)
 
 
-__all__ = ["start", "stop", "on_turn_complete"]
+async def enqueue_summary_recovery(chat_id: str) -> bool:
+    """Force summary recovery through the app-owned tracked queue."""
+    app = _app
+    if app is None:
+        logger.warning("summary recovery not enqueued: background app missing")
+        return False
+    return await _enqueue_summary_recovery(app, chat_id)
+
+
+__all__ = ["start", "stop", "on_turn_complete", "enqueue_summary_recovery"]

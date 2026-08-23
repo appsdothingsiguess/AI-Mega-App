@@ -20,6 +20,8 @@ from pathlib import Path
 
 from fastapi.testclient import TestClient
 
+from app.background.summary_coverage import coverage_fields
+from app.chat import history
 from app.chat.orchestrator import LLMError
 from app.config import (
     Config,
@@ -481,7 +483,7 @@ def test_alias_model_sends_canonical_swap_name_to_llm(tmp_path: Path) -> None:
                 gpu=0,
                 tool_call="none",
                 thinking=True,
-                max_tokens=4096,
+                max_tokens=1024,
                 file="/models/shared.gguf",
                 quant="Q4_K_M",
             ),
@@ -512,11 +514,9 @@ def test_alias_model_sends_canonical_swap_name_to_llm(tmp_path: Path) -> None:
     assert done_data["model"] == "reasoner"
 
 
-def test_long_history_is_truncated_to_fit_model_context(tmp_path: Path) -> None:
-    """Regression: sending full unbounded history to a small-context model
-    (e.g. coder-small at ctx=8192) used to overflow and 400 from llama.cpp
-    ("request exceeds the available context size"). The orchestrator must
-    drop oldest turns to fit ctx - max_tokens before dispatching."""
+def test_long_history_refuses_instead_of_truncating_context(tmp_path: Path) -> None:
+    """An oversized lossless prompt fails before dispatch instead of
+    silently dropping the oldest persisted turns."""
     fake = FakeLLMClient(chunks=["ok"])
     cfg = Config(
         llama_swap=LlamaSwapConfig(base_url="http://127.0.0.1:8080/v1"),
@@ -545,29 +545,22 @@ def test_long_history_is_truncated_to_fit_model_context(tmp_path: Path) -> None:
     client.__enter__()
 
     chat_id = client.post("/api/chats", json={}).json()["id"]
-    # Each turn is long enough that a dozen of them would blow well past a
-    # 1024-token context budget (200 reserved for the response).
-    long_text = "word " * 300
-    for _ in range(10):
-        client.post(f"/api/chats/{chat_id}/messages", json={"content": long_text})
+    fake.all_models.clear()  # exclude startup warm-up from the dispatch assertion
+    resp = client.post(
+        f"/api/chats/{chat_id}/messages",
+        json={"content": "word " * 1000, "model": "chat-default"},
+    )
 
-    sent = fake.seen_messages
-    assert sent is not None
-    # System prompt always survives; oldest history turns must have been
-    # dropped rather than sent whole and overflowing ctx.
-    assert sent[0]["role"] == "system"
-    assert len(sent) < 21  # far fewer than the full 10 turns * 2 + system
+    events = _parse_sse(resp.text)
+    assert [event for event, _ in events] == ["error"]
+    assert events[0][1]["kind"] == "context_overflow"
+    assert fake.all_models == []
 
 
-def test_chat_summary_compacts_old_turns_instead_of_raw_truncation(
+def test_metadata_less_summary_falls_back_to_all_raw_history(
     tmp_path: Path,
 ) -> None:
-    """Once app/background/summaries.py has produced a rolling summary, the
-    orchestrator should compact everything but the most recent
-    summary_every_n_turns turns into it, rather than relying on
-    _truncate_to_ctx to silently drop the oldest raw turns. This keeps
-    context usage roughly flat on long chats and preserves older content as
-    a summary instead of dropping it outright."""
+    """A summary written without matching coverage metadata is untrusted."""
     fake = FakeLLMClient(chunks=["ok"])
     cfg = Config(
         llama_swap=LlamaSwapConfig(base_url="http://127.0.0.1:8080/v1"),
@@ -613,9 +606,10 @@ def test_chat_summary_compacts_old_turns_instead_of_raw_truncation(
     sent = fake.seen_messages
     assert sent is not None
     assert sent[0]["role"] == "system"  # persistent-assistant stopgap prompt
-    assert any("Earlier turns covered X, Y, Z." in m["content"] for m in sent)
-    # cfg default summary_every_n_turns=6 -> 12 messages kept + 2 system msgs.
-    assert len(sent) <= 14
+    assert not any("Earlier turns covered X, Y, Z." in m["content"] for m in sent)
+    assert any("turn 0" in m["content"] for m in sent)
+    assert any("turn 9" in m["content"] for m in sent)
+    assert any("one more turn" in m["content"] for m in sent)
 
 
 def test_chat_summary_compaction_trims_tail_to_what_summary_doesnt_cover(
@@ -668,14 +662,13 @@ def test_chat_summary_compaction_trims_tail_to_what_summary_doesnt_cover(
         "INSERT INTO traces (trace_id, chat_id, started_at) VALUES (?, ?, ?)",
         (trace_id, chat_id, now_ms),
     )
-    # covered_message_count = all 20 messages so far (10 turns * 2) -- the
-    # exact cursor _apply_summary_compaction now reads (2026-08-15: replaced
-    # the old timestamp cutoff, which couldn't tell "covered by this regen"
-    # from "just happened to land in the same wall-clock second").
+    summary = "Earlier turns covered X, Y, Z."
+    raw_messages = history.list_messages(app.state.db, chat_id)
+    metadata = coverage_fields(raw_messages, 20, summary)
     app.state.db.execute(
         "INSERT INTO spans (trace_id, stage, started_at, ended_at, data) "
         "VALUES (?, 'summary', ?, ?, ?)",
-        (trace_id, now_ms, now_ms, json.dumps({"covered_message_count": 20})),
+        (trace_id, now_ms, now_ms, json.dumps(metadata)),
     )
     app.state.db.commit()
 

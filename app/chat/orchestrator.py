@@ -11,6 +11,7 @@ import time
 from collections.abc import AsyncIterator
 from typing import Any, Protocol
 
+from app.background.summary_coverage import trusted_covered_count
 from app.config import Config, ModelEntry
 from app.db import run_sync
 from app.debug import new_trace, span
@@ -18,6 +19,7 @@ from app.llm_client import LLMClient, LLMError
 from app.types import ChatDelta, SSEEvent
 
 from . import history
+from .context import assemble_context, render_prompt as _render_prompt
 
 # Soft-import Phase-2 seams so this worktree merges cleanly before
 # app.router / app.background land. Tests monkeypatch `_route` /
@@ -28,15 +30,13 @@ except ImportError:  # BLOCKED: app.router absent — interface-gate
     _route = None
 
 try:
-    from app.background import on_turn_complete as _on_turn_complete
+    from app.background import (
+        enqueue_summary_recovery as _enqueue_summary_recovery,
+        on_turn_complete as _on_turn_complete,
+    )
 except ImportError:  # BLOCKED: app.background absent — interface-gate
     _on_turn_complete = None
-
-try:
-    from app.background.summaries import last_summary_covered_count
-except ImportError:  # BLOCKED: app.background absent — interface-gate
-    def last_summary_covered_count(conn: sqlite3.Connection, chat_id: str) -> int:
-        return 0
+    _enqueue_summary_recovery = None
 
 
 class ChatCompleter(Protocol):
@@ -57,104 +57,6 @@ class ChatCompleter(Protocol):
 
 
 FIRST_TOKEN_WARN_S = 2.0  # PLAN.md §4.2: model_loading fires past this
-
-# Rough chars-per-token for context budget estimation.  Conservative (low)
-# so we over-count prompt tokens and leave headroom for the response.
-_CHARS_PER_TOKEN = 3.5
-
-
-def _apply_summary_compaction(
-    history: list[dict[str, Any]],
-    summary: str | None,
-    recent_turns: int,
-    covered_message_count: int,
-) -> list[dict[str, str]]:
-    """Replace everything the rolling summary (app/background/summaries.py)
-    already covers with the summary itself, so a long chat's context usage
-    stays roughly flat instead of growing with turn count.
-
-    `covered_message_count` is exactly how many messages (in this same
-    stable created_at/rowid order) the most recent `summary` span folded
-    in -- 0 if this chat has never been summarized. Everything at that
-    position onward is the tail sent raw; everything before it is exactly
-    what the summary was built from, so there's no overlap between the two
-    (2026-08-15 fix -- previously a fixed-size tail was always kept
-    regardless of what the summary had just covered, so the two doubled up
-    on the same turns right after a regen).
-
-    This used to be a timestamp cutoff (the summary span's own started_at)
-    instead of an exact count. That broke the moment app/background/
-    summaries.py started capping how much a single regen can summarize (its
-    own ctx-budget fix, same date): a regen that could only afford the
-    oldest half of its delta still stamped "summarized as of now," so the
-    timestamp cutoff would treat the still-uncovered newer half as already
-    folded into the summary and silently drop it from every future prompt
-    -- real, silent context loss. A message count has no such ambiguity.
-
-    `covered_message_count` of 0 with a real `summary` still compacts
-    (matches the pre-2026-08-15 fixed-tail behavior) -- can only happen if
-    `summary` was written out of band with no matching span (e.g. a test
-    setting `chats.summary` directly), so there's nothing better to cut to.
-
-    _truncate_to_ctx below stays as a hard safety net — it's the only thing
-    protecting a model with no summary yet (early in a chat) or a very
-    small ctx budget from an overflow.
-    """
-    if not summary:
-        return [{"role": m["role"], "content": m["content"]} for m in history]
-
-    tail_source = history[covered_message_count:]
-
-    recent_messages = recent_turns * 2  # each turn is a user + assistant pair
-    tail = tail_source[-recent_messages:] if recent_messages > 0 else tail_source
-
-    summary_msg = {
-        "role": "system",
-        "content": f"Summary of earlier conversation:\n{summary}",
-    }
-    return [summary_msg] + [{"role": m["role"], "content": m["content"]} for m in tail]
-
-
-def _truncate_to_ctx(
-    messages: list[dict[str, str]],
-    ctx: int,
-    max_tokens: int,
-) -> list[dict[str, str]]:
-    """Keep the system prompt + as many recent turns as fit in the context
-    budget (ctx minus max_tokens for the response).  Drops oldest
-    user/assistant pairs first, preserving the system prompt at index 0.
-
-    Last-resort safety net: _apply_summary_compaction is the primary
-    mechanism once a chat has a summary; this still protects turns before
-    the first summary exists, or a model whose ctx is small enough that
-    even summary + recent tail overflows it."""
-    budget_tokens = ctx - max_tokens
-    if budget_tokens <= 0:
-        budget_tokens = ctx // 2
-
-    def estimate(msgs: list[dict[str, str]]) -> float:
-        return sum(len(m.get("content", "")) / _CHARS_PER_TOKEN for m in msgs)
-
-    if estimate(messages) <= budget_tokens:
-        return messages
-
-    system = [messages[0]] if messages and messages[0].get("role") == "system" else []
-    history = messages[len(system):]
-
-    while history and estimate(system + history) > budget_tokens:
-        history = history[1:]
-
-    return system + history
-
-
-def _render_prompt(messages: list[dict[str, str]]) -> str:
-    """Flatten wire messages into the readable transcript the Debug view's
-    prompt tab shows. Only ever reaches a span when debug.store_prompts is
-    on (app/debug/trace.py filters `prompt`)."""
-    return "\n\n".join(
-        f"[{m.get('role', '?')}]\n{m.get('content', '')}" for m in messages
-    )
-
 
 async def _stream_with_loading(
     agen: AsyncIterator[ChatDelta], warn_s: float, timeout_s: float
@@ -376,59 +278,79 @@ class ChatOrchestrator:
             swap_model = self._canonical_swap_name(resolved_model)
 
             gpu = model_entry.gpu if model_entry else None
+            agen: AsyncIterator[ChatDelta] | None = None
+            context_refused = False
             async with span(trace_id, "llm_request", model=resolved_model, gpu=gpu) as sp:
                 raw_messages = await run_sync(history.list_messages, self.conn, chat_id)
-                # Primary context-growth control: once the background job
-                # (app/background/summaries.py) has produced a rolling
-                # summary, compact everything the summary already covers
-                # into it so a long chat's context usage stays roughly flat
-                # instead of growing without bound.
-                covered_message_count = 0
-                if chat_row["summary"]:
-                    covered_message_count = await run_sync(
-                        last_summary_covered_count, self.conn, chat_id
-                    )
-                messages = _apply_summary_compaction(
-                    raw_messages,
-                    chat_row["summary"],
-                    self.config.background.summary_every_n_turns,
-                    covered_message_count,
+                current_chat_row = await run_sync(history.get_chat, self.conn, chat_id)
+                current_summary = (
+                    current_chat_row["summary"] if current_chat_row is not None else None
                 )
-                # Stopgap: prepend a system prompt so local models understand
-                # they're a persistent assistant (full app/prompts/ is Phase 3+).
-                _SYSTEM_MSG: dict[str, str] = {
-                    "role": "system",
-                    "content": (
-                        "You are a helpful AI assistant. "
-                        "You have access to the full conversation history. "
-                        "Answer the user's questions directly and helpfully."
-                    ),
-                }
-                messages = [_SYSTEM_MSG] + messages
+                covered_message_count = await run_sync(
+                    trusted_covered_count,
+                    self.conn,
+                    chat_id,
+                    raw_messages,
+                    current_summary,
+                )
                 ctx = model_entry.ctx if model_entry else 8192
                 mtk = model_entry.max_tokens if model_entry else 1024
-                # Safety net for turns before the first summary exists, or a
-                # ctx small enough that even summary + recent tail overflows.
-                messages = _truncate_to_ctx(messages, ctx, mtk)
-                agen = self.llm_client.chat(
-                    model=swap_model,
-                    messages=messages,
-                    thinking=model_entry.thinking if model_entry else None,
-                    max_tokens=model_entry.max_tokens if model_entry else 1024,
-                    stream=True,
+                assembled = assemble_context(
+                    raw_messages,
+                    current_summary,
+                    covered_message_count,
+                    ctx,
+                    mtk,
                 )
+                messages = assembled.messages
+                context_refused = messages is None
+                if messages is not None:
+                    agen = self.llm_client.chat(
+                        model=swap_model,
+                        messages=messages,
+                        thinking=model_entry.thinking if model_entry else None,
+                        max_tokens=model_entry.max_tokens if model_entry else 1024,
+                        stream=True,
+                    )
                 # `messages`/`prompt` are dropped by app/debug/trace.py unless
                 # debug.store_prompts is true. The Debug view's prompt tab
                 # reads `prompt`, so send the exact wire messages *and* a
                 # readable rendering of them (docs/FEATURES.md F19: "exactly
                 # what each model was sent").
                 sp.set(
-                    message_count=len(messages),
+                    message_count=len(messages) if messages is not None else len(raw_messages) + 1,
                     thinking=model_entry.thinking if model_entry else None,
                     max_tokens=model_entry.max_tokens if model_entry else 1024,
                     messages=messages,
-                    prompt=_render_prompt(messages),
+                    prompt=_render_prompt(messages) if messages is not None else None,
+                    context_fit=assembled.fits,
+                    context_budget_tokens=assembled.budget_tokens,
+                    estimated_prompt_tokens=assembled.estimated_prompt_tokens,
+                    covered_message_count=covered_message_count,
                 )
+
+            if context_refused:
+                if _enqueue_summary_recovery is not None:
+                    try:
+                        await _enqueue_summary_recovery(chat_id)
+                    except Exception:  # noqa: BLE001 - terminal error still wins
+                        pass
+                async with span(
+                    trace_id, "sse_emit", event="error", kind="context_overflow"
+                ):
+                    yield SSEEvent(
+                        event="error",
+                        data={
+                            "kind": "context_overflow",
+                            "detail": (
+                                "conversation history cannot fit this model safely; "
+                                "summary recovery was queued"
+                            ),
+                        },
+                    )
+                return
+
+            assert agen is not None
 
             async with span(trace_id, "llm_stream", model=resolved_model, gpu=gpu) as sp:
                 tokens_out = 0
