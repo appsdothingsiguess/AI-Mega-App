@@ -65,6 +65,15 @@ def _config(request: Request) -> Config:
     return request.app.state.config
 
 
+def _require_enabled_model(config: Config, alias: str) -> None:
+    """Raise a client error unless ``alias`` is selectable in this roster."""
+    entry = next((model for model in config.models if model.name == alias), None)
+    if entry is None:
+        raise HTTPException(status_code=422, detail=f"unknown model alias: {alias}")
+    if not entry.enabled:
+        raise HTTPException(status_code=422, detail=f"model alias is disabled: {alias}")
+
+
 @router.post("", response_model=ChatIdOut)
 async def create_chat(body: CreateChatRequest, request: Request) -> ChatIdOut:
     from app.db import run_sync
@@ -101,6 +110,8 @@ async def set_model(chat_id: str, body: SetModelRequest, request: Request) -> di
     chat_row = await run_sync(history.get_chat, conn, chat_id)
     if chat_row is None:
         raise HTTPException(status_code=404, detail=f"no chat with id {chat_id}")
+    if body.model is not None:
+        _require_enabled_model(_config(request), body.model)
     await run_sync(history.set_model_override, conn, chat_id, body.model)
     return {"model_override": body.model}
 
@@ -117,6 +128,17 @@ async def send_message(
         raise HTTPException(status_code=404, detail=f"no chat with id {chat_id}")
 
     config = _config(request)
+    if body.attachments:
+        raise HTTPException(
+            status_code=422,
+            detail="attachments are not supported until Phase 3",
+        )
+    # ``None`` means no per-turn override.  Do not use truthiness here:
+    # an empty string is still an attempted alias and must be rejected rather
+    # than silently falling through to the saved override/default.
+    selected_model = body.model if body.model is not None else chat_row["model_override"]
+    if selected_model is not None:
+        _require_enabled_model(config, selected_model)
     llm_client = getattr(request.app.state, "llm_client", None)
     orchestrator = ChatOrchestrator(conn, config, llm_client=llm_client)
 

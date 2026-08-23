@@ -230,3 +230,18 @@ def test_list_models_returns_real_loaded_state(
         assert models["chat-default"]["loaded"] is True
     finally:
         client.__exit__(None, None, None)
+
+
+def test_list_models_hides_disabled_aliases(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    disabled = {**MINIMAL_MODEL, "name": "disabled-model", "enabled": False}
+    base = {**MINIMAL_CONFIG, "models": [MINIMAL_MODEL, disabled]}
+    _patch_config_paths(monkeypatch, tmp_path, base)
+    client = _settings_client(tmp_path)
+    try:
+        response = client.get("/api/models")
+        assert response.status_code == 200
+        assert [model["alias"] for model in response.json()] == ["chat-default"]
+    finally:
+        client.__exit__(None, None, None)

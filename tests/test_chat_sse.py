@@ -283,6 +283,61 @@ def test_model_override_persists_and_is_used(tmp_path: Path) -> None:
     assert messages[1]["model"] == "chat-default"
 
 
+def test_model_aliases_are_validated_before_override_or_turn_persistence(
+    tmp_path: Path,
+) -> None:
+    """Unknown and disabled aliases must never reach the turn loop."""
+    fake = FakeLLMClient(chunks=["should not run"])
+    cfg = _test_config(tmp_path / "app.db")
+    disabled = ModelEntry(
+        name="disabled-model",
+        **{"class": "general"},
+        ctx=4096,
+        gpu=0,
+        tool_call="native",
+        max_tokens=1024,
+        enabled=False,
+        file="/models/disabled.gguf",
+        quant="Q4_K_M",
+    )
+    app = create_app(config=cfg.model_copy(update={"models": [*cfg.models, disabled]}))
+    app.state.llm_client = fake
+    client = TestClient(app)
+    client.__enter__()
+    try:
+        chat_id = client.post("/api/chats", json={}).json()["id"]
+
+        for alias in ("missing-model", "disabled-model", ""):
+            override = client.post(f"/api/chats/{chat_id}/model", json={"model": alias})
+            assert override.status_code == 422
+            send = client.post(
+                f"/api/chats/{chat_id}/messages",
+                json={"content": "hi", "model": alias},
+            )
+            assert send.status_code == 422
+
+        assert client.get(f"/api/chats/{chat_id}/messages").json() == []
+        assert fake.all_models == []
+    finally:
+        client.__exit__(None, None, None)
+
+
+def test_attachments_are_rejected_before_turn_persistence(tmp_path: Path) -> None:
+    fake = FakeLLMClient(chunks=["should not run"])
+    client = _make_client(tmp_path, fake)
+    chat_id = client.post("/api/chats", json={}).json()["id"]
+
+    response = client.post(
+        f"/api/chats/{chat_id}/messages",
+        json={"content": "describe this", "attachments": ["image.png"]},
+    )
+
+    assert response.status_code == 422
+    assert "Phase 3" in response.json()["detail"]
+    assert client.get(f"/api/chats/{chat_id}/messages").json() == []
+    assert fake.all_models == []
+
+
 def test_no_override_forwards_llm_client_and_config_to_router(
     tmp_path: Path, monkeypatch
 ) -> None:

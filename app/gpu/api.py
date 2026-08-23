@@ -29,7 +29,7 @@ from fastapi.responses import PlainTextResponse
 from app.debug import new_trace, span
 from app.gpu.inventory import GPUInfo, fetch_inventory
 from app.gpu.swapgen import generate
-from app.warmup import all_residents_loaded, warmup_resident_models
+from app.warmup import all_residents_loaded, resident_swap_names, warmup_resident_models
 
 router = APIRouter(prefix="/api/gpu", tags=["gpu"])
 
@@ -149,11 +149,22 @@ async def post_apply(request: Request) -> dict:
     # _WARMUP_INTERVAL_S later. Retry a few times so a transient race
     # doesn't leave residents cold for minutes after every apply.
     llm = getattr(request.app.state, "llm_client", None)
+    residents = resident_swap_names(config)
     for attempt in range(3):
         await warmup_resident_models(llm, config)
         if await all_residents_loaded(llm, config):
             break
         if attempt < 2:
             await asyncio.sleep(3.0)
+    else:
+        if not residents:
+            return {"ok": True, "health_url": health_url, "path": str(swap_path)}
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "llama-swap reloaded but resident models remain unloaded "
+                "after warmup retries"
+            ),
+        )
 
     return {"ok": True, "health_url": health_url, "path": str(swap_path)}

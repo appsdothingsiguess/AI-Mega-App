@@ -226,6 +226,38 @@ def test_traces_and_trace_rest_endpoints(db_conn) -> None:
         assert resp.status_code == 404
 
 
+def test_trace_listing_clamps_results_and_nested_spans(db_conn) -> None:
+    """The list view remains bounded even with untrusted query limits."""
+    from fastapi.testclient import TestClient
+
+    app = FastAPI()
+    app.state.db = db_conn
+    app.include_router(debug_api.router)
+
+    trace_ids = [new_trace(chat_id="chat-1") for _ in range(105)]
+    # The endpoint returns the newest 100 traces.  Use the final insertion
+    # so this deliberately crowded trace is definitely in that bounded set.
+    crowded_trace = trace_ids[-1]
+    db_conn.executemany(
+        "INSERT INTO spans (trace_id, stage, started_at, ended_at, data) "
+        "VALUES (?, ?, ?, ?, ?)",
+        [(crowded_trace, "db", index, index, "{}") for index in range(250)],
+    )
+    db_conn.commit()
+
+    with TestClient(app) as client:
+        response = client.get("/api/debug/traces", params={"limit": 99999})
+        assert response.status_code == 200
+        traces = response.json()
+        assert len(traces) == debug_api.MAX_TRACE_LIST_LIMIT
+        crowded = next(trace for trace in traces if trace["trace_id"] == crowded_trace)
+        assert len(crowded["spans"]) == debug_api.MAX_LIST_SPANS_PER_TRACE
+
+        minimum = client.get("/api/debug/traces", params={"limit": -1})
+        assert minimum.status_code == 200
+        assert len(minimum.json()) == 1
+
+
 def test_summary_status_rest_endpoint(db_conn) -> None:
     """GET /api/debug/summary-status?chat_id= wraps
     app.background.summaries.summary_status -- needs app.state.config too

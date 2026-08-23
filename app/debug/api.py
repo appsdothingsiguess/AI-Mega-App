@@ -24,6 +24,8 @@ from app.debug import bus
 router = APIRouter(prefix="/api/debug", tags=["debug"])
 
 HEARTBEAT_INTERVAL_S = 15
+MAX_TRACE_LIST_LIMIT = 100
+MAX_LIST_SPANS_PER_TRACE = 200
 
 
 def _conn(request: Request) -> sqlite3.Connection:
@@ -45,11 +47,15 @@ def _row_to_span(row: sqlite3.Row) -> dict[str, Any]:
     }
 
 
-def _spans_for(conn: sqlite3.Connection, trace_id: str) -> list[dict[str, Any]]:
-    rows = conn.execute(
-        "SELECT * FROM spans WHERE trace_id = ? ORDER BY started_at ASC",
-        (trace_id,),
-    ).fetchall()
+def _spans_for(
+    conn: sqlite3.Connection, trace_id: str, limit: int | None = None
+) -> list[dict[str, Any]]:
+    query = "SELECT * FROM spans WHERE trace_id = ? ORDER BY started_at ASC"
+    params: tuple[Any, ...] = (trace_id,)
+    if limit is not None:
+        query += " LIMIT ?"
+        params += (limit,)
+    rows = conn.execute(query, params).fetchall()
     return [_row_to_span(r) for r in rows]
 
 
@@ -70,7 +76,7 @@ def _fetch_traces(
             "trace_id": row["trace_id"],
             "chat_id": row["chat_id"],
             "started_at": row["started_at"],
-            "spans": _spans_for(conn, row["trace_id"]),
+            "spans": _spans_for(conn, row["trace_id"], MAX_LIST_SPANS_PER_TRACE),
         }
         for row in rows
     ]
@@ -81,7 +87,8 @@ async def list_traces(
     request: Request, chat_id: str | None = None, limit: int = 50
 ) -> list[dict[str, Any]]:
     """Recent traces, most recent first, each with its spans nested."""
-    return await run_sync(_fetch_traces, _conn(request), chat_id, limit)
+    safe_limit = max(1, min(limit, MAX_TRACE_LIST_LIMIT))
+    return await run_sync(_fetch_traces, _conn(request), chat_id, safe_limit)
 
 
 def _fetch_trace(conn: sqlite3.Connection, trace_id: str) -> dict[str, Any] | None:

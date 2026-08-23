@@ -163,6 +163,44 @@ def test_apply_rewarms_resident_models_after_reload(tmp_path: Path, monkeypatch)
     assert warmed == [(sentinel_llm, cfg)]
 
 
+def test_apply_returns_failure_when_resident_warmup_never_converges(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """Proxy health is insufficient when a resident server stays unloaded."""
+    import app.gpu.api as gpu_api
+
+    monkeypatch.setattr(gpu_api, "_poll_health", AsyncMock(return_value=True))
+    monkeypatch.setattr(gpu_api, "all_residents_loaded", AsyncMock(return_value=False))
+    monkeypatch.setattr(gpu_api.asyncio, "sleep", AsyncMock())
+
+    swap_path = tmp_path / "llama-swap.yaml"
+    dispatcher = ModelEntry(
+        name="dispatcher",
+        **{"class": "general"},
+        ctx=4096,
+        gpu=1,
+        tool_call="native",
+        max_tokens=1024,
+        file="/models/dispatcher.gguf",
+        quant="Q4_K_M",
+        resident=True,
+        ttl_s=0,
+    )
+    cfg = _make_config(str(swap_path)).model_copy(
+        update={"models": [_TEST_MODEL, dispatcher]}
+    )
+    app = _make_app(cfg)
+    app.state.llm_client = object()
+    warmup = AsyncMock()
+    monkeypatch.setattr(gpu_api, "warmup_resident_models", warmup)
+
+    response = TestClient(app).post("/api/gpu/apply")
+
+    assert response.status_code == 503
+    assert "resident models remain unloaded" in response.json()["detail"]
+    assert warmup.await_count == 3
+
+
 def test_apply_disabled_gpu_returns_400(tmp_path: Path) -> None:
     """POST /apply returns 400 when gpu.enabled is false."""
     swap_path = tmp_path / "llama-swap.yaml"

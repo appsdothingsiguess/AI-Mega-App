@@ -107,7 +107,9 @@ async def put_routing(
 @router.get("/models")
 async def list_models(request: Request) -> list[dict[str, Any]]:
     """Model-picker roster: alias, class, device, resident, loaded, ctx."""
-    cfg = get_effective()
+    # Keep the picker on the same hot-reloaded roster chat validation uses;
+    # disabled aliases are intentionally not selectable.
+    cfg = request.app.state.config
     llm_client = getattr(request.app.state, "llm_client", None)
     loaded_map: dict[str, bool] = {}
     if llm_client is not None:
@@ -126,4 +128,5 @@ async def list_models(request: Request) -> list[dict[str, Any]]:
             "ctx": m.ctx,
         }
         for m in cfg.models
+        if m.enabled
     ]
