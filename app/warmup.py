@@ -11,42 +11,39 @@ import asyncio
 import logging
 from typing import Any
 
-from app.config import Config
+from app.config import Config, ModelEntry
 
 logger = logging.getLogger(__name__)
 
 
-def resident_swap_names(cfg: Config) -> list[str]:
-    """Canonical swap-slot names for every enabled, resident model, deduped
-    the same way app.gpu.swapgen collapses models that share a GGUF (e.g.
-    reasoner -> chat-default) so we never ping a name llama-swap doesn't
-    have a slot for.
-    
-    Each swap slot is pinged once, even if multiple config entries share it,
-    because llama-swap treats each slot as an independent loadable unit."""
-    # Replicate swapgen's dedup logic: models sharing a file keep one entry,
-    # priority: resident:true over non-resident; ties broken by first in list.
-    file_to_canonical: dict[str, str] = {}
-    file_to_canonical_resident: dict[str, bool] = {}
-    for m in cfg.models:
-        if not m.enabled:
-            continue
-        if m.file not in file_to_canonical:
-            file_to_canonical[m.file] = m.name
-            file_to_canonical_resident[m.file] = m.resident
-        elif m.resident and not file_to_canonical_resident[m.file]:
-            file_to_canonical[m.file] = m.name
-            file_to_canonical_resident[m.file] = True
+ServerIdentity = tuple[str, int | str]
 
+
+def server_identity(model: ModelEntry) -> ServerIdentity:
+    """Return llama-swap's physical server identity for a model entry."""
+    return (model.file, model.gpu)
+
+
+def resident_swap_names(cfg: Config) -> list[str]:
+    """Enabled resident CPU/GPU1 server names, deduped by ``(file, gpu)``.
+
+    Filtering happens before deduplication.  A GPU0 alias sharing a GGUF
+    with a CPU or GPU1 resident therefore cannot hide that resident server,
+    and the same GGUF on CPU and GPU1 remains two independent warmup targets.
+    Generic warmup deliberately excludes every GPU0 entry: pinging the
+    default or a swap member would replace the active ``--parallel 1`` KV
+    prefix.
+    """
     names: list[str] = []
-    seen: set[str] = set()
-    for m in cfg.models:
-        if not m.enabled or not m.resident:
+    seen: set[ServerIdentity] = set()
+    for model in cfg.models:
+        if not model.enabled or not model.resident or model.gpu == 0:
             continue
-        canonical = file_to_canonical.get(m.file, m.name)
-        if canonical == m.name and canonical not in seen:
-            seen.add(canonical)
-            names.append(canonical)
+        identity = server_identity(model)
+        if identity in seen:
+            continue
+        seen.add(identity)
+        names.append(model.name)
     return names
 
 
@@ -79,7 +76,7 @@ async def warmup_resident_models(
     llm: Any, cfg: Config, *, timeout_s: float = _WARMUP_TIMEOUT_S,
     skip: set[str] | None = None,
 ) -> None:
-    """Ping every resident model once so llama-swap loads it eagerly, in
+    """Ping every resident CPU/GPU1 server once so llama-swap loads it, in
     parallel so one slow cold start doesn't delay the others.
 
     ``skip`` excludes names already confirmed loaded (see
@@ -137,5 +134,10 @@ async def all_residents_loaded(llm: Any, cfg: Config) -> bool:
         logger.info("warmup: all %d resident models loaded", len(names))
     else:
         missing = [name for name in names if not status.get(name, False)]
-        logger.info("warmup: %d/%d residents loaded, retrying: %s", len(names) - len(missing), len(names), missing)
+        logger.info(
+            "warmup: %d/%d residents loaded, retrying: %s",
+            len(names) - len(missing),
+            len(names),
+            missing,
+        )
     return all_ok

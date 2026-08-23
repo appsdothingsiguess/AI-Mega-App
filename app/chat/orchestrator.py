@@ -38,6 +38,11 @@ except ImportError:  # BLOCKED: app.background absent — interface-gate
     _on_turn_complete = None
     _enqueue_summary_recovery = None
 
+try:
+    from app.gpu.rewarm import mark_gpu0_activity as _mark_gpu0_activity
+except ImportError:  # BLOCKED: app.gpu absent — interface-gate
+    _mark_gpu0_activity = None
+
 
 class ChatCompleter(Protocol):
     """The subset of LLMClient.chat's declared signature the orchestrator
@@ -354,6 +359,8 @@ class ChatOrchestrator:
 
             async with span(trace_id, "llm_stream", model=resolved_model, gpu=gpu) as sp:
                 tokens_out = 0
+                slow_first_token = False
+                rewarm_activity_reported = False
                 # A model_loading warn means llama-swap is loading/swapping
                 # the slot; bracket that wait in its own swap_wait span so the
                 # Debug view can show the swap badge (docs/FEATURES.md F1/F19).
@@ -365,6 +372,7 @@ class ChatOrchestrator:
                         self.config.llm.first_token_timeout_s,
                     ):
                         if kind == "loading":
+                            slow_first_token = True
                             if swap_span is None:
                                 swap_span = span(trace_id, "swap_wait", model=resolved_model)
                                 await swap_span.__aenter__()
@@ -375,6 +383,22 @@ class ChatOrchestrator:
                             swap_span = None
                         delta = value
                         assert delta is not None
+                        substantive = bool(
+                            delta.content
+                            or delta.reasoning_content
+                            or delta.tool_calls
+                        )
+                        if (
+                            substantive
+                            and not slow_first_token
+                            and not rewarm_activity_reported
+                        ):
+                            rewarm_activity_reported = True
+                            if _mark_gpu0_activity is not None:
+                                try:
+                                    _mark_gpu0_activity(resolved_model, self.config)
+                                except Exception:  # rewarm policy is best-effort
+                                    pass
                         if delta.content:
                             accumulated.append(delta.content)
                             tokens_out += 1

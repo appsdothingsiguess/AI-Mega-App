@@ -6,7 +6,13 @@ import asyncio
 from collections.abc import AsyncIterator
 
 from app.config import Config, DbConfig, DefaultsConfig, LlamaSwapConfig, ModelEntry
-from app.warmup import all_residents_loaded, warmup_one, warmup_resident_models
+from app.warmup import (
+    all_residents_loaded,
+    resident_swap_names,
+    server_identity,
+    warmup_one,
+    warmup_resident_models,
+)
 
 
 class FakeLLM:
@@ -121,19 +127,38 @@ async def test_warmup_resident_models_pings_all_in_parallel():
         _model("coder", resident=False, file="/coder.gguf"),
     )
     await warmup_resident_models(llm, cfg, timeout_s=5)
-    assert sorted(llm.chat_calls) == ["chat-default", "dispatcher"]
+    assert llm.chat_calls == ["dispatcher"]
 
 
-async def test_warmup_resident_models_dedupes_shared_file():
-    """reasoner shares chat-default's GGUF — warmup should ping only once."""
+async def test_warmup_dedupes_only_matching_file_and_gpu_identity():
     llm = FakeLLM()
     shared_file = "/shared.gguf"
     cfg = _make_config(
-        _model("chat-default", resident=True, file=shared_file),
-        _model("reasoner", resident=False, file=shared_file),
+        _model("utility-gpu", resident=True, gpu=1, file=shared_file),
+        _model("utility-gpu-alias", resident=True, gpu=1, file=shared_file),
+        _model("utility", resident=True, gpu="cpu", file=shared_file),
     )
     await warmup_resident_models(llm, cfg, timeout_s=5)
-    assert llm.chat_calls == ["chat-default"]
+    assert llm.chat_calls == ["utility-gpu", "utility"]
+    assert server_identity(cfg.models[0]) != server_identity(cfg.models[2])
+
+
+async def test_generic_warmup_excludes_every_gpu0_alias_and_swap_member():
+    llm = FakeLLM()
+    cfg = _make_config(
+        _model("chat-default", resident=True, gpu=0, file="/shared.gguf"),
+        _model("reasoner", resident=True, gpu=0, file="/shared.gguf"),
+        _model("coder", resident=True, gpu=0, file="/coder.gguf"),
+        _model("dispatcher", resident=True, gpu=1, file="/dispatcher.gguf"),
+        _model("utility", resident=True, gpu="cpu", file="/utility.gguf"),
+        _model("disabled", resident=True, gpu=1, file="/disabled.gguf").model_copy(
+            update={"enabled": False}
+        ),
+    )
+
+    assert resident_swap_names(cfg) == ["dispatcher", "utility"]
+    await warmup_resident_models(llm, cfg, timeout_s=5)
+    assert llm.chat_calls == ["dispatcher", "utility"]
 
 
 async def test_warmup_resident_models_one_hang_does_not_block_others():
@@ -185,7 +210,7 @@ class StatusFakeLLM(FakeLLM):
 
 
 async def test_all_residents_loaded_true_when_everyone_loaded():
-    llm = StatusFakeLLM(status_map={"chat-default": True, "dispatcher": True})
+    llm = StatusFakeLLM(status_map={"chat-default": False, "dispatcher": True})
     cfg = _make_config(
         _model("chat-default", resident=True, file="/chat.gguf"),
         _model("dispatcher", resident=True, gpu=1, file="/disp.gguf"),
@@ -194,10 +219,11 @@ async def test_all_residents_loaded_true_when_everyone_loaded():
 
 
 async def test_all_residents_loaded_false_when_one_missing():
-    llm = StatusFakeLLM(status_map={"chat-default": True, "dispatcher": False})
+    llm = StatusFakeLLM(status_map={"dispatcher": True, "utility": False})
     cfg = _make_config(
         _model("chat-default", resident=True, file="/chat.gguf"),
         _model("dispatcher", resident=True, gpu=1, file="/disp.gguf"),
+        _model("utility", resident=True, gpu="cpu", file="/utility.gguf"),
     )
     assert await all_residents_loaded(llm, cfg) is False
 
@@ -221,13 +247,57 @@ async def test_all_residents_loaded_true_when_no_residents():
     assert await all_residents_loaded(llm, cfg) is True
 
 
+async def test_warmup_loop_uses_filtered_source_for_periodic_sweeps(monkeypatch):
+    from types import SimpleNamespace
+
+    import app.main as main_mod
+
+    cfg = _make_config(
+        _model("chat-default", resident=True, gpu=0, file="/chat.gguf"),
+        _model("dispatcher", resident=True, gpu=1, file="/disp.gguf"),
+    )
+    app = SimpleNamespace(state=SimpleNamespace(llm_client=object(), config=cfg))
+    skips: list[set[str]] = []
+    intervals: list[float] = []
+
+    async def fake_loaded(llm, config):
+        return {"dispatcher"}
+
+    async def fake_warm(llm, config, *, skip):
+        assert config is cfg
+        skips.append(skip)
+
+    async def fake_all_loaded(llm, config):
+        return True
+
+    async def fake_sleep(interval):
+        intervals.append(interval)
+        if len(intervals) == 2:
+            raise asyncio.CancelledError
+
+    monkeypatch.setattr(main_mod, "loaded_resident_names", fake_loaded)
+    monkeypatch.setattr(main_mod, "warmup_resident_models", fake_warm)
+    monkeypatch.setattr(main_mod, "all_residents_loaded", fake_all_loaded)
+    monkeypatch.setattr(main_mod.asyncio, "sleep", fake_sleep)
+
+    try:
+        await main_mod._warmup_loop(app)
+    except asyncio.CancelledError:
+        pass
+
+    assert skips == [{"dispatcher"}, set()]
+    assert intervals == [main_mod._WARMUP_INTERVAL_S, main_mod._WARMUP_INTERVAL_S]
+
+
 async def test_all_residents_loaded_false_on_model_status_exception():
     class FailingStatusLLM(StatusFakeLLM):
         async def model_status(self) -> dict[str, bool]:
             raise RuntimeError("llama-swap unreachable")
 
     llm = FailingStatusLLM(status_map={})
-    cfg = _make_config(_model("chat-default", resident=True, file="/chat.gguf"))
+    cfg = _make_config(
+        _model("dispatcher", resident=True, gpu=1, file="/dispatcher.gguf")
+    )
     assert await all_residents_loaded(llm, cfg) is False
 
 
@@ -235,9 +305,6 @@ async def test_warmup_loop_retries_in_startup_phase():
     """The _warmup_loop in main.py retries with _STARTUP_BACKOFF_S until
     all residents report loaded, then settles into _WARMUP_INTERVAL_S.
     We test the retry semantics by driving the loop components directly."""
-    import asyncio
-    from app.warmup import _STARTUP_BACKOFF_S
-
     # Simulate a resident model that becomes loaded after the first sweep.
     call_count = 0
 

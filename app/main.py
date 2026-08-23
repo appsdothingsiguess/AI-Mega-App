@@ -46,10 +46,11 @@ logging.basicConfig(
 # not in this worktree; start_rewarm is async and must be awaited when present).
 try:
     from app.gpu.api import router as gpu_router
-    from app.gpu.rewarm import start_rewarm
+    from app.gpu.rewarm import start_rewarm, stop_rewarm
 except ImportError:  # BLOCKED: app.gpu absent — interface-gate (step 2)
     gpu_router = None
     start_rewarm = None
+    stop_rewarm = None
 
 try:
     from app.background import start as background_start, stop as background_stop
@@ -102,12 +103,44 @@ async def _warmup_loop(app: FastAPI) -> None:
             logger.info("warmup loop: sweep complete")
             if startup_phase and await all_residents_loaded(llm, cfg):
                 startup_phase = False
-                logger.info("warmup loop: all residents loaded, switching to steady-state (%.0fs interval)",
-                            _WARMUP_INTERVAL_S)
+                logger.info(
+                    "warmup loop: all residents loaded, switching to "
+                    "steady-state (%.0fs interval)",
+                    _WARMUP_INTERVAL_S,
+                )
         except Exception:
             logger.exception("warmup loop: sweep failed, retrying after backoff")
         interval = _WARMUP_STARTUP_BACKOFF_S if startup_phase else _WARMUP_INTERVAL_S
         await asyncio.sleep(interval)
+
+
+async def _cancel_task(task: asyncio.Task | None) -> None:
+    if task is None:
+        return
+    if not task.done():
+        task.cancel()
+    try:
+        await task
+    except asyncio.CancelledError:
+        pass
+    except Exception:
+        _logger.exception("warmup task failed during shutdown")
+
+
+async def _close_llm_clients(app: FastAPI) -> None:
+    """Close each distinct app-owned client once."""
+    seen: set[int] = set()
+    for attr in ("llm_client", "summary_llm_client"):
+        client = getattr(app.state, attr, None)
+        if client is None or id(client) in seen:
+            continue
+        seen.add(id(client))
+        close = getattr(client, "close", None)
+        if close is not None:
+            try:
+                await close()
+            except Exception:
+                _logger.exception("failed to close %s", attr)
 
 
 def _resolve_db_path(config: Config) -> Path:
@@ -145,14 +178,18 @@ def create_app(config: Config | None = None) -> FastAPI:
             yield
         finally:
             if background_stop is not None:
-                await background_stop(app)
-            task = getattr(app.state, "_warmup_task", None)
-            if task is not None and not task.done():
-                task.cancel()
                 try:
-                    await task
-                except (asyncio.CancelledError, Exception):
-                    pass
+                    await background_stop(app)
+                except Exception:
+                    _logger.exception("background shutdown failed")
+            await _cancel_task(getattr(app.state, "_warmup_task", None))
+            app.state._warmup_task = None
+            if stop_rewarm is not None:
+                try:
+                    await stop_rewarm(app)
+                except Exception:
+                    _logger.exception("rewarm shutdown failed")
+            await _close_llm_clients(app)
             reset_debug_connection(None)
             app.state.db.close()
 
