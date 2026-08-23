@@ -1,32 +1,21 @@
-"""The turn loop (docs/FEATURES.md A4; PLAN.md §4.2). No tool logic —
-routing is delegated to app.router.route via a soft-imported seam; this
-module resolves the model, streams a completion, and persists the turn.
-"""
+"""Public chat-orchestrator facade and soft-import compatibility seams."""
 
 from __future__ import annotations
 
-import asyncio
 import sqlite3
-import time
 from collections.abc import AsyncIterator
 from typing import Any, Protocol
 
-from app.background.summary_coverage import trusted_covered_count
 from app.config import Config, ModelEntry
-from app.db import run_sync
-from app.debug import new_trace, span
 from app.llm_client import LLMClient, LLMError
 from app.types import ChatDelta, SSEEvent
 
-from . import history
-from .context import assemble_context, render_prompt as _render_prompt
+from .streaming import stream_with_loading
+from .turn import TurnSeams, execute_turn
 
-# Soft-import Phase-2 seams so this worktree merges cleanly before
-# app.router / app.background land. Tests monkeypatch `_route` /
-# `_on_turn_complete` on this module.
 try:
     from app.router import route as _route
-except ImportError:  # BLOCKED: app.router absent — interface-gate
+except ImportError:
     _route = None
 
 try:
@@ -34,110 +23,42 @@ try:
         enqueue_summary_recovery as _enqueue_summary_recovery,
         on_turn_complete as _on_turn_complete,
     )
-except ImportError:  # BLOCKED: app.background absent — interface-gate
+except ImportError:
     _on_turn_complete = None
     _enqueue_summary_recovery = None
 
 try:
     from app.gpu.rewarm import mark_gpu0_activity as _mark_gpu0_activity
-except ImportError:  # BLOCKED: app.gpu absent — interface-gate
+except ImportError:
     _mark_gpu0_activity = None
 
 
 class ChatCompleter(Protocol):
-    """The subset of LLMClient.chat's declared signature the orchestrator
-    depends on — lets tests inject a fake without importing app.llm_client."""
+    """The LLM client subset used by the chat turn executor."""
 
     def chat(
-        self,
-        model: str,
-        messages: list[dict[str, str]],
-        *,
-        tools: Any = None,
-        response_format: Any = None,
-        thinking: bool | None = None,
-        max_tokens: int | None = None,
-        stream: bool = True,
+        self, model: str, messages: list[dict[str, str]], *, tools: Any = None,
+        response_format: Any = None, thinking: bool | None = None,
+        max_tokens: int | None = None, stream: bool = True,
     ) -> AsyncIterator[ChatDelta]: ...
 
 
-FIRST_TOKEN_WARN_S = 2.0  # PLAN.md §4.2: model_loading fires past this
+FIRST_TOKEN_WARN_S = 2.0
+
 
 async def _stream_with_loading(
     agen: AsyncIterator[ChatDelta], warn_s: float, timeout_s: float
 ) -> AsyncIterator[tuple[str, ChatDelta | None]]:
-    """Wrap a ChatDelta async iterator, yielding ("loading", None) once if no
-    delta has arrived within `warn_s` (llama-swap is swapping the 3090 slot,
-    PLAN.md §4.1 measured up to 12.47s cold), then ("delta", delta) for each
-    chunk. Raises TimeoutError if no first token arrives within `timeout_s`
-    (config.llm.first_token_timeout_s). No timeout is applied once the first
-    token has arrived — only the cold-load wait is bounded here.
-
-    Implementation note: the pending __anext__ Task is kept alive across the
-    warn window rather than cancelled. asyncio.wait_for cancels the inner task
-    when its timeout fires, which aborts the in-flight httpx connection before
-    LLMClient can surface the real error — producing a silent StopAsyncIteration
-    instead of an LLMError. asyncio.wait() leaves the task running so a late
-    connection failure propagates correctly as an LLMError (→ SSE error event).
-    """
-    start = time.monotonic()
-    warned = False
-
-    # Hold the pending first-token task across warn windows so it is never
-    # cancelled prematurely (see implementation note above).
-    pending_task: asyncio.Task[ChatDelta] | None = None
-    try:
-        while True:
-            remaining = timeout_s - (time.monotonic() - start)
-            if remaining <= 0:
-                raise TimeoutError("first_token_timeout")
-
-            if pending_task is None:
-                pending_task = asyncio.create_task(agen.__anext__())  # type: ignore[arg-type]
-
-            wait = remaining if warned else min(warn_s, remaining)
-            done, _ = await asyncio.wait({pending_task}, timeout=wait)
-
-            if not done:
-                # Warn window elapsed; task still in flight.
-                if warned:
-                    raise TimeoutError("first_token_timeout")
-                warned = True
-                yield ("loading", None)
-                continue
-
-            # Task completed (success, StopAsyncIteration, or exception).
-            pending_task = None
-            try:
-                delta = done.pop().result()
-            except StopAsyncIteration:
-                return
-            # LLMError and any other exception propagate to orchestrator's
-            # outer try/except, which emits the terminal SSE error event.
-            yield ("delta", delta)
-            break  # first token received; hand off to the simple loop below
-
-        # After first token the stream is flowing — no need for task wrappers.
-        async for delta in agen:
-            yield ("delta", delta)
-
-    finally:
-        if pending_task is not None and not pending_task.done():
-            pending_task.cancel()
-            try:
-                await pending_task
-            except (asyncio.CancelledError, Exception):
-                pass
+    """Compatibility alias for callers that imported the former helper."""
+    async for item in stream_with_loading(agen, warn_s, timeout_s):
+        yield item
 
 
 class ChatOrchestrator:
-    """One instance per request (cheap — holds only a DB connection, config,
-    and an LLMClient). `handle_message` is the entire Phase-1 turn loop."""
+    """Public facade; turn execution receives this module's soft seams."""
 
     def __init__(
-        self,
-        conn: sqlite3.Connection,
-        config: Config,
+        self, conn: sqlite3.Connection, config: Config,
         llm_client: ChatCompleter | None = None,
     ) -> None:
         self.conn = conn
@@ -151,351 +72,45 @@ class ChatOrchestrator:
         )
 
     def _model_entry(self, name: str) -> ModelEntry | None:
-        for entry in self.config.models:
-            if entry.name == name:
-                return entry
-        return None
+        return next((entry for entry in self.config.models if entry.name == name), None)
 
     def _canonical_swap_name(self, model: str) -> str:
-        """Translate a model alias to the canonical swap-slot name.
-
-        When swapgen dedupes models sharing a GGUF (e.g. reasoner →
-        chat-default), llama-swap only has the canonical entry.  This
-        replicates swapgen's dedup priority (resident > non-resident,
-        first-in-list wins ties) so the orchestrator sends the name
-        llama-swap actually knows.
-        """
         entry = self._model_entry(model)
         if entry is None:
             return model
-        file_to_canonical: dict[str, str] = {}
-        file_to_resident: dict[str, bool] = {}
-        for m in self.config.models:
-            if not m.enabled:
+        canonical: dict[str, str] = {}
+        resident: dict[str, bool] = {}
+        for candidate in self.config.models:
+            if not candidate.enabled:
                 continue
-            if m.file not in file_to_canonical:
-                file_to_canonical[m.file] = m.name
-                file_to_resident[m.file] = m.resident
-            elif m.resident and not file_to_resident[m.file]:
-                file_to_canonical[m.file] = m.name
-                file_to_resident[m.file] = True
-        return file_to_canonical.get(entry.file, model)
+            if candidate.file not in canonical or (candidate.resident and not resident[candidate.file]):
+                canonical[candidate.file] = candidate.name
+                resident[candidate.file] = candidate.resident
+        return canonical.get(entry.file, model)
 
     async def _get_preferred_model(self) -> str | None:
-        """Find the currently-loaded GPU0 model to prefer for sticky routing.
-
-        Returns the model name if exactly one GPU0 model is loaded, None
-        otherwise. This avoids unnecessary swaps when the classifier's
-        confidence is low (HANDOFF 2026-08-06).
-        """
         try:
             status = await self.llm_client.model_status()
         except Exception:
             return None
-        gpu0_models = [m.name for m in self.config.models if m.gpu == 0 and m.enabled]
-        loaded_gpu0 = [name for name in gpu0_models if status.get(name)]
-        return loaded_gpu0[0] if len(loaded_gpu0) == 1 else None
+        gpu0 = [m.name for m in self.config.models if m.gpu == 0 and m.enabled]
+        loaded = [name for name in gpu0 if status.get(name)]
+        return loaded[0] if len(loaded) == 1 else None
 
     async def handle_message(
-        self,
-        chat_id: str,
-        text: str,
-        model: str | None = None,
+        self, chat_id: str, text: str, model: str | None = None,
         attachments: list[str] | None = None,
     ) -> AsyncIterator[SSEEvent]:
-        """Resolve model -> persist user msg -> stream completion -> persist
-        assistant msg. Every stage is a debug span. Yields SSEEvent objects
-        only — the finally-block terminal-event guarantee lives in
-        app/chat/api.py, which wraps this generator."""
-        attachments = attachments or []
-        trace_id = new_trace(chat_id)
-        accumulated: list[str] = []
-        accumulated_reasoning: list[str] = []
-        usage_dict: dict[str, Any] | None = None
-        timings_dict: dict[str, Any] | None = None
-        route_info: dict[str, Any]
-        route_extra: dict[str, Any] = {}
-
-        chat_row = await run_sync(history.get_chat, self.conn, chat_id)
-        if chat_row is None:
-            yield SSEEvent(
-                event="error",
-                data={"kind": "chat_not_found", "detail": f"no chat with id {chat_id}"},
-            )
-            return
-
-        persisted = False
-        resolved_model = ""
-        try:
-            async with span(trace_id, "route", explicit_model=model) as sp:
-                # PLAN.md §4.3: override > rules > classifier. Explicit
-                # `model` and `chat.model_override` both map to source
-                # "override" (frozen RouteResult.source set).
-                if model or chat_row["model_override"]:
-                    resolved_model = model or chat_row["model_override"]
-                    route_info = {
-                        "model": resolved_model,
-                        "source": "override",
-                        "intent": "manual",
-                        "confidence": None,
-                    }
-                    route_extra = {"layer": "override"}
-                elif _route is not None:
-                    # `details` carries the *why* (winning layer, fallback
-                    # reason, classifier prompt/response) that RouteResult's
-                    # frozen shape can't; without it a classifier timeout
-                    # looks identical to a confident `chat` in the Debug view.
-                    route_details: dict[str, Any] = {}
-                    preferred = await self._get_preferred_model()
-                    result = await _route(
-                        chat_row,
-                        text,
-                        attachments,
-                        llm_client=self.llm_client,
-                        config=self.config,
-                        details=route_details,
-                        preferred_model=preferred,
-                    )
-                    resolved_model = result.model
-                    route_info = result.model_dump()
-                    route_extra = route_details
-                else:
-                    # BLOCKED: app.router absent — degraded path uses
-                    # defaults.chat_model with frozen-set source
-                    # "classifier" so tests can monkeypatch `_route`.
-                    resolved_model = self.config.defaults.chat_model
-                    route_info = {
-                        "model": resolved_model,
-                        "source": "classifier",
-                        "intent": "chat",
-                        "confidence": None,
-                    }
-                    route_extra = {
-                        "layer": "classifier",
-                        "fallback_reason": "router_unavailable",
-                    }
-                sp.set(**route_info, **route_extra)
-
-            async with span(trace_id, "db", op="persist_user_message"):
-                await run_sync(history.insert_message, self.conn, chat_id, "user", text, None)
-
-            model_entry = self._model_entry(resolved_model)
-            swap_model = self._canonical_swap_name(resolved_model)
-
-            gpu = model_entry.gpu if model_entry else None
-            agen: AsyncIterator[ChatDelta] | None = None
-            context_refused = False
-            async with span(trace_id, "llm_request", model=resolved_model, gpu=gpu) as sp:
-                raw_messages = await run_sync(history.list_messages, self.conn, chat_id)
-                current_chat_row = await run_sync(history.get_chat, self.conn, chat_id)
-                current_summary = (
-                    current_chat_row["summary"] if current_chat_row is not None else None
-                )
-                covered_message_count = await run_sync(
-                    trusted_covered_count,
-                    self.conn,
-                    chat_id,
-                    raw_messages,
-                    current_summary,
-                )
-                ctx = model_entry.ctx if model_entry else 8192
-                mtk = model_entry.max_tokens if model_entry else 1024
-                assembled = assemble_context(
-                    raw_messages,
-                    current_summary,
-                    covered_message_count,
-                    ctx,
-                    mtk,
-                )
-                messages = assembled.messages
-                context_refused = messages is None
-                if messages is not None:
-                    agen = self.llm_client.chat(
-                        model=swap_model,
-                        messages=messages,
-                        thinking=model_entry.thinking if model_entry else None,
-                        max_tokens=model_entry.max_tokens if model_entry else 1024,
-                        stream=True,
-                    )
-                # `messages`/`prompt` are dropped by app/debug/trace.py unless
-                # debug.store_prompts is true. The Debug view's prompt tab
-                # reads `prompt`, so send the exact wire messages *and* a
-                # readable rendering of them (docs/FEATURES.md F19: "exactly
-                # what each model was sent").
-                sp.set(
-                    message_count=len(messages) if messages is not None else len(raw_messages) + 1,
-                    thinking=model_entry.thinking if model_entry else None,
-                    max_tokens=model_entry.max_tokens if model_entry else 1024,
-                    messages=messages,
-                    prompt=_render_prompt(messages) if messages is not None else None,
-                    context_fit=assembled.fits,
-                    context_budget_tokens=assembled.budget_tokens,
-                    estimated_prompt_tokens=assembled.estimated_prompt_tokens,
-                    covered_message_count=covered_message_count,
-                )
-
-            if context_refused:
-                if _enqueue_summary_recovery is not None:
-                    try:
-                        await _enqueue_summary_recovery(chat_id)
-                    except Exception:  # noqa: BLE001 - terminal error still wins
-                        pass
-                async with span(
-                    trace_id, "sse_emit", event="error", kind="context_overflow"
-                ):
-                    yield SSEEvent(
-                        event="error",
-                        data={
-                            "kind": "context_overflow",
-                            "detail": (
-                                "conversation history cannot fit this model safely; "
-                                "summary recovery was queued"
-                            ),
-                        },
-                    )
-                return
-
-            assert agen is not None
-
-            async with span(trace_id, "llm_stream", model=resolved_model, gpu=gpu) as sp:
-                tokens_out = 0
-                slow_first_token = False
-                rewarm_activity_reported = False
-                # A model_loading warn means llama-swap is loading/swapping
-                # the slot; bracket that wait in its own swap_wait span so the
-                # Debug view can show the swap badge (docs/FEATURES.md F1/F19).
-                swap_span = None
-                try:
-                    async for kind, value in _stream_with_loading(
-                        agen.__aiter__(),
-                        FIRST_TOKEN_WARN_S,
-                        self.config.llm.first_token_timeout_s,
-                    ):
-                        if kind == "loading":
-                            slow_first_token = True
-                            if swap_span is None:
-                                swap_span = span(trace_id, "swap_wait", model=resolved_model)
-                                await swap_span.__aenter__()
-                            yield SSEEvent(event="model_loading", data={"model": resolved_model})
-                            continue
-                        if swap_span is not None:
-                            await swap_span.__aexit__(None, None, None)
-                            swap_span = None
-                        delta = value
-                        assert delta is not None
-                        substantive = bool(
-                            delta.content
-                            or delta.reasoning_content
-                            or delta.tool_calls
-                        )
-                        if (
-                            substantive
-                            and not slow_first_token
-                            and not rewarm_activity_reported
-                        ):
-                            rewarm_activity_reported = True
-                            if _mark_gpu0_activity is not None:
-                                try:
-                                    _mark_gpu0_activity(resolved_model, self.config)
-                                except Exception:  # rewarm policy is best-effort
-                                    pass
-                        if delta.content:
-                            accumulated.append(delta.content)
-                            tokens_out += 1
-                            yield SSEEvent(event="token", data={"text": delta.content})
-                        if delta.reasoning_content:
-                            accumulated_reasoning.append(delta.reasoning_content)
-                        if delta.usage is not None:
-                            usage_dict = delta.usage.model_dump()
-                        if delta.timings is not None:
-                            timings_dict = delta.timings
-                finally:
-                    if swap_span is not None:
-                        await swap_span.__aexit__(None, None, None)
-                # usage/timings come from llama.cpp itself — never estimated
-                # client-side (PLAN.md §4.16).
-                sp.set(
-                    tokens_out=tokens_out,
-                    usage=usage_dict,
-                    timings=timings_dict,
-                    response="".join(accumulated),
-                    reasoning="".join(accumulated_reasoning) if accumulated_reasoning else None,
-                )
-
-            async with span(trace_id, "db", op="persist_assistant_message"):
-                message_row = await run_sync(
-                    history.insert_message,
-                    self.conn,
-                    chat_id,
-                    "assistant",
-                    "".join(accumulated),
-                    resolved_model,
-                )
-                await run_sync(history.touch_chat, self.conn, chat_id)
-                persisted = True
-
-            if _on_turn_complete is not None:
-                await _on_turn_complete(chat_id)
-
-            # `done` is built as a dict later phases add keys to (route,
-            # citations/context) — never a fixed literal.
-            done_payload: dict[str, Any] = {
-                "message_id": message_row["id"],
-                "model": resolved_model,
-                "usage": usage_dict,
-                "timings": timings_dict,
-                "route": {
-                    "source": route_info["source"],
-                    "intent": route_info["intent"],
-                    "model": resolved_model,
-                    "confidence": route_info.get("confidence"),
-                },
-                # Not in the frozen 3-field literal (PLAN.md §4.2) but the
-                # dict is explicitly meant for later stages to add keys to;
-                # trace_id is what makes the turn's spans discoverable via
-                # GET /api/debug/trace/{id} (the ACCEPTANCE wiring proof).
-                "trace_id": trace_id,
-            }
-            async with span(trace_id, "sse_emit", event="done"):
-                yield SSEEvent(event="done", data=done_payload)
-
-        except LLMError as exc:
-            async with span(trace_id, "sse_emit", event="error", kind=exc.kind):
-                yield SSEEvent(event="error", data={"kind": exc.kind, "detail": exc.detail})
-            if _on_turn_complete is not None:
-                try:
-                    await _on_turn_complete(chat_id)
-                except Exception:  # noqa: BLE001
-                    pass
-        except TimeoutError as exc:
-            async with span(trace_id, "sse_emit", event="error", kind="first_token_timeout"):
-                yield SSEEvent(
-                    event="error", data={"kind": "first_token_timeout", "detail": str(exc)}
-                )
-            if _on_turn_complete is not None:
-                try:
-                    await _on_turn_complete(chat_id)
-                except Exception:  # noqa: BLE001
-                    pass
-        except Exception as exc:  # noqa: BLE001 - last-resort terminal error
-            async with span(trace_id, "sse_emit", event="error", kind="internal_error"):
-                yield SSEEvent(event="error", data={"kind": "internal_error", "detail": str(exc)})
-            if _on_turn_complete is not None:
-                try:
-                    await _on_turn_complete(chat_id)
-                except Exception:  # noqa: BLE001
-                    pass
-        finally:
-            if not persisted and accumulated:
-                try:
-                    await run_sync(
-                        history.insert_message,
-                        self.conn,
-                        chat_id,
-                        "assistant",
-                        "".join(accumulated),
-                        resolved_model or None,
-                    )
-                    await run_sync(history.touch_chat, self.conn, chat_id)
-                except Exception:  # noqa: BLE001
-                    pass
+        seams = TurnSeams(
+            route=_route, on_turn_complete=_on_turn_complete,
+            enqueue_summary_recovery=_enqueue_summary_recovery,
+            mark_gpu0_activity=_mark_gpu0_activity, model_entry=self._model_entry,
+            canonical_swap_name=self._canonical_swap_name,
+            preferred_model=self._get_preferred_model,
+            stream_with_loading=_stream_with_loading,
+            first_token_warn_s=FIRST_TOKEN_WARN_S,
+        )
+        async for event in execute_turn(
+            self.conn, self.config, self.llm_client, seams, chat_id, text, model, attachments,
+        ):
+            yield event
