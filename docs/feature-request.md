@@ -71,12 +71,18 @@ today.
 model roster — current conversations feel like they run out of room too
 fast.
 
-**Current numbers (`config.yaml`, as of this entry):** `chat-default`/
-`reasoner` 32768, `reasoner-alt` 8192, `coder` 16384, `coder-small` 8192,
-`vision` 8192, `dispatcher` 4096, `utility` 8192, `embed` 2048, `classifier`
-4096. All are per-model `ctx:` keys, config-only (no code change needed to
-raise them) — but each is an "ask first" change per `CLAUDE.md`'s
-config-file-discipline rule, since `ctx` is a `config.yaml` key.
+**Current numbers (`config.yaml`, as of 2026-08-24 — updated from this
+entry's original 2026-08-15 numbers by subsequent live capacity testing,
+see `docs/HANDOFF.md`):** `chat-default`/`coder` 131072, `reasoner` 32768,
+`reasoner-alt` 8192 (still untested live), `coder-small` 30000, `vision`
+8192, `dispatcher` 4096, `utility`/`utility-gpu` 8192/16384, `embed` 2048,
+`classifier` 4096. All are per-model `ctx:` keys, config-only (no code
+change needed to raise them) — but each is an "ask first" change per
+`CLAUDE.md`'s config-file-discipline rule, since `ctx` is a `config.yaml`
+key. Note some of this request's premise (context "running out of room too
+fast") is likely addressed by the since-completed context/capacity work —
+worth checking with the user before treating this as still open as
+originally scoped.
 
 **Tradeoffs to weigh before approving specific numbers:**
 - KV-cache memory scales with `ctx` — for GPU0 swap-group models

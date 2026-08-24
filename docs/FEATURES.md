@@ -265,8 +265,8 @@ defaults: {chat_model: chat-default, utility_model: utility, title_model: dispat
 # The list form keeps ordering stable for swapgen's byte-identical output and
 # lets pydantic validate one entry model uniformly.
 models:
-  - {name: chat-default, class: general,    file: .../Qwen3.6-35B-A3B-UD-Q4_K_M.gguf, quant: Q4_K_M, gpu: 0, resident: true, ttl_s: 0, ctx: 32768, tool_call: native}
-  - {name: reasoner,     class: reasoning,  file: .../Qwen3.6-35B-A3B-UD-Q4_K_M.gguf, quant: Q4_K_M, gpu: 0, ctx: 32768, thinking: true, max_tokens: 4096}   # same blob as chat-default — no swap
+  - {name: chat-default, class: general,    file: .../Qwen3.8-27B-UD-Q4_K_XL.gguf, quant: Q4_K_XL, gpu: 0, resident: true, ttl_s: 0, ctx: 32768, tool_call: native}
+  - {name: reasoner,     class: reasoning,  file: .../Qwen3.8-27B-UD-Q4_K_XL.gguf, quant: Q4_K_XL, gpu: 0, ctx: 32768, thinking: true, max_tokens: 4096}   # same blob as chat-default — no swap
   - {name: reasoner-alt, class: reasoning,  file: .../DeepSeek-R1-Distill-Qwen-32B-Q4_K_M.gguf, quant: Q4_K_M, gpu: 0, ctx: 8192, enabled: false, max_tokens: 4096}
   - {name: coder,        class: coding,     file: .../Qwen3-Coder-30B-A3B-Instruct-Q5_K_M.gguf, quant: Q5_K_M, gpu: 0, ctx: 16384}   # Q5 is the locked quant
   - {name: coder-small,  class: coding,     file: .../qwen2.5-coder-7b.gguf, quant: Q4_K_M, gpu: 0, ctx: 16384}
@@ -278,6 +278,8 @@ models:
 routing_labels: {coding-light: coder-small, coding-heavy: coder, reasoning-heavy: reasoner, ...}
 ```
 Context-variant entries (same weights, different `ctx`) remain supported — the roster no longer ships one because `chat-default` at 32k is the measured target. Note the open caveat: throughput on `chat-default` degrades **52.9% by 32k** (recall stays correct), so compaction thresholds matter more than the window size.
+
+**The `ctx`/`file` values above are illustrative schema examples, not the live roster** — they were never kept in sync with `config.yaml` and shouldn't be read as current. As of 2026-08-24, `config.yaml` is the sole authority for live model files and `ctx`: `chat-default`/`coder` ship on the `Qwen3.8-27B-UD-Q4_K_XL` blob (not `Qwen3.6-35B-A3B`, replaced 2026-08-21) at ctx 131072, `reasoner` (same blob) at ctx 32768, `coder-small` at ctx 30000, `vision` at ctx 8192, `reasoner-alt` still ctx 8192 and still unvalidated. See `docs/HANDOFF.md`'s 2026-08-23/2026-08-24 entries for the capacity tests behind these numbers.
 Per-model toggling = removing/commenting the entry or `enabled: false` on it; registry skips disabled entries and swapgen omits them.
 
 **Integration points.** Input to swapgen (F14), router (F5), model picker (F4), dispatcher assist (`tool_call: weak` tag, F9). Users add models per class in Settings [FACT — owner decision 4]. Spans: none of its own; registry data annotates `route` and `llm_request` spans.

@@ -51,7 +51,7 @@ scroll stick-to-bottom; nav-interrupt (no abort on unmount, store.activeChatStre
 - llama-swap -watch-config reload kills ALL llama-server processes → warmup sweep after apply.
 
 ## 9. Deferred / explore later (user-directed)
-- **MoE RAM offload for ctx headroom**: once all fixes live, explore `--n-cpu-moe` on chat-default (Qwen3.6-35B-A3B) to increase ctx; precedent: qwen3-coder-30b stable with `-ncmoe 20` (llm-stack config; ~2.9GB/GPU headroom).
+- **MoE RAM offload for ctx headroom**: once all fixes live, explore `--n-cpu-moe` on chat-default (Qwen3.8-27B-UD-Q4_K_XL as of 2026-08-21, not the earlier Qwen3.6-35B-A3B) to increase ctx; precedent: qwen3-coder-30b stable with `-ncmoe 20` (llm-stack config; ~2.9GB/GPU headroom).
 - benchmark re-run for FAIL_EMPTY validity (needs Ollama box). llama-swap eviction events in Debug. Modelfile renames.
 
 ## 10. Pointer hierarchy
