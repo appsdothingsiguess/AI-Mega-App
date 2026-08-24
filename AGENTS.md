@@ -2,6 +2,35 @@
 
 Personal AI platform: a claude.ai-parity web UI backed by local models on a dedicated Ubuntu GPU box. FastAPI backend orchestrates chat, routing, tools, RAG, and hermes-style memory; llama.cpp `llama-server` instances managed by llama-swap do all inference through one OpenAI-compatible endpoint. The old Ollama/LiteLLM/React codebase in this repo is a post-mortem, not a foundation — build from `PLAN.md`, not from existing `app/` or `web/` code.
 
+## Operational scripts — read before benchmarking or tracing
+
+The recent model/context work is captured in `scripts/`; do not recreate ad-hoc benchmark harnesses.
+Run these from the repository root, preferably on `ailab` with the GPU state recorded first:
+
+```bash
+# Isolated model boot + request + VRAM/throughput test; always tears down llama-server.
+python3 scripts/bench_server.py --label <label> --model <model.gguf> \
+  --model-class <chat-default|coder|coder-small|reasoner|vision|utility> --ctx <tokens>
+
+# Growing real conversation; measures recall, latency, and the usable context ceiling.
+python3 scripts/bench_context_depth.py --label <label> --model <model.gguf> \
+  --model-class <role> --ctx <tokens> --checkpoints 2000,8000,16000,32000
+
+# Collects prompt/response transcripts for manual quality review. The llama-server
+# must already be running; include --system for production summarizer prompts.
+python3 scripts/eval_quality_transcripts.py --prompts <prompts.json> \
+  --class <reasoner|coder|vision|summarizer> --model-label <label> --port <port>
+
+# Router accuracy; base URL must include /v1.
+python3 scripts/eval_router.py --base-url http://127.0.0.1:8080/v1
+```
+
+`bench_server.py` and `bench_context_depth.py` own their isolated server lifecycle and must not be run with
+`--tensor-split` for the production roster. `eval_quality_transcripts.py` appends raw results to
+`logs/benchmarks/quality/<class>.jsonl`; it does not score quality. For a live production trace, query
+`data/app.db`'s `traces` and `spans` tables by `trace_id`; background title/summary jobs have separate traces
+linked by `chat_id`, so the requested chat's neighboring traces may contain the actual `summary` span.
+
 ## Stack
 
 | Layer | Choice |
@@ -54,6 +83,13 @@ npx tsc --noEmit
 ```
 
 Tests run against a fake llama-swap; no GPU in CI. A feature PR = code + wiring (registered and reachable end-to-end) + tests + `docs/<feature>.md`. "Built but not injected" is a rejected PR. Every pipeline stage writes a debug span — a feature invisible in the Debug panel is not done.
+
+**Debugging & ops scripts — ALWAYS use these, never ad-hoc `sqlite3`/`journalctl`/`curl`/`nvidia-smi`/`ps` (details in `CLAUDE.md` "Debugging & ops scripts"):**
+- `scripts/trace_inspect.py <trace_id> [--with-logs]` → `logs/traces/<trace_id>.md` (spans + chat history; `--with-logs` appends filtered journals + GPU/models)
+- `scripts/incident_snapshot.py <trace_id|timestamp>` → `logs/incidents/<id>.md` (trace window → both journals filtered + models + nvidia-smi + ps; replaces 6-8 manual calls)
+- `scripts/model_state.py` → compact `curl :8080/v1/models` + `nvidia-smi` + `ps aux | grep llama-server` table
+- `scripts/config_drift_check.py` → diff `swapgen.generate(get_config())` vs deployed `llama-swap/config.yaml`
+- `scripts/chat_ctx_budget.py <chat_id> [--model X]` → context-fit preview via real `assemble_context`/`trusted_covered_count` (lossless fits-vs-refused, pre-flight before sending)
 
 ## Worktrees and parallel agents
 

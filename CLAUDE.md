@@ -6,6 +6,34 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 A personal AI platform: a claude.ai-parity web UI backed by local models on a dedicated Ubuntu GPU box. FastAPI orchestrates chat, routing, tools, RAG, and hermes-style memory; llama.cpp `llama-server` instances managed by llama-swap do all inference through one OpenAI-compatible endpoint.
 
+## Operational scripts — read before benchmarking or tracing
+
+The recent model/context work is captured in `scripts/`; use these existing harnesses before writing a new one.
+Run from the repository root, preferably on `ailab`:
+
+```bash
+# Isolated boot/request/VRAM/throughput test; tears down llama-server when finished.
+python3 scripts/bench_server.py --label <label> --model <model.gguf> \
+  --model-class <chat-default|coder|coder-small|reasoner|vision|utility> --ctx <tokens>
+
+# Growing conversation: recall, latency, and usable context ceiling.
+python3 scripts/bench_context_depth.py --label <label> --model <model.gguf> \
+  --model-class <role> --ctx <tokens> --checkpoints 2000,8000,16000,32000
+
+# Prompt/response collection for manual quality review. The server is already running;
+# provide --system when reproducing a production summarizer call.
+python3 scripts/eval_quality_transcripts.py --prompts <prompts.json> \
+  --class <reasoner|coder|vision|summarizer> --model-label <label> --port <port>
+
+# Router evaluation; the /v1 suffix is required.
+python3 scripts/eval_router.py --base-url http://127.0.0.1:8080/v1
+```
+
+The isolated harnesses should follow the production no-`--tensor-split` placement rule. Quality transcripts are
+written to `logs/benchmarks/quality/<class>.jsonl` and are not automatically scored. To investigate a live
+`trace_id`, query both `traces` and `spans` in `data/app.db`; title/summary jobs create separate traces linked by
+`chat_id`, so the supplied trace may be only the parent/title trace rather than the actual `summary` span.
+
 **The existing `app/` directory (and `settings.json`) is the old Ollama/LiteLLM/React codebase — a post-mortem, not a foundation.** Do not extend or copy from it. Build from `PLAN.md`. See `PLAN.md` §1 for the specific failure modes that codebase hit (fragile classifier, components built-but-never-wired, silent SSE stream deaths, config sprawl) — those are the mistakes this rebuild is designed to avoid repeating.
 
 **Phase 2 merged — live app running on `ailab` (2026-08-11).** 136+ tests passing, `tsc --noEmit` clean, full end-to-end chat working against real llama-swap. Phase 0 closed 2026-07-23, Phase 1 backend + frontend closed 2026-07-25, Phase 2 (config-schema, router-classifier, gpu-swapgen, background-utility, router-eval, settings-api, settings-ui) merged 2026-07-31 and live-verified 2026-08-02 (router eval 93.33%, GPU-reassignment demo working). Subsequent hardening on `main`: `8c4f7b4` (regenerate, tok/s, swap-aware routing, warmup timeout, drain reduction), `53dac3a` (scroll stick-to-bottom, nav-interrupt), `0170ca4` (warmup logging + resident-model hot-at-boot). **Open items as of 2026-08-11 — see `docs/FIX_PLAN_2026-08-11.md`** (four parallel workstreams WS-A..WS-D: config drift, backend reliability, web gaps, docs refresh) and `docs/AGENT_CONTEXT_MEGA.md` for the audited state. Before writing more `app/` or `web/` code, check `PLAN.md` §5 and `AGENTS.md` "Current phase".
@@ -81,6 +109,16 @@ Router changes additionally run the eval harness (`eval/` labeled prompt→route
 - Frontend: one TS module per view (`mount(el, state)`/`unmount()`), hash-based `router.ts`, pub/sub `store.ts` — the entire "framework."
 - Smart router is three strictly-ordered layers (manual override → deterministic keyword rules → classifier), every decision logged to the debug panel with source + latency.
 - Debug is a separate window/route (`#/debug`), not an embedded panel — every turn gets a `trace_id`; every stage writes a span with real token counts/timings from llama.cpp's own `usage`/`timings` fields, never client-side estimates.
+
+## Debugging & ops scripts — ALWAYS use these (never ad-hoc sqlite/journalctl/curl)
+
+**Rule: for traces/chats, GPU state, config drift, or context-fit pre-flight, use the scripts below — never hand-rolled `sqlite3`, `journalctl`, `curl :8080/v1/models`, `nvidia-smi`, or `ps aux` one-offs.** All run under both `python3` (system) and `.venv/bin/python`; outputs land in `logs/` (git-ignored).
+
+- **`scripts/trace_inspect.py <trace_id>`** — trace + chat logs. Fetches `traces` + all `spans` + `chats`/`messages` → `logs/traces/<trace_id>.md` (overview, chat metadata + sibling trace_ids, full message history, span waterfall, per-span JSON). `--with-logs` appends that window's filtered `journalctl -u ai-mega-app`/`-u llama-swap` + `nvidia-smi`/`ps`/`/v1/models` (tune `--log-pad`/`--log-lines`/`--base-url`). On `trace not found` lists the 5 most recent traces. Also `--db`/`--out`/`--output`/`--stdout`.
+- **`scripts/incident_snapshot.py <trace_id|timestamp>`** — biggest win. Resolves a trace's span window (min `started_at` → max `ended_at`, `--pad` 90s) or a raw ISO/epoch timestamp, then dumps *both* filtered journals + `curl :8080/v1/models` + `nvidia-smi` + `ps aux | grep llama` → `logs/incidents/<id>.md`. Filters routine polling (`/api/gpu/inventory`, `/api/debug/summary-status`, `304`s, `/static/`; `--no-filter` to keep). `--with-trace` embeds the full `trace_inspect` dump. Replaces ~6-8 manual correlating-timestamps calls.
+- **`scripts/model_state.py`** — what's loaded and where. Wraps `curl :8080/v1/models` + `nvidia-smi --query-gpu` + `ps aux | grep llama-server` into one compact table → stdout (or `--out file`, `--json`).
+- **`scripts/config_drift_check.py`** — diffs fresh `app/gpu/swapgen.generate(get_config())` vs deployed `config.gpu.swap_yaml_path` (`/home/john/llm-stack/serving/llama-swap/config.yaml`), exit 1 + unified diff on drift. Catches silent `coder-small` placement drift. `--out /tmp/fresh.yaml` to preview fresh, `--write` to overwrite deployed.
+- **`scripts/chat_ctx_budget.py <chat_id> [--model X]`** — context-fit pre-flight. Uses the *current* real `app/chat/context.py assemble_context` + `app/background/summary_coverage.py trusted_covered_count` (exactly as `app/chat/turn.py:_request_completion` calls them), so it never drifts. Semantics are lossless: reports "✓ FITS" or "⛔ WOULD BE REFUSED" (no silent truncation) with budget vs estimated tokens, trusted covered count, and a per-message coverage table. `--next-msg` simulates appending a user message; `--list` shows recent chats.
 
 ## Boundaries (`.cursor/rules/002-boundaries.mdc`)
 
