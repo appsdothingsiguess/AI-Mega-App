@@ -33,13 +33,16 @@ doesn't reflect production behavior.
 
 Usage:
   eval_quality_transcripts.py --prompts prompts.yaml --class reasoner \
-      --model-label qwen3-14b --port 8899 [--n-predict 512] [--request-timeout 180]
+      --model-label qwen3-14b --port 8899 [--model reasoner] \
+      [--n-predict 512] [--request-timeout 180]
 
 Writes one JSONL row per prompt to
   logs/benchmarks/quality/<class>.jsonl
 (appending across models/runs, one file per class — e.g. reasoner.jsonl,
 vision.jsonl). Assumes the llama-server for --model-label is already
-running at --port; this script does not boot/tear down servers.
+running at --port; this script does not boot/tear down servers. `--model`
+is optional and selects a llama-swap alias when several aliases share the
+same OpenAI-compatible endpoint.
 """
 import argparse
 import base64
@@ -85,6 +88,7 @@ def main():
     ap.add_argument("--class", dest="model_class", required=True,
                      help="key into the prompt-set file, e.g. reasoner, vision")
     ap.add_argument("--model-label", required=True, help="human label for the model under test")
+    ap.add_argument("--model", default=None, help="optional llama-swap model alias sent in each request")
     ap.add_argument("--model-path", default=None, help="optional gguf path, recorded for provenance")
     ap.add_argument("--port", type=int, required=True, help="port of the already-running llama-server")
     ap.add_argument("--n-predict", type=int, default=512)
@@ -112,10 +116,16 @@ def main():
         messages.append({"role": "user", "content": content})
         req_t0 = time.perf_counter()
         try:
+            request = {
+                "messages": messages,
+                "max_tokens": args.n_predict,
+                "stream": False,
+            }
+            if args.model:
+                request["model"] = args.model
             body, wall = http_json(
                 url,
-                {"messages": messages,
-                 "max_tokens": args.n_predict, "stream": False},
+                request,
                 args.request_timeout,
             )
             usage = body.get("usage", {})

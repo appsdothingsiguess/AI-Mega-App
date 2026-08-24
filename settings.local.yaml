@@ -4,8 +4,8 @@ models:
   ctx: 131072
   gpu: 0
   tool_call: native
-  thinking: true
-  reasoning_off: false
+  thinking: false
+  reasoning_off: true
   max_tokens: 8192
   enabled: true
   file: /home/john/llm-stack/models/gguf/Qwen3.8-27B-UD-Q4_K_XL.gguf
@@ -13,6 +13,39 @@ models:
   mmproj: null
   resident: true
   ttl_s: 0
+  extra_flags:
+  - --spec-type
+  - ngram-mod,draft-mtp
+  - --spec-draft-n-max
+  - '2'
+  - --cache-type-k
+  - q4_1
+  - --cache-type-v
+  - q4_1
+  - --flash-attn
+  - 'on'
+  - --temp
+  - '1.0'
+  - --top-p
+  - '0.95'
+  - --top-k
+  - '20'
+  - --min-p
+  - '0.0'
+- name: reasoner
+  class: reasoning
+  ctx: 131072
+  gpu: 0
+  tool_call: native
+  thinking: true
+  reasoning_off: false
+  max_tokens: 8192
+  enabled: true
+  file: /home/john/llm-stack/models/gguf/Qwen3.8-27B-UD-Q4_K_XL-reasoner.gguf
+  quant: Q4_K_XL
+  mmproj: null
+  resident: false
+  ttl_s: null
   extra_flags:
   - --reasoning
   - 'on'
@@ -39,21 +72,6 @@ models:
   - '20'
   - --min-p
   - '0.0'
-- name: reasoner
-  class: reasoning
-  ctx: 32768
-  gpu: 0
-  tool_call: native
-  thinking: true
-  reasoning_off: false
-  max_tokens: 8192
-  enabled: true
-  file: /home/john/llm-stack/models/gguf/Qwen3.8-27B-UD-Q4_K_XL.gguf
-  quant: Q4_K_XL
-  mmproj: null
-  resident: false
-  ttl_s: null
-  extra_flags: []
 - name: reasoner-alt
   class: reasoning
   ctx: 8192
@@ -161,7 +179,7 @@ models:
   tool_call: none
   thinking: false
   reasoning_off: true
-  max_tokens: 512
+  max_tokens: 1024
   enabled: true
   file: /home/john/llm-stack/models/gguf/qwen3-8b.gguf
   quant: Q4_K_M
@@ -170,9 +188,9 @@ models:
   ttl_s: 0
   extra_flags:
   - --cache-type-k
-  - q4_1
+  - q8_0
   - --cache-type-v
-  - q4_1
+  - q8_0
 - name: utility
   class: utility
   ctx: 8192

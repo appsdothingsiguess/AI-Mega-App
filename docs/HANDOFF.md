@@ -1861,3 +1861,37 @@ that call's actual prompt).
   (`streamDebugSpans`/`/api/debug/stream`), so
   `page.goto(..., { waitUntil: "networkidle" })` **times out** — use
   `waitUntil: "load"` plus a fixed `waitForTimeout` instead.
+
+## 2026-08-24 — Pi tool-loop throughput and explicit reasoning aliases
+
+The owner tested the actual `earendil-works/pi` coding loop against Qwen3.8-27B through a temporary capture
+relay. The original 12–14 tok/s observation was not a context-window problem: representative requests had
+7,376–8,932 prompt tokens, with 7,041–8,562 already cached. Pi did send four tool schemas each turn and retained
+assistant `reasoning_content`, but neither a relay nor removing `ngram-mod` speculation accounted for the slow
+end-to-end runs.
+
+The useful A/B is server-side reasoning. On a matched Pi task, reasoning enabled made 10 calls, emitted 4,267
+completion tokens, and took 205.5s. With the chat alias launched using llama-server reasoning off, it made 7
+calls, emitted 1,462 completion tokens, and took 63.8s: **3.2x faster**. Keep reasoning off for the normal
+interactive/coding-agent alias; route deliberate difficult work to an explicit thinking alias instead. Do not
+try to suppress thinking with a `/no_think` prompt suffix: use llama-server flags.
+
+`settings.local.yaml` now expresses that role split: `chat-default` is Qwen3.8-27B at 131,072 context with
+reasoning off; `reasoner` points at the same GGUF through the symlink
+`/home/john/llm-stack/models/gguf/Qwen3.8-27B-UD-Q4_K_XL-reasoner.gguf` and enables medium reasoning plus a
+5,000-token reasoning budget; `reasoner-alt` remains DeepSeek-R1 32B. The symlink is intentional: llama-swap
+deduplicates identical file/GPU aliases, so the thinking Qwen entry needs a distinct canonical path. Applied
+configuration passed `scripts/config_drift_check.py` before the comparison.
+
+For a bounded live quality comparison, `scripts/eval_quality_transcripts.py` now accepts an optional `--model`
+alias and was run serially through llama-swap with the five objective prompts r1/r2/r5/r6/r7 and `--n-predict
+5120`. Both aliases answered all five correctly. Final non-duplicate Qwen runs: 111.3s and 3,081 completion
+tokens (~27.7 end-to-end completion tok/s). DeepSeek: 141.3s and 3,243 (~23.0). This is not a general benchmark:
+the response lengths differ, `r3` was excluded because its fixture answer is mathematically wrong, and r4 is
+open-ended. Raw records: `logs/benchmarks/quality/reasoner.jsonl`; the earlier accidental overlapping Qwen retry
+left duplicate `r5` entries, which must not be counted as independent samples.
+
+Verification after the evaluator change: `npx tsc --noEmit`, Python byte-compilation, and `git diff --check`
+passed. The full pytest suite was attempted with `.venv/bin/python -m pytest -q --basetemp=.pytest-tmp/run` but
+produced no output for roughly 150 seconds and was stopped cleanly; do not report it as passing without resolving
+that existing suite stall.

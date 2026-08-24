@@ -23,7 +23,8 @@ python3 scripts/bench_context_depth.py --label <label> --model <model.gguf> \
 # Prompt/response collection for manual quality review. The server is already running;
 # provide --system when reproducing a production summarizer call.
 python3 scripts/eval_quality_transcripts.py --prompts <prompts.json> \
-  --class <reasoner|coder|vision|summarizer> --model-label <label> --port <port>
+  --class <reasoner|coder|vision|summarizer> --model-label <label> --port <port> \
+  [--model <llama-swap-alias>]
 
 # Router evaluation; the /v1 suffix is required.
 python3 scripts/eval_router.py --base-url http://127.0.0.1:8080/v1
@@ -37,6 +38,8 @@ written to `logs/benchmarks/quality/<class>.jsonl` and are not automatically sco
 **The existing `app/` directory (and `settings.json`) is the old Ollama/LiteLLM/React codebase — a post-mortem, not a foundation.** Do not extend or copy from it. Build from `PLAN.md`. See `PLAN.md` §1 for the specific failure modes that codebase hit (fragile classifier, components built-but-never-wired, silent SSE stream deaths, config sprawl) — those are the mistakes this rebuild is designed to avoid repeating.
 
 **Phase 2 merged — live app running on `ailab` (2026-08-11).** 136+ tests passing, `tsc --noEmit` clean, full end-to-end chat working against real llama-swap. Phase 0 closed 2026-07-23, Phase 1 backend + frontend closed 2026-07-25, Phase 2 (config-schema, router-classifier, gpu-swapgen, background-utility, router-eval, settings-api, settings-ui) merged 2026-07-31 and live-verified 2026-08-02 (router eval 93.33%, GPU-reassignment demo working). Subsequent hardening on `main`: `8c4f7b4` (regenerate, tok/s, swap-aware routing, warmup timeout, drain reduction), `53dac3a` (scroll stick-to-bottom, nav-interrupt), `0170ca4` (warmup logging + resident-model hot-at-boot). **Open items as of 2026-08-11 — see `docs/FIX_PLAN_2026-08-11.md`** (four parallel workstreams WS-A..WS-D: config drift, backend reliability, web gaps, docs refresh) and `docs/AGENT_CONTEXT_MEGA.md` for the audited state. Before writing more `app/` or `web/` code, check `PLAN.md` §5 and `AGENTS.md` "Current phase".
+
+**Live model-role update — 2026-08-24.** `chat-default` is Qwen3.8-27B with llama-server reasoning explicitly off. The separate `reasoner` alias targets the same Qwen blob through a distinct symlink and enables medium reasoning; `reasoner-alt` is DeepSeek-R1 32B. A five-prompt live comparison recorded in `logs/benchmarks/quality/reasoner.jsonl` found both correct; Qwen completed the selected runs in 111.3s / 3,081 output tokens (~27.7 end-to-end output tok/s), versus DeepSeek’s 141.3s / 3,243 (~23.0). This is a small manual-quality comparison, not a general model ranking. Pi’s previous 12–14 tok/s tool-loop problem was chiefly server-side reasoning on every tool turn, not oversized prompt context; disabling reasoning reduced one matched workflow from 205.5s / 4,267 completion tokens to 63.8s / 1,462 (3.2x faster). See `docs/HANDOFF.md` for method/caveats.
 
 **Planning docs finalized 2026-07-25.** `PLAN.md`, `docs/FEATURES.md`, `docs/PHASE_PROMPTS.md`, and `.cursor/rules/001`–`010` were audited (`011-ui-design` + `docs/design-doc.md` added later as the visual layer) into mutual consistency. The audit made `PLAN.md` §4.2 the single source for the chat contract (both other docs restate it; neither may diverge), unified span names to flat snake_case, moved the vector store to `app/rag/store.py`, and standardized frontend paths as `web/src/**` → `web/js/**`. Phase-0 carry-in **cleared**: the stale `llama-server.service` is `disabled`+`inactive` and both GPUs are idle.
 

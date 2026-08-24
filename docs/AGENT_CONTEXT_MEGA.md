@@ -2,6 +2,37 @@
 
 Dense digest of everything learned auditing AI-Mega-App + llm-stack. Pair with `docs/FIX_PLAN_2026-08-11.md` (execution) and `docs/HANDOFF.md` (raw history). Facts below were code-verified 2026-08-11; prefer them over stale doc prose.
 
+## Scripts and live investigation quick reference
+
+The model/context investigations added reusable harnesses under `scripts/`. Use them before inventing a new
+test, and record outputs under `logs/benchmarks/`:
+
+```bash
+# Isolated llama-server lifecycle, request, VRAM, and throughput.
+python3 scripts/bench_server.py --label <label> --model <model.gguf> \
+  --model-class <role> --ctx <tokens>
+
+# Replay a growing conversation and probe recall at context checkpoints.
+python3 scripts/bench_context_depth.py --label <label> --model <model.gguf> \
+  --model-class <role> --ctx <tokens> --checkpoints 2000,8000,16000,32000
+
+# Collect production-shaped prompt/response transcripts for manual review.
+# The server must already be running; --system is essential for summarizer tests.
+python3 scripts/eval_quality_transcripts.py --prompts <prompts.json> \
+  --class <reasoner|coder|vision|summarizer> --model-label <label> --port <port> \
+  [--model <llama-swap-alias>]
+
+# Router eval against llama-swap (include /v1 or every request falls back).
+python3 scripts/eval_router.py --base-url http://127.0.0.1:8080/v1
+```
+
+`bench_server.py` and `bench_context_depth.py` boot and tear down their own isolated server; use production
+GPU pinning and no `--tensor-split`. `eval_quality_transcripts.py` appends unscored JSONL transcripts to
+`logs/benchmarks/quality/<class>.jsonl`. For live incidents, inspect `data/app.db` tables `traces` and `spans`:
+background title/summary jobs use separate traces linked through `chat_id`, so a supplied trace ID may not contain
+the actual `summary` span. The Aug 23–24 summarizer/context findings and exact prompts are recorded in
+`docs/HANDOFF.md` and `docs/current_bugs.md`.
+
 ## 1. Machine & hardware (live-verified)
 - Box = `ailab`, Ubuntu; GPU0 = RTX 3090 24GB PCI `00000000:0D:00.0`; GPU1 = RTX 3070 8GB `00000000:0E:00.0`. Docs citing `03:00.0`/`07:00.0` are STALE (llm-stack/CLAUDE.md:79-81, ollama/CLAUDE.md:3).
 - `CUDA_DEVICE_ORDER=PCI_BUS_ID` MUST accompany `CUDA_VISIBLE_DEVICES=N` (wrong-GPU incidents). Generated llama-swap config + swapgen.py OMIT it — top config bug.
@@ -19,7 +50,7 @@ Dense digest of everything learned auditing AI-Mega-App + llm-stack. Pair with `
 - Config layering: config.yaml (checked-in) ← settings.local.yaml overlay (Settings UI, deep-merge) → swapgen → llama-swap config (generated, never hand-edit).
 
 ## 4. Roster/placement truth & config drift
-Current as of 2026-08-23 (supersedes the Config B line below for GPU1): gpu0-main swap group = [chat-default, coder, coder-small, vision] (one at a time on 3090); resident group = [dispatcher(GPU1), utility-gpu(GPU1, summarizer fast path, ~14x CPU decode measured live), utility(CPU, summarizer fallback), embed(CPU), classifier(CPU)]; reasoner = chat-default blob w/ thinking (deduped, never a swap entry). Isolated capacity sweep: coder-small native 32,768 and ships at 30,000 (112.3 decode tok/s at 32,162 prompt tokens); Qwen3.8's documented MTP flag set OOMs at 262,144, while 131,072 boots, so both chat-default and coder ship at validated 131,072. GPU1's utility-gpu is native 40,960 but uses ~7.8GiB at that allocation and therefore remains at 16,384 to coexist with dispatcher; coder-small must stay on GPU0, never GPU1. Original PLAN §4.1 Config B intent (before utility-gpu existed): gpu0-main = [chat-default, coder, coder-small, vision]; resident = [dispatcher(GPU1), utility, embed, classifier (CPU)]; dispatcher latency is critical path (5-7x degradation measured when GPU1 is shared with an *always-busy* model, phase0-measurements.md §8) — utility-gpu avoids that because it's idle between rare token-pressure-triggered summary runs, not concurrently busy like the rejected Phase-0 test.
+Current as of 2026-08-24 (supersedes the Config B line below for GPU1): gpu0-main swap group = [chat-default, coder, coder-small, vision, reasoner, reasoner-alt] (one at a time on 3090); resident group = [dispatcher(GPU1), utility-gpu(GPU1, summarizer fast path, ~14x CPU decode measured live), utility(CPU, summarizer fallback), embed(CPU), classifier(CPU)]. `chat-default` is Qwen3.8-27B at 131,072 context with server-side reasoning off. `reasoner` is a distinct llama-swap entry pointing at the same Qwen GGUF through the symlink `Qwen3.8-27B-UD-Q4_K_XL-reasoner.gguf`, enabling `reasoning_effort: medium` and a 5,000-token reasoning budget; the separate filename is necessary because swapgen otherwise deduplicates same-file/same-GPU aliases. `reasoner-alt` is DeepSeek-R1 32B at 8,192 context. Isolated capacity sweep: coder-small native 32,768 and ships at 30,000 (112.3 decode tok/s at 32,162 prompt tokens); Qwen3.8's documented MTP flag set OOMs at 262,144, while 131,072 boots, so both chat-default and coder ship at validated 131,072. GPU1's utility-gpu is native 40,960 but uses ~7.8GiB at that allocation and therefore remains at 16,384 to coexist with dispatcher; coder-small must stay on GPU0, never GPU1. Original PLAN §4.1 Config B intent (before utility-gpu existed): gpu0-main = [chat-default, coder, coder-small, vision]; resident = [dispatcher(GPU1), utility, embed, classifier (CPU)]; dispatcher latency is critical path (5-7x degradation measured when GPU1 is shared with an *always-busy* model, phase0-measurements.md §8) — utility-gpu avoids that because it's idle between rare token-pressure-triggered summary runs, not concurrently busy like the rejected Phase-0 test.
 Drift found 2026-08-11 (fix = WS-A): settings.local.yaml had coder-small gpu:1/resident:true (in swap:false resident group on 8GB 3070), ttl_s:0 on 5 non-residents, routing overlay dropped attachments map + code_task rules, classifier timeout_s 6 (cold load 1m32s → should be 90). settings.json legacy ollama aliases still wide-context tags.
 **Drift recurred 2026-08-15**: settings.local.yaml again had coder-small on gpu:1 (this time resident:false) — moved back to gpu:0 as part of making room for utility-gpu resident on GPU1. If a future audit finds coder-small on gpu:1 a third time, treat it as a Settings UI bug (something keeps writing this), not a one-off — worth instrumenting.
 

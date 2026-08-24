@@ -19,7 +19,8 @@ python3 scripts/bench_context_depth.py --label <label> --model <model.gguf> \
 # Collects prompt/response transcripts for manual quality review. The llama-server
 # must already be running; include --system for production summarizer prompts.
 python3 scripts/eval_quality_transcripts.py --prompts <prompts.json> \
-  --class <reasoner|coder|vision|summarizer> --model-label <label> --port <port>
+  --class <reasoner|coder|vision|summarizer> --model-label <label> --port <port> \
+  [--model <llama-swap-alias>]
 
 # Router accuracy; base URL must include /v1.
 python3 scripts/eval_router.py --base-url http://127.0.0.1:8080/v1
@@ -113,4 +114,4 @@ When blocked by scope or constraints: stop and report. A described blocker is su
 - **WS-C fix/web-gaps** — retry affordance on error banner, response time + usage inline in `.msg-meta`, fix misleading `chat.ts:35-36` comment, real `npx tsc` build committed with `web/src/**`.
 - **WS-D docs/refresh** (this branch) — refresh stale "Phase 1 open / web unbuilt" prose in `AGENTS.md`/`CLAUDE.md`, add 2026-08-11 entry to `docs/HANDOFF.md` marking audited-fixed items and recording the plan.
 
-All frontend work still builds to `docs/design-doc.md` (graphite/indigo dark system, compact density, IBM Plex Sans/Mono), enforced by `.cursor/rules/011-ui-design.mdc`. Placement truth (updated 2026-08-15, see `docs/AGENT_CONTEXT_MEGA.md` §4): `gpu0-main` swap group = `[chat-default, coder, coder-small, vision]` (one at a time on 3090; coder-small must stay here, GPU1 has no room for it); `resident` group = `[dispatcher(GPU1), utility-gpu(GPU1, summarizer fast path), utility, embed, classifier (CPU)]`; `reasoner` = chat-default blob w/ thinking (deduped, never a swap entry).
+All frontend work still builds to `docs/design-doc.md` (graphite/indigo dark system, compact density, IBM Plex Sans/Mono), enforced by `.cursor/rules/011-ui-design.mdc`. Placement truth (updated 2026-08-24, see `docs/AGENT_CONTEXT_MEGA.md` §4): `gpu0-main` swap group = `[chat-default, coder, coder-small, vision, reasoner, reasoner-alt]` (one at a time on 3090; `reasoner` and `reasoner-alt` are explicitly selected thinking aliases); `resident` group = `[dispatcher(GPU1), utility-gpu(GPU1, summarizer fast path), utility, embed, classifier (CPU)]`. `chat-default` is Qwen3.8 with server-side reasoning off; `reasoner` is the same Qwen blob via a distinct symlink with medium reasoning enabled; `reasoner-alt` is DeepSeek-R1 32B.

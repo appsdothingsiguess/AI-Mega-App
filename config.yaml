@@ -247,7 +247,11 @@ models:
     tool_call: none
     thinking: false
     reasoning_off: true
-    max_tokens: 512
+    # 2026-08-24: 512 was enough for the short benchmark variants but clipped
+    # real long-form summaries with finish_reason=length. GPU1 has the speed
+    # headroom for a 1024-token summary; keep the CPU fallback at 512 because
+    # its 5 tok/s decode rate leaves no useful input budget at 1024.
+    max_tokens: 1024
     enabled: true
     file: "/home/john/llm-stack/models/gguf/qwen3-8b.gguf"
     quant: Q4_K_M
