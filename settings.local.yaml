@@ -1,7 +1,7 @@
 models:
 - name: chat-default
   class: general
-  ctx: 262144
+  ctx: 131072
   gpu: 0
   tool_call: native
   thinking: true
@@ -71,7 +71,7 @@ models:
   extra_flags: []
 - name: coder
   class: coding
-  ctx: 262144
+  ctx: 131072
   gpu: 0
   tool_call: native
   thinking: true
@@ -111,7 +111,7 @@ models:
   - '0.0'
 - name: coder-small
   class: coding
-  ctx: 8192
+  ctx: 30000
   gpu: 0
   tool_call: weak
   thinking: false

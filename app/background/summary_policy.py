@@ -8,14 +8,19 @@ from typing import Any
 
 _CHARS_PER_TOKEN = 3.5
 _SUMMARY_PROMPT = (
-    "Update the rolling summary of this conversation. You are given the "
-    "previous summary and the messages that happened since it was written. "
-    "Produce an updated summary that preserves everything still relevant "
-    "from the previous summary and folds in what's new. Output only the "
-    "summary text -- no preamble or labels.\n\n"
+    "Update the rolling summary of this conversation so that the same agent "
+    "or user could resume exactly where things left off -- this is working "
+    "context for continuing the task, not a synopsis for an outside reader. "
+    "You are given the previous summary and the messages that happened "
+    "since it was written. Produce an updated summary that preserves "
+    "everything still relevant from the previous summary and folds in "
+    "what's new. Output only the summary text -- no preamble or labels.\n\n"
     "Structure it with these sections, omitting any that are empty:\n"
-    "- Key facts and context\n- Decisions made\n"
-    "- User preferences or constraints stated\n- Open questions / unresolved threads"
+    "- Entities and specifics stated (exact names, numbers, dates, quoted facts)\n"
+    "- Decisions made and why\n- Commitments or constraints stated\n"
+    "- Open questions / next steps\n\n"
+    "Preserve numbers, dates, proper nouns, and quoted phrases verbatim -- "
+    "do not round, generalize, or drop them even if space is tight."
 )
 _TIME_BUDGET_SAFETY_MARGIN_S = 15.0
 

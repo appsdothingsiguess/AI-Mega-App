@@ -23,7 +23,11 @@ db:
 models:
   - name: chat-default
     class: general
-    ctx: 262144
+    # 2026-08-23: the former 262144 setting fails at boot when the documented
+    # MTP speculative path allocates its second KV context (CUDA OOM). 131072
+    # boots with the complete production flag set. Do not restore 262K unless
+    # MTP is removed or a capacity test proves it deployable.
+    ctx: 131072
     gpu: 0
     tool_call: native
     # 2026-08-21: switched from Qwen3.6-35B-A3B to Qwen3.8-27B-UD-Q4_K_XL.
@@ -31,12 +35,9 @@ models:
     # chat-template-kwargs, capped by reasoning-budget) rather than suppressed
     # -- so thinking:true / reasoning_off:false. Native MTP spec-decoding
     # (checkpoint has qwen35.nextn_predict_layers=1 baked in, no separate
-    # draft model needed) + q4_1 KV to afford the model's full 262144-token
-    # ctx on the 3090 alone (no tensor-split needed, unlike the old 35B-A3B
-    # entry). Live-benchmarked on this box: ~59 tok/s median across 4 varied
-    # prompts, 262144 ctx uses 23422/24576 MiB (~1.1GB margin -- tight,
-    # revisit if a long real conversation OOMs where the short benchmark
-    # didn't). Sampler values (temp/top-p/top-k/min-p) are Unsloth's
+    # draft model needed). q4_1 KV and a 131072-token context are the current
+    # deployable MTP configuration on the 3090. Sampler values
+    # (temp/top-p/top-k/min-p) are Unsloth's
     # published Qwen3.8 "Thinking Mode" recommendation -- an earlier
     # temp:0.65/top-k:15/min-p:0.05 pass turned out to be misattributed (that
     # was never Unsloth's thinking-mode number), reverted same day.
@@ -118,7 +119,11 @@ models:
     extra_flags: []
   - name: coder
     class: coding
-    ctx: 262144
+    # 2026-08-23 isolated GPU0 test: 262144 OOMs while speculative MTP
+    # allocates its second KV context; 131072 boots and decodes at 67.5
+    # tok/s on the production MTP settings. Keep the validated value until a
+    # long-prompt throughput sweep establishes a higher safe operating point.
+    ctx: 131072
     gpu: 0
     tool_call: native
     # 2026-08-21: switched to Qwen3.8-27B (same weights as chat-default) per
@@ -170,7 +175,12 @@ models:
       - "0.0"
   - name: coder-small
     class: coding
-    ctx: 8192
+    # 2026-08-23 isolated GPU0 capacity/throughput sweep: this GGUF's native
+    # window is 32768 and it sustained 112.3 decode tok/s at 32162 prompt
+    # tokens + a 512-token completion. Use 30K to leave practical generation
+    # headroom while eliminating the prior 8K context-overflow failure on
+    # ordinary long documents.
+    ctx: 30000
     gpu: 0
     tool_call: weak
     thinking: false
@@ -250,7 +260,16 @@ models:
     # cudaMalloc failed: out of memory allocating the KV buffer). q4_1
     # quantized KV quarters that to ~576 MiB, matching the pattern already
     # used on chat-default/coder.
-    extra_flags: ["--cache-type-k", "q4_1", "--cache-type-v", "q4_1"]
+    # 2026-08-24: q4_1 turned out to fall onto an unaccelerated attention
+    # path on this GPU/build -- isolated A/B showed real summaries taking
+    # 53-215s wall (46.8 tok/s prefill) vs f16's 4.6s (2711 tok/s), with
+    # flash-attn making zero measurable difference at q4_1. f16 doesn't
+    # survive co-residency with dispatcher (7251+1303 = 8554 MiB > 8192 MiB
+    # 3070). q8_0 does (measured 7495 MiB total, both models loaded,
+    # utility-gpu mid-generation) at 2603 tok/s prefill / 53.9 tok/s decode
+    # -- ~55x/~8x speedup over q4_1, confirmed quality-neutral on the exact
+    # real production prompt that regressed (docs/HANDOFF.md, docs/current_bugs.md).
+    extra_flags: ["--cache-type-k", "q8_0", "--cache-type-v", "q8_0"]
   - name: utility
     class: utility
     ctx: 8192

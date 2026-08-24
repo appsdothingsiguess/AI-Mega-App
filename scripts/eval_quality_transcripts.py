@@ -19,8 +19,17 @@ Input file (JSON or YAML) shape, one prompt set per model class:
     ],
     "vision": [
       {"id": "chart1", "prompt": "Describe this chart.", "image": "/path/to/chart.png"}
+    ],
+    "summarizer": [
+      {"id": "case1", "system": "You are a summarizer...", "prompt": "Conversation so far:\n..."}
     ]
   }
+
+An optional "system" field sends a system message ahead of the user prompt
+-- needed for any class whose production caller (e.g.
+app/background/summary_runner.py's _SUMMARY_PROMPT) always sends one; a
+prompt reproduced without it can get unstable/misleading model output that
+doesn't reflect production behavior.
 
 Usage:
   eval_quality_transcripts.py --prompts prompts.yaml --class reasoner \
@@ -97,11 +106,15 @@ def main():
     for item in items:
         pid = item.get("id", item["prompt"][:40])
         content = build_content(item["prompt"], item.get("image"))
+        messages = []
+        if item.get("system"):
+            messages.append({"role": "system", "content": item["system"]})
+        messages.append({"role": "user", "content": content})
         req_t0 = time.perf_counter()
         try:
             body, wall = http_json(
                 url,
-                {"messages": [{"role": "user", "content": content}],
+                {"messages": messages,
                  "max_tokens": args.n_predict, "stream": False},
                 args.request_timeout,
             )
@@ -111,7 +124,7 @@ def main():
                 "ts": datetime.now(timezone.utc).isoformat(),
                 "class": args.model_class, "prompt_id": pid,
                 "model_label": args.model_label, "model_path": args.model_path,
-                "prompt": item["prompt"], "image": item.get("image"),
+                "prompt": item["prompt"], "system": item.get("system"), "image": item.get("image"),
                 "response": msg.get("content", ""),
                 "reasoning": msg.get("reasoning_content", ""),
                 "latency_s": wall,
@@ -125,7 +138,7 @@ def main():
                 "ts": datetime.now(timezone.utc).isoformat(),
                 "class": args.model_class, "prompt_id": pid,
                 "model_label": args.model_label, "model_path": args.model_path,
-                "prompt": item["prompt"], "image": item.get("image"),
+                "prompt": item["prompt"], "system": item.get("system"), "image": item.get("image"),
                 "error": str(e), "wall_s": time.perf_counter() - req_t0,
                 "quality_review": None,
             }

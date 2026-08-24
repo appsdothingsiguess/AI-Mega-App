@@ -4,6 +4,362 @@ Working notes for whichever Claude Code session picks this up next.
 Not a planning doc, not user-facing — just context that isn't obvious
 from the code alone. Delete or trim entries once they're stale.
 
+## 2026-08-24 — applied: utility-gpu q8_0 KV fix + universal "resume-exactly" summary prompt (G2)
+
+Both fixes documented/validated in the entry below (unchanged, kept for
+history) are now **applied**, and superseded once more same-day (see the
+prompt-collapse finding in `docs/current_bugs.md`'s newest entry at the
+time of writing):
+
+- `config.yaml` `utility-gpu.extra_flags`: `q4_1`/`q4_1` → `q8_0`/`q8_0`
+  KV cache (comment updated in place with the full before/after numbers).
+  Unchanged since first applied.
+- `app/background/summary_policy.py` `_SUMMARY_PROMPT`: first swapped to
+  the coding-shaped "Variant B" prompt (Files and locations
+  touched/Changes made and why/Tests added-needed/Config changed/Next
+  steps), then **replaced again same day** after a follow-up test found
+  Variant B **collapses to a near-empty summary (32 completion tokens,
+  bare section headers, zero content) on non-coding chats** — its rigid
+  template has nothing to fill when the content doesn't match (e.g. the
+  Vael Archipelago prose case). That's a worse failure than the original
+  fact-loss bug: total information loss, silently written to
+  `chats.summary`. The replacement, "G2" in `docs/current_bugs.md`'s
+  task-adaptive-prompt entry, reframes the objective as "produce working
+  context so the same agent/user can resume exactly where things left
+  off" (the framing that makes Claude Code's own `/compact` avoid heavy
+  loss) with content-agnostic sections (Entities and specifics stated /
+  Decisions made and why / Commitments or constraints stated / Open
+  questions-next steps) plus an explicit verbatim-preservation
+  instruction. G2 avoided the collapse on both prose and coding content in
+  testing and scored competitively with (sometimes better than) the
+  content-specific prompt even on coding content — recommendation was a
+  **single universal prompt over content-adaptive selection**, since
+  adaptive selection reintroduces the same collapse risk on any
+  misclassified or mixed-content chat. This is what's live now.
+
+**Verification gate**: `npx tsc --noEmit` clean, `pytest`: 208/208
+passing. Along the way, fixed a **pre-existing, unrelated** failure
+(`tests/test_swapgen.py::test_golden`) — its hardcoded `GOLDEN` fixture
+was stale against three already-approved config.yaml changes made in
+*prior* sessions before this one touched anything (confirmed via `git
+diff --stat`): chat-default/coder `ctx` 262144→131072 and coder-small
+`ctx` 8192→30000 (both from the 2026-08-23 capacity work), plus this
+session's own utility-gpu KV-cache change. Synced the hand-maintained
+`GOLDEN` string to match `generate()`'s real output — mechanical, not a
+config decision.
+
+**Not yet done**: live apply through llama-swap (`app/gpu/swapgen.py`
+regenerate + `/api/gpu/apply`) and a real end-to-end chat/summary cycle
+against the running app — every fix in this entry is validated in
+isolation (direct llama-server, not through llama-swap) and via the
+verification gate, but not yet confirmed under the actual service.
+`llama-swap.service` remains inactive; starting it needs explicit
+approval (sudo territory per `.cursor/rules/008-remote-box.mdc`).
+
+## 2026-08-23 — Qwen3.8/vision context re-test, utility-gpu speed fix (found, not applied), summary-quality live repro
+
+Session picked up the paused 2026-08-23 isolated-capacity work per owner
+request: box confirmed idle (both GPUs ~0 MiB, `llama-swap.service`
+inactive) before every test below. All isolated `llama-server` runs used
+`CUDA_VISIBLE_DEVICES`/`CUDA_DEVICE_ORDER=PCI_BUS_ID` solo-pinning, never
+`--tensor-split`, per PLAN.md §4.1. `llama-swap.service` was never started;
+no config file was touched except the one summarized at the end of this
+entry (not yet applied — awaiting explicit apply).
+
+### Qwen3.8 (chat-default/coder blob) context ceiling — re-tested, did not reproduce prior OOM
+
+262144 is the model's actual `n_ctx_train` (llama.cpp clamps anything
+higher, confirmed via a 270336 attempt logging
+`n_ctx_seq (270336) > n_ctx_train (262144)`) — there is no higher ceiling
+to bisect toward. The 2026-08-23-earlier-session OOM at 262144 (MTP's
+second KV buffer) **did not reproduce** on a clean idle GPU0 today: every
+tested point from 196608 up through 261888 and 262144 itself booted
+cleanly, served a real completion, and ran its MTP draft path successfully
+(draft_n=200, accepted=97). VRAM at 262144 was 23,450/24,576 MiB — only
+~1.1 GiB headroom, thin enough that the earlier OOM was plausibly
+transient fragmentation/prior-process state rather than a hard wall.
+**Recommendation: keep `ctx: 131072` in config.yaml** (unchanged) rather
+than trusting a 1.1 GiB-margin config off one clean-box run — would need
+re-verification under real llama-swap multi-model residency before
+raising it.
+
+Depth matters more than the ctx ceiling for throughput: 65 tok/s decode on
+a shallow 17-token prompt vs **17.3 tok/s at a 6,621-token-deep prompt**,
+same 262144-ctx server (MTP draft acceptance also dropped, 97/200 ≈ 48.5%
+at depth). This is the real number to judge the reasoning-role tok/s bar
+against, not the shallow-prompt number.
+
+### Vision (Qwen3-VL-32B) context — tested for the first time, throughput-bound not VRAM-bound
+
+True native ceiling confirmed 262144 (GGUF metadata: `qwen3vl.context_length`).
+Every size 8192→262144 boots and stays coherent (verified against the real
+6 image-grounded prompts in `scripts/eval_data/vision_prompts.json` +
+`scripts/eval_data/images/` — exact text-read and correct chart reasoning
+held even at 262144). VRAM is never the constraint (weights+mmproj ~20GB
+dominate; headroom stayed ~1.5-2GB at every size tested) — decode speed is:
+8192 (current shipped) 37.9 tok/s → 16384: 12.8 → 32768: 6.0 → 262144: 1.97
+tok/s (~19x slower than shipped). `--flash-attn` made **zero** measurable
+difference at any size (same VRAM, same speed, byte-identical output) —
+an external report's "fixes garbled Q4_K_M output" claim did not
+reproduce here. **8192 is already near the throughput/context sweet spot**
+for this model; a bump to 16384-24576 is technically safe (~3x slower) if
+longer documents are needed, but 262144 costs ~19x and isn't practical
+interactively. No config change made — this is an owner tradeoff call.
+
+### Model-roster test coverage snapshot (as of today)
+
+| Model | Status |
+|---|---|
+| chat-default/coder (Qwen3.8) | Context ceiling re-verified today (see above). Structured JSON 10/10 (prior session). Coding/reasoning quality suites still incomplete (interrupted prior session) — reasoner-vs-DeepSeek-R1-32B comparison not yet run. |
+| coder-small | Fully validated (prior session): 32,768 native, 30,000 shipped, 112.3 tok/s. Still needs live apply/regenerate validation through llama-swap (only isolated so far). |
+| vision (Qwen3-VL-32B) | Tested today for the first time (see above). |
+| reasoner-alt (DeepSeek-R1-32B) | **Still untested** — no capacity/throughput/quality data exists for this model in any session. |
+| dispatcher | Only an old llama-bench prompt/decode screen; co-residency measured today only incidentally (see utility-gpu section) — 1,303 MiB solo. |
+| utility-gpu | Root-caused and fixed today (see below) — was the most urgent finding. |
+| utility (CPU fallback), classifier, embed | Still untested this sweep. |
+
+### utility-gpu (summarizer) — root cause found: q4_1 KV cache, not flash-attn
+
+User-reported: summarization "super slow even on GPU" at 4-8k tokens.
+Confirmed real in production data (`data/app.db` `summary` spans,
+corroborated independently by `journalctl -u llama-swap`): 8k-token
+summaries taking 53-159s wall-clock, effective ~50-150 tok/s — some
+timing out outright at the 180s `summary_timeout_s` ceiling with **both**
+`utility-gpu` and the CPU `utility` fallback failing back-to-back (e.g.
+chat `f524f4b2c1a94fd598ca373f78e6ee9d`, traces `c0e491e8-…`/`5211bb21-…`,
+both 180.001s timeouts before a third attempt, `b6c56923-…`, finally
+succeeded at 53.2s/7964 prompt tokens/358 completion tokens — see the
+live-repro section below for the quality read on that successful one).
+
+First hypothesis (missing `--flash-attn` alongside `--cache-type-k/v
+q4_1`, added 2026-08-21 to fix an unrelated KV-buffer OOM) was **wrong**:
+isolated GPU1 (RTX 3070) A/B testing showed flash-attn made no measurable
+difference at q4_1 (45.7-46.8 tok/s prefill either way). **The actual
+cause is the q4_1 KV quant itself** — on this GPU/build it falls onto an
+unaccelerated path for this model regardless of flash-attn:
+
+| KV type | Prefill tok/s | Decode tok/s | Wall (9247+~70 tok) | Solo VRAM |
+|---|---|---|---|---|
+| q4_1/q4_1 (current prod) | 46.8 | 6.46 | 211.2s | 5645-5667 MiB |
+| q4_1/q4_1 + flash-attn | 45.7 | 6.48 | 215.6s | 5645-5667 MiB |
+| f16/f16 | 2710.8 | 59.65 | 4.59s | 7251-7273 MiB |
+| **q8_0/q8_0 (recommended)** | 2602.8 | 53.90 | 4.82s | 6173-7495 MiB |
+
+f16 is fastest solo but doesn't survive co-residency: 7,251 MiB +
+dispatcher's 1,303 MiB = 8,554 MiB, over the 3070's 8,192 MiB budget.
+q8_0 does fit — measured 7,495 MiB total with both models loaded and
+utility-gpu mid-generation (~700 MiB headroom). **Net: ~55x prefill / ~8x
+decode speedup over current production** (2603 vs 46.8 tok/s prefill;
+53.9 vs 6.46 tok/s decode).
+
+**Recommended change, not yet applied** (awaiting owner apply — config.yaml
+key change): `utility-gpu.extra_flags` — replace
+`["--cache-type-k","q4_1","--cache-type-v","q4_1"]` with
+`["--cache-type-k","q8_0","--cache-type-v","q8_0"]`. No flash-attn flag
+needed (neutral either way).
+
+Also observed but not yet independently confirmed as primary: warmup
+pings `utility-gpu` unconditionally every 300s
+(`app/main.py`/`app/warmup.py`) and its own ping latency climbed from
+~25ms to 700ms+ over one session — real GPU1 contention, likely secondary
+to the KV-quant cause above, not yet isolated.
+
+### Live summary-quality repro: trace `29266240-06e8-4b7b-85d6-f802d7317333`
+
+Investigated per owner request. This trace itself is only a `title` span;
+the actual chat is `f524f4b2c1a94fd598ca373f78e6ee9d` — a single 33,890-char
+user message (a pasted fictional Victorian naturalist's journal, "The Vael
+Archipelago") plus a short assistant reply, immediately followed by 3
+summary attempts (2 timeouts, see above, then a 53.2s success). Only 2
+messages total — this is the same "giant first message triggers immediate
+oversized-summarization" shape already on record in `docs/current_bugs.md`
+("P0 — giant messages break summarization"), now with a second concrete
+example.
+
+**Quality read on the successful summary** (`covered_message_count: 2`,
+structured key-facts/decisions/preferences/open-questions format): topically
+faithful — correctly identifies the fictional Victorian field-guide
+premise, the 1847-1853 timeframe, and the ecological/cultural scope — but
+drops every concrete number from the source (eleven major islands, four
+hundred leagues from the Thornwall Coast, nine hundred fathoms depth, the
+1791 coral-harvest decline date). Same lossy pattern already documented for
+trace `cee82d55-…`'s 45-fact list: broad synopsis preserved, exact
+indexed/numeric details did not survive. This is now confirmed across two
+independent real chats, not a one-off.
+
+### Muse Glimmer 30B — researched, not downloaded
+
+Real model (Meta Superintelligence Lab, released 2026-08-10, Apache 2.0,
+agentic/multimodal/reasoning, distilled from Muse Spark). GGUF available
+at `huggingface.co/unsloth/Muse-Glimmer-30B-GGUF` (no plain Q4_K_M — closest
+is `UD-Q4_K_XL`, ~15.9GB, matching this project's existing Q4_K_XL
+convention for chat-default/coder) with a bundled `dflash-kquant.gguf`
+(~1.63GB) DFlash draft model for speculative decoding. **Risk flagged, not
+yet resolved**: `muse-glimmer` architecture support only merged into
+upstream llama.cpp on 2026-08-10 (release b10353) — this box's prebuilt
+binary predates that unless separately confirmed otherwise; a subagent
+attempt to download+configure it was blocked by the auto-mode permission
+classifier (bundled a large download + config.yaml edit into one
+autonomous action). Download/smoke-test commands were handed to the owner
+directly instead of run. Not added to config.yaml in any form.
+
+## 2026-08-23 — summary-fidelity investigation (current handoff)
+
+### User-reported issue
+
+The user suspects that conversation summarization is losing useful model
+context, especially when a smaller model is involved. They asked for a
+manual investigation of recent chat logs, including trace
+`cee82d55-be7d-446a-a316-d42810853a4a`.
+
+### Finding
+
+The suspicion is substantially correct. This is primarily a **summary
+semantic-loss/policy failure**, not simply a small-model capability issue.
+The test chat contained a numbered list of 45 facts. The original exact
+mappings included FACT 7 = Solar System, FACT 12 = Earth’s Core, and FACT 31
+= Carbon Footprint. The successful summary trace
+`0b3368a3-698d-4fe7-91ee-97a28fa5db32` marked 9 messages covered, but reduced
+the list to a broad topic-level synopsis. Later prompts intentionally omitted
+the original messages and trusted that summary. The `coder-small` trace then
+answered FACT 7 with the wrong item; a later `chat-default` response admitted
+that FACTs 8–11 were unavailable.
+
+Summary generation took about 93 seconds and returned no error. That latency
+is worth separate performance follow-up, but it was not the data-loss cause.
+The structural coverage metadata was internally consistent; the summary
+content was not lossless enough for indexed, user-editable data.
+
+### Documentation change already made
+
+`docs/current_bugs.md` now contains a P0 follow-up investigation item under
+poisoned summaries. It calls for structured-list preservation, keyed fact
+extraction, summary quality/sentinel validation, raw-message retention when
+lossy summaries are unsafe, and real-world manual regression cases.
+
+### Do not assume fixed
+
+Existing coverage tests can pass while this failure remains: they verify that
+messages are structurally covered, not that the summary preserves exact facts,
+indices, edits, or user-visible commitments. The manual session plan also
+needs a semantic-fidelity case before summary work can be considered complete.
+
+### Recommended next work (not implemented in this handoff)
+
+1. Reproduce the 45-fact conversation and capture the generated summary and
+   assembled prompt.
+2. Define content classes that must not be summarized lossy (numbered lists,
+   tables, exact mappings, code/config, and explicit user corrections).
+3. Choose a preservation strategy: raw-message pinning, keyed extraction, or
+   a hybrid summary plus retained source segments.
+4. Add summary validation that rejects generic/refusal/omission summaries and
+   checks required identifiers or sentinels.
+5. Add manual and automated regression coverage, including a smaller-model
+   comparison, then rerun the verification gate.
+
+### 2026-08-23 — oversized-message trace follow-up
+
+Investigated traces `f2713790-4be4-4b5c-9a30-137fb7113041`,
+`0cc725d0-15a6-4296-8fb9-cf0bbb16b8b2`, and
+`b73662e9-cd77-4cef-beab-d65fd8a0599b`. All belong to chat
+`ca3a9bd67fef4addaec6b76d3417dc8a`, pinned to `coder-small`.
+
+- The chat contains a 33,866-character first user message followed by
+  `hey`. `coder-small` has a 6,144-token prompt budget after its 2,048-token
+  output reservation; the estimated prompt was about 9,714 tokens, so both
+  chat attempts correctly refused with `context_overflow` before calling the
+  model.
+- `f271...` persisted the first `hey` before context validation. The retry
+  `b736...` persisted a second `hey` before failing, leaving duplicate user
+  messages and no assistant response.
+- The first overflow enqueued recovery summarization. `0cc...` sent the giant
+  history to `utility-gpu` and timed out at exactly 180 seconds; no summary
+  was committed. A follow-on trace `4db44341-1dd3-4fe7-8c28-3a0cd795ac06`
+  was created for the fallback attempt but had no completed span at inspection
+  time.
+- `fit_to_budget()` still admits the first message when `kept` is empty, so
+  an oversized document can be submitted whole to the summarizer. The live
+  config also records that `utility-gpu` had known OOM/load failures, making
+  this timeout consistent with the GPU summary path being unavailable.
+
+This confirms a separate P0 lifecycle defect alongside summary semantic loss:
+failed/context-overflow user turns are persisted repeatedly, and overflow
+recovery submits an unsafe oversized message to the summary path. Fix scope
+should cover atomic/conditional user-message persistence, retry behavior, and
+a summary policy that refuses or specially handles oversized messages without
+silently dropping the current request.
+
+### 2026-08-23 — isolated context-capacity and Qwen3.8 screen (paused by user)
+
+All llama-swap processes were stopped and each measurement used one direct
+`llama-server` process, then tore it down. These are capacity/throughput
+screens, not semantic long-context quality evaluations.
+
+- `coder-small` (`qwen2.5-coder-7b`, GPU0): native context is 32,768;
+  llama.cpp caps a requested 65,536 slot to that value. It sustained 112.3
+  decode tok/s with 32,162 prompt tokens plus a 512-token completion. The
+  shipped `ctx` is now 30,000, preserving response headroom while fixing the
+  prior 8K rejection of ordinary ~10K-token documents.
+- Qwen3.8 general/coder aliases (GPU0): the complete documented production
+  flag set — thinking, reasoning preservation/budget 5000, MTP
+  `ngram-mod,draft-mtp`, q4_1 KV, Flash Attention, and the configured sampler
+  values — fails at 262,144 context. llama.cpp fails while MTP allocates its
+  second 1GiB KV buffer. 131,072 boots with that full flag set; the Qwen3.8
+  coder alias also booted at 196,608, but has no long-prompt decode evidence.
+  A short production-style request at 131,072 measured 67.5 decode tok/s.
+  Both `chat-default` and `coder` now ship at the conservative, validated
+  131,072 rather than a configuration that cannot start.
+- `utility-gpu` (`qwen3-8b`, GPU1): native context is 40,960, but a
+  40,960-capable allocation consumes about 7.8GiB on the 8GiB card. It cannot
+  coexist with the dispatcher there, so its live 16,384 limit must remain
+  until a co-residency measurement proves a higher value safe.
+
+Qwen3.8 quality screen (not a replacement verdict): with server-side
+reasoning disabled, it returned schema-valid JSON for all 10 structured-output
+cases. Its first six compile/run coding cases passed before that run was
+stopped; the remaining cases were not executed, so do not report a full coding
+score. A first reasoning attempt used only 4096 completion tokens while the
+model's configured reasoning budget is 5000; it was stopped as invalid after
+two correct cases (sheep 3.3s, train 28.8s). A corrected 5120-token,
+131072-context run was started and then stopped at the owner's request before
+recording a complete suite. No claim that Qwen3.8 replaces the dedicated coder
+or DeepSeek reasoner is justified yet.
+
+All isolated servers and evaluators were stopped before handoff; both GPUs
+were empty. The sweep remains incomplete: vision, reasoner-alt, the CPU
+utility/classifier/embed paths, full coding and reasoning comparisons, and
+real long-context recall/fidelity tests still need role-appropriate runs. Do
+not raise contexts from isolated capacity alone.
+
+### Exact next-test matrix (do not infer a replacement decision yet)
+
+The owner asked whether Qwen3.8 can replace all non-vision/non-utility roles.
+That remains an open benchmark question, not a completed migration. The work
+performed and the required follow-up are:
+
+| Role / model | What was actually tested | What remains |
+| --- | --- | --- |
+| `chat-default` / Qwen3.8-27B | Full documented MTP runtime shape at 262K: boot failure (second MTP KV allocation OOM). Full shape at 131K: boot success. Reasoning-off structured JSON: 10/10 schema-valid. | Long-context prefill/decode and recall at 131K; general-chat transcript quality against the prior baseline; apply/regenerate and live-start validation after config change. |
+| `coder` / Qwen3.8-27B alias | 262K MTP boot failure; 131K MTP boot + 67.5 short-request decode tok/s; 196K boot observed but not quality/performance tested. First 6 compile/run cases using Qwen3.8 general weights passed before the run was stopped. | Complete all coding compile/run cases and the six debug-diagnosis cases; compare them manually against the old dedicated Qwen3-Coder-30B-A3B 9/9 compile and 6/6 diagnosis results before replacing that role. |
+| `reasoner` / Qwen3.8-27B | A 4096-output test began but is invalid for final comparison because model reasoning budget is 5000; two early cases were correct. Corrected 5120-output/131K test was started, then intentionally stopped before completion. | Rerun all seven fixed reasoning prompts with the full documented thinking flags, a >=5120 output allowance, and manual scoring against DeepSeek-R1-32B and the former Qwen3.6 baseline. |
+| `reasoner-alt` / DeepSeek-R1-32B | Not tested in this sweep. | Capacity/throughput screen plus the same seven-prompt quality comparison. |
+| `vision` / Qwen3-VL-32B | Not tested in this sweep; excluded from the Qwen3.8 replacement hypothesis. Historic Phase-0 result remains Qwen3-VL 6/6 versus Gemma 5/6. | Separate capacity test and rerun its six image-grounded prompts only if changing its context/runtime configuration. |
+| `utility-gpu`, utility CPU, dispatcher, classifier, embed | Utility-GPU isolated native 40,960 allocation observed at ~7.8GiB; dispatcher coexistence was not tested. Dispatcher only had a llama-bench prompt/decode screen. CPU resident paths not tested. | Co-residency test for dispatcher + utility-GPU before any context increase; role-specific regressions for the CPU models. |
+| `coder-small` / Qwen2.5-Coder-7B | Native 32,768 confirmed; 32,162 prompt + 512 completion achieved 112.3 decode tok/s. | Apply/regenerate and live-start validation for new 30K setting; optional long-context semantic/code-quality evaluation. |
+
+No evaluator, isolated llama-server, GPU sweep, or verification command
+should be treated as currently running after this handoff. The last requested
+Python verification run was deliberately interrupted by the owner, so no full
+pytest result is claimed for these documentation/configuration changes.
+
+### Repository state
+
+Branch: `main`. No application code was changed during this investigation.
+`docs/current_bugs.md` is currently an untracked user audit file containing
+the new note; preserve it when continuing. Recent relevant commits include
+`1a340b5` (context integrity), `ae5e65e` (test/import repair and delayed-first-
+token rewarm), and `2039672` (manual compaction progress UX note).
+
 ## 2026-08-15 — summarizer speed-aware budget + GPU1 fast path
 
 Follow-on to the ctx-budget rewrite earlier the same day (see the two

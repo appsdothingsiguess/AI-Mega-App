@@ -70,14 +70,14 @@ macros:
   llama: {_BIN} --host 0.0.0.0 --port ${{PORT}} --jinja --parallel 1
 models:
   chat-default:
-    cmd: ${{llama}} -m {_BASE}/Qwen3.8-27B-UD-Q4_K_XL.gguf -ngl 999 -c 262144 {_QWEN38_FLAGS}
+    cmd: ${{llama}} -m {_BASE}/Qwen3.8-27B-UD-Q4_K_XL.gguf -ngl 999 -c 131072 {_QWEN38_FLAGS}
     env: ["CUDA_VISIBLE_DEVICES=0", "CUDA_DEVICE_ORDER=PCI_BUS_ID"]
     ttl: 0
   coder:
-    cmd: ${{llama}} -m {_BASE}/Qwen3.8-27B-UD-Q4_K_XL-coder.gguf -ngl 999 -c 262144 {_QWEN38_FLAGS}
+    cmd: ${{llama}} -m {_BASE}/Qwen3.8-27B-UD-Q4_K_XL-coder.gguf -ngl 999 -c 131072 {_QWEN38_FLAGS}
     env: ["CUDA_VISIBLE_DEVICES=0", "CUDA_DEVICE_ORDER=PCI_BUS_ID"]
   coder-small:
-    cmd: ${{llama}} -m {_BASE}/qwen2.5-coder-7b.gguf -ngl 999 -c 8192
+    cmd: ${{llama}} -m {_BASE}/qwen2.5-coder-7b.gguf -ngl 999 -c 30000
     env: ["CUDA_VISIBLE_DEVICES=0", "CUDA_DEVICE_ORDER=PCI_BUS_ID"]
   vision:
     cmd: ${{llama}} -m {_BASE}/Qwen3-VL-32B-Instruct-Q4_K_M.gguf -ngl 999 -c 8192 --mmproj {_BASE}/Qwen3-VL-32B-Instruct-mmproj-BF16.gguf
@@ -87,7 +87,7 @@ models:
     env: ["CUDA_VISIBLE_DEVICES=1", "CUDA_DEVICE_ORDER=PCI_BUS_ID"]
     ttl: 0
   utility-gpu:
-    cmd: ${{llama}} -m {_BASE}/qwen3-8b.gguf -ngl 999 -c 16384 --reasoning off --cache-type-k q4_1 --cache-type-v q4_1
+    cmd: ${{llama}} -m {_BASE}/qwen3-8b.gguf -ngl 999 -c 16384 --reasoning off --cache-type-k q8_0 --cache-type-v q8_0
     env: ["CUDA_VISIBLE_DEVICES=1", "CUDA_DEVICE_ORDER=PCI_BUS_ID"]
     ttl: 0
   utility:
