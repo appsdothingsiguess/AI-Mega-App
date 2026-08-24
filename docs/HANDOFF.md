@@ -1895,3 +1895,100 @@ Verification after the evaluator change: `npx tsc --noEmit`, Python byte-compila
 passed. The full pytest suite was attempted with `.venv/bin/python -m pytest -q --basetemp=.pytest-tmp/run` but
 produced no output for roughly 150 seconds and was stopped cleanly; do not report it as passing without resolving
 that existing suite stall.
+
+## 2026-08-24 — Pi relay diagnosis and web-search extension slowdown
+
+This is the latest continuation point for a new agent session. The owner is running `earendil-works/pi` on a
+laptop against the local llama-swap endpoint on `ailab`. A temporary transparent capture relay is running on
+the GPU box:
+
+```text
+/tmp/pi_request_capture_proxy.py
+listen: 0.0.0.0:8081
+upstream: 127.0.0.1:8080
+allowed client: 192.168.0.246
+captures: /tmp/pi-request-captures/*.json
+process session: 30385
+```
+
+Pi's endpoint is `http://ailab:8081/v1`. The relay initially buffered chunked SSE because it used
+`response.read(65536)`, making Pi appear to generate nothing. It was fixed to use `response.read1(8192)` and
+the current relay streams correctly. Keep the relay temporary and stop/remove it after live tracing is complete;
+do not delete captures without confirming the owner no longer needs them because they contain prompt content.
+
+### Confirmed throughput findings
+
+The 12–14 tok/s observation is not explained by Pi sending the whole context without caching. Recent normal Pi
+requests had roughly 12.1–13.3k prompt tokens, with about 12.1–13.2k cached. A plain no-tool Qwen request
+completed at about 34.6 output tok/s. Tool-loop requests still decode around 8–10 tok/s and have a roughly
+14.9k-character system/tool scaffold.
+
+Normal Pi turns register 28 tools: base file/shell tools, web search/source checking/fetching, background
+delegation, Goose memory, and Fusion tools. This is a large active tool grammar and system prompt for every turn,
+even when most tools are irrelevant.
+
+The web-search extension is especially expensive in this local single-model setup. Its `source_check` calls use
+the same `chat-default` Qwen instance, register zero tools, send fresh uncached prompts of about 3,777–4,622
+tokens, and recently occupied the model for 27–30 seconds per check. This can make an otherwise fast coding loop
+look stalled. The extension is not intrinsically broken, but it is a poor default for normal coding sessions.
+
+Representative capture metadata:
+
+| Request type | Prompt/cached | Completion | Wall time |
+|---|---:|---:|---:|
+| Pi normal turn, 28 tools | 13,253 / 13,204 | 137 | 14.3s |
+| Pi normal turn, 28 tools | 13,091 / 12,406 | 113 | 32.2s |
+| Web `source_check`, 0 tools | 3,777 / 0 | 130 | 27.2s |
+| Web `source_check`, 0 tools | 4,622 / 0 | 6 | 30.5s |
+| Plain no-tool baseline | 1,401 / 0 | 625 | 18.0s (~34.6 tok/s) |
+
+The relay therefore exposed two separate effects: the relay buffering bug (fixed) and real workload/model
+serialization. Reasoning-off remains the correct normal chat setting; explicit Qwen/DeepSeek reasoning aliases
+are available for deliberate difficult tasks.
+
+### Current recommendation
+
+For long coding sessions, disable the web-search/source-check extension by default and enable it only for genuine
+web research. Also reduce the active Pi tool set for coding to the base tools (`read`, `bash`, `edit`, `write`)
+when possible. Background delegation, Goose memory, Fusion, and web tools should be opt-in or routed to separate
+models/providers rather than competing with the sole `chat-default` slot. Do not treat the previously proposed
+hybrid memory architecture as established truth; it remains an option to evaluate.
+
+No Pi laptop configuration was changed from this repo because its extension/config path has not been provided.
+If the owner asks to implement the optimization, first identify the Pi extension configuration on the laptop and
+make the smallest reversible change. Do not guess at a path or modify the external Pi checkout from this repo.
+
+### Current service/config state
+
+`chat-default` is Qwen3.8-27B, 131,072 context, reasoning off, speculative decoding enabled, KV cache q4_1,
+and `parallel 1`. The explicit `reasoner` alias uses the same GGUF symlink with reasoning on/medium and a 5,000
+token budget; `reasoner-alt` is DeepSeek-R1-32B. `scripts/config_drift_check.py` last reported no drift.
+
+An independent pending change exists for the GPU1 summarizer: `config.yaml` currently has `utility-gpu` KV
+cache q4_1/q4_1, which was measured at 46.8 prefill tok/s and 6.46 decode tok/s; q8_0/q8_0 measured 2602.8
+prefill and 53.9 decode while still fitting beside the dispatcher. The q8_0 change is documented but must not be
+applied unless the owner explicitly asks for it. The latest handoff also records a summary-prompt change and a
+stale test-golden synchronization; distinguish those from live llama-swap application, which was not completed.
+
+### Repository and verification state
+
+The reasoning benchmark/evaluator work was committed and pushed:
+
+```text
+63a27ff docs: record reasoning alias performance findings
+```
+
+The working tree was clean at the last check. `npx tsc --noEmit`, Python byte-compilation, and `git diff --check`
+passed. A later full pytest attempt stalled for approximately 150 seconds and was stopped; do not claim the full
+suite passes without rerunning and resolving that stall. Use the approved operational scripts from `AGENTS.md`
+for live state (`scripts/model_state.py`, `scripts/incident_snapshot.py`, and `scripts/config_drift_check.py`).
+
+### Immediate next actions for the next chat
+
+1. If the owner wants more evidence, inspect new files in `/tmp/pi-request-captures` and compare prompt size,
+   cached tokens, tool count, completion tokens, and wall time.
+2. If the owner wants the speed fix, disable web/source-check and unnecessary Pi tools on the laptop, then run a
+   matched coding prompt with and without the relay; leave reasoning off.
+3. If the owner asks about the summarizer, obtain explicit approval before changing/applying q8_0 KV settings;
+   regenerate/apply through the approved app flow and verify with `scripts/model_state.py`.
+4. Stop the temporary relay and handle its prompt-bearing captures once live testing is finished.

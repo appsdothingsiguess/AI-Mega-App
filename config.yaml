@@ -193,6 +193,44 @@ models:
     resident: false
     ttl_s: null
     extra_flags: []
+  - name: coder-alt
+    class: coding
+    # 2026-08-24: Ornith-1.5-35B-A3B (MoE, 35B total / 3B active), fetched
+    # from ornith-ai/Ornith-1.5-35B-A3B-GGUF, native 262,144-token context.
+    # Benchmarked on this box at ctx 130000, solo-pinned to GPU0 (no
+    # tensor-split, -ngl 999, no --n-cpu-moe needed): ~23.0GB/24GB loaded,
+    # ~1GB headroom, stable through generation to the ctx ceiling. Throughput
+    # ~170 tok/s near-empty context, ~138 tok/s at 60K, ~112 tok/s at 125K —
+    # well clear of the 60 tok/s target. See llm-stack/CLAUDE.md 2026-08-24
+    # entry for full method/numbers. tool_call untested for this model
+    # family — left at "weak" until an eval_router-style pass confirms
+    # native structured tool_calls.
+    ctx: 130000
+    gpu: 0
+    tool_call: weak
+    # Same thinking-model caveat as the other Qwen3-family entries: an
+    # under-budgeted max_tokens burns the whole budget on reasoning_content
+    # and returns empty content with finish_reason "length".
+    thinking: true
+    reasoning_off: false
+    max_tokens: 8192
+    enabled: true
+    file: "/home/john/llm-stack/models/gguf/Ornith-1.5-35B-Q4_K_M.gguf"
+    quant: Q4_K_M
+    mmproj: null
+    resident: false
+    ttl_s: null
+    extra_flags:
+      - "--flash-attn"
+      - "on"
+      - "--temp"
+      - "0.6"
+      - "--top-p"
+      - "0.95"
+      - "--top-k"
+      - "20"
+      - "--threads"
+      - "12"
   - name: vision
     class: vision
     ctx: 8192

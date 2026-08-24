@@ -79,6 +79,9 @@ models:
   coder-small:
     cmd: ${{llama}} -m {_BASE}/qwen2.5-coder-7b.gguf -ngl 999 -c 30000
     env: ["CUDA_VISIBLE_DEVICES=0", "CUDA_DEVICE_ORDER=PCI_BUS_ID"]
+  coder-alt:
+    cmd: ${{llama}} -m {_BASE}/Ornith-1.5-35B-Q4_K_M.gguf -ngl 999 -c 130000 --flash-attn on --temp 0.6 --top-p 0.95 --top-k 20 --threads 12
+    env: ["CUDA_VISIBLE_DEVICES=0", "CUDA_DEVICE_ORDER=PCI_BUS_ID"]
   vision:
     cmd: ${{llama}} -m {_BASE}/Qwen3-VL-32B-Instruct-Q4_K_M.gguf -ngl 999 -c 8192 --mmproj {_BASE}/Qwen3-VL-32B-Instruct-mmproj-BF16.gguf
     env: ["CUDA_VISIBLE_DEVICES=0", "CUDA_DEVICE_ORDER=PCI_BUS_ID"]
@@ -104,7 +107,7 @@ models:
     ttl: 0
 groups:
   resident: {{ swap: false, exclusive: false, members: [dispatcher, utility-gpu, utility, embed, classifier] }}
-  gpu0-main: {{ swap: true, members: [chat-default, coder, coder-small, vision] }}
+  gpu0-main: {{ swap: true, members: [chat-default, coder, coder-small, coder-alt, vision] }}
 """
 
 

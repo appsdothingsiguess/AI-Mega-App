@@ -142,6 +142,31 @@ models:
   resident: false
   ttl_s: null
   extra_flags: []
+- name: coder-alt
+  class: coding
+  ctx: 130000
+  gpu: 0
+  tool_call: weak
+  thinking: true
+  reasoning_off: false
+  max_tokens: 8192
+  enabled: true
+  file: /home/john/llm-stack/models/gguf/Ornith-1.5-35B-Q4_K_M.gguf
+  quant: Q4_K_M
+  mmproj: null
+  resident: false
+  ttl_s: null
+  extra_flags:
+  - --flash-attn
+  - 'on'
+  - --temp
+  - '0.6'
+  - --top-p
+  - '0.95'
+  - --top-k
+  - '20'
+  - --threads
+  - '12'
 - name: vision
   class: vision
   ctx: 8192
