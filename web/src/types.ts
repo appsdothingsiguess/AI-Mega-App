@@ -110,6 +110,15 @@ export interface LastSummarySpan {
   error: string | null;
 }
 
+/** Structured, conservative trust decision for the rolling summary (the
+ *  backend's CoverageVerdict). `reason` is one of the stable strings the
+ *  Debug panel renders verbatim when coverage is not trusted. */
+export interface CoverageVerdict {
+  trusted: boolean;
+  covered_message_count: number | null;
+  reason: string;
+}
+
 export interface SummaryStatus {
   latest_tokens: number | null;
   latest_model: string | null;
@@ -120,6 +129,7 @@ export interface SummaryStatus {
   summary_every_n_turns?: number;
   turn_count: number;
   covered_message_count: number;
+  coverage: CoverageVerdict;
   last_summary: LastSummarySpan | null;
   in_flight: boolean;
 }

@@ -76,10 +76,36 @@ function contextUsageHtml(t: Trace, modelCtx: Record<string, number>): string {
   return `<span class="${cls}" title="${used} of ${ctx} tokens used on ${escapeHtml(model ?? "")}">${used}/${ctx} tok (${pct}%)</span>`;
 }
 
+/** Human-readable explanation for each stable coverage reason. The backend
+ *  only ever emits these exact strings, so an unknown reason falls back to
+ *  showing it verbatim rather than a generic placeholder. */
+const COVERAGE_UNAVAILABLE_REASON: Record<string, string> = {
+  no_summary: "no summary has been committed for this chat yet",
+  failed_summary: "the last summary run failed",
+  missing_metadata: "coverage metadata is missing or unreadable",
+  count_out_of_range: "coverage count is out of range",
+  prefix_mismatch: "covered prefix no longer matches this chat's history",
+  summary_mismatch: "the committed summary no longer matches this chat",
+};
+
+/** Summary coverage trust line (docs/FEATURES.md F19): either the trusted
+ *  prefix count the Debug panel can lean on, or a human-readable reason it
+ *  must fall back to raw history. Consumes the backend's coverage verdict --
+ *  never a duplicated check. */
+function coverageHtml(coverage: SummaryStatus["coverage"]): string {
+  if (coverage.trusted) {
+    const n = coverage.covered_message_count ?? 0;
+    return `summary coverage: trusted (${n} message${n === 1 ? "" : "s"})`;
+  }
+  const reason = COVERAGE_UNAVAILABLE_REASON[coverage.reason] ?? coverage.reason;
+  return `summary coverage unavailable: ${escapeHtml(reason)}`;
+}
+
 /** Rolling-summary trigger panel (docs/FEATURES.md F19): how close this
- *  chat is to the next auto-summary, and what the last regen actually did.
- *  Mirrors app/background/summaries.py:_trigger_state's fields exactly so
- *  "will it trigger" here can never drift from what actually happens. */
+ *  chat is to the next auto-summary, the summary coverage trust verdict, and
+ *  what the last regen actually did. Mirrors
+ *  app/background/summaries.py:_trigger_state's fields exactly so "will it
+ *  trigger" here can never drift from what actually happens. */
 function summaryStatusHtml(status: SummaryStatus | null): string {
   if (!status) return "";
   const rows: string[] = [];
@@ -116,6 +142,10 @@ function summaryStatusHtml(status: SummaryStatus | null): string {
       </div>`,
     );
   }
+
+  rows.push(
+    `<div class="summary-status-meta muted">${escapeHtml(coverageHtml(status.coverage))}</div>`,
+  );
 
   const last = status.last_summary;
   if (last) {

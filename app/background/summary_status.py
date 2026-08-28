@@ -6,7 +6,7 @@ import json
 import sqlite3
 from typing import Any
 
-from app.background.summary_coverage import trusted_covered_count
+from app.background.summary_coverage import coverage_verdict
 from app.chat import history
 from app.db import run_sync
 
@@ -35,8 +35,19 @@ async def summary_status(app: Any, chat_id: str, in_flight: set[str]) -> dict[st
     state["turn_count"] = turns
     messages = await run_sync(history.list_messages, conn, chat_id)
     chat_row = await run_sync(history.get_chat, conn, chat_id)
-    trusted = await run_sync(trusted_covered_count, conn, chat_id, messages, chat_row["summary"] if chat_row is not None else None)
-    state["covered_message_count"] = trusted or 0
+    verdict = await run_sync(
+        coverage_verdict,
+        conn,
+        chat_id,
+        messages,
+        chat_row["summary"] if chat_row is not None else None,
+    )
+    state["covered_message_count"] = verdict.covered_count or 0
+    state["coverage"] = {
+        "trusted": verdict.trusted,
+        "covered_message_count": verdict.covered_count,
+        "reason": verdict.reason,
+    }
     state["last_summary"] = await run_sync(last_summary_span, conn, chat_id)
     state["in_flight"] = chat_id in in_flight
     return state
