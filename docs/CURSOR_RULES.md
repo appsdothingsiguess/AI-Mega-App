@@ -64,8 +64,11 @@ alwaysApply: true
 # Three-tier boundaries
 
 **Always (no need to ask):**
-- Run `python -m pytest -q --basetemp=.pytest-tmp/run` from repo root and
-  `npx tsc --noEmit` before declaring a task done.
+- For code, tests, configuration, or frontend-source changes, run
+  `python -m pytest -q --basetemp=.pytest-tmp/run` and `npx tsc --noEmit`
+  from repo root before declaring the task done. For documentation-only
+  changes, run `git diff --check` instead; do not run the application suite
+  solely because docs changed.
 - Write a debug span for every new pipeline stage (see @PLAN.md §4.16).
 - Add or update tests alongside any behavior change.
 - Follow naming: snake_case Python, camelCase TypeScript.
@@ -200,6 +203,25 @@ Three config surfaces, three owners (@PLAN.md §3.1):
 | `.env` | humans (never committed) | secrets and API keys only |
 | `llama-swap.yaml` | `gpu/swapgen.py` only | generated llama-swap process config |
 | `opencode.json` | config generator only | opencode provider wiring |
+
+For model defaults, performance flags, context sizes, placement, routing
+defaults, and prompts, edit `config.yaml`. Keep `settings.local.yaml` sparse:
+it is for explicit Settings UI overrides, not a copied full model roster. A
+full-roster overlay silently masks later edits to `config.yaml`.
+
+After a config-only edit, apply and verify from the repository root:
+
+```bash
+curl --fail-with-body --silent --show-error --request POST \
+  --header 'Accept: application/json' \
+  http://127.0.0.1:8000/api/gpu/apply
+python3 scripts/config_drift_check.py
+python3 scripts/load_model_check.py <alias>
+```
+
+The apply endpoint reloads production config from disk before swapgen. The
+loader script triggers lazy loading and prints the actual live llama-server
+flags; file drift alone is not proof that the running process changed.
 
 Generated files carry a "generated — do not hand-edit" header. To change
 their output, edit the generator (`swapgen.py` etc.) and regenerate — this

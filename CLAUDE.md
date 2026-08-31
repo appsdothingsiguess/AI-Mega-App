@@ -28,7 +28,22 @@ python3 scripts/eval_quality_transcripts.py --prompts <prompts.json> \
 
 # Router evaluation; the /v1 suffix is required.
 python3 scripts/eval_router.py --base-url http://127.0.0.1:8080/v1
+
+# Agent-driven sweep from the checked-in base profile; only changed variables
+# are supplied, and every variant is isolated, logged, ranked, and torn down.
+CUDA_VISIBLE_DEVICES=0 python3 scripts/bench_sweep.py --profile qwen38-mtp \
+  --matrix ub=256,512,1024,2048 --matrix b=2048,4096
+# Sweep environment variables with --matrix-env.
+CUDA_VISIBLE_DEVICES=0 python3 scripts/bench_sweep.py --profile qwen38-mtp \
+  --matrix flash-attn=on --matrix-env GGML_CUDA_GRAPH_OPT=0,1
 ```
+
+The `qwen38-mtp` profile contains the validated 90K-context Qwen3.8
+separate-MTP baseline. Prefer `bench_sweep.py` for optimization: it expands
+only the requested matrix dimensions, runs variants sequentially, tears down
+llama-server after each run, and writes a ranked JSON summary in
+`logs/benchmarks/server/`. Do not hand-copy the full profile for a one-variable
+change.
 
 The isolated harnesses should follow the production no-`--tensor-split` placement rule. Quality transcripts are
 written to `logs/benchmarks/quality/<class>.jsonl` and are not automatically scored. To investigate a live
@@ -37,7 +52,12 @@ written to `logs/benchmarks/quality/<class>.jsonl` and are not automatically sco
 
 **The existing `app/` directory (and `settings.json`) is the old Ollama/LiteLLM/React codebase — a post-mortem, not a foundation.** Do not extend or copy from it. Build from `PLAN.md`. See `PLAN.md` §1 for the specific failure modes that codebase hit (fragile classifier, components built-but-never-wired, silent SSE stream deaths, config sprawl) — those are the mistakes this rebuild is designed to avoid repeating.
 
-**Phase 2 merged — live app running on `ailab` (2026-08-11).** 136+ tests passing, `tsc --noEmit` clean, full end-to-end chat working against real llama-swap. Phase 0 closed 2026-07-23, Phase 1 backend + frontend closed 2026-07-25, Phase 2 (config-schema, router-classifier, gpu-swapgen, background-utility, router-eval, settings-api, settings-ui) merged 2026-07-31 and live-verified 2026-08-02 (router eval 93.33%, GPU-reassignment demo working). Subsequent hardening on `main`: `8c4f7b4` (regenerate, tok/s, swap-aware routing, warmup timeout, drain reduction), `53dac3a` (scroll stick-to-bottom, nav-interrupt), `0170ca4` (warmup logging + resident-model hot-at-boot). **Open items as of 2026-08-11 — see `docs/FIX_PLAN_2026-08-11.md`** (four parallel workstreams WS-A..WS-D: config drift, backend reliability, web gaps, docs refresh) and `docs/AGENT_CONTEXT_MEGA.md` for the audited state. Before writing more `app/` or `web/` code, check `PLAN.md` §5 and `AGENTS.md` "Current phase".
+**Phase 2 is merged and the app is live on `ailab`; do not follow the old
+Phase-1/open or web-unbuilt notes in historical handoffs.** The current
+roster, open defects, and isolated 2026-08-30 worker state are in
+`docs/AGENT_CONTEXT_MEGA.md`; `docs/HANDOFF.md` is supporting history.
+Before writing more `app/` or `web/` code, check `PLAN.md` §5 and
+`AGENTS.md` "Current phase".
 
 **Live model-role update — 2026-08-24.** `chat-default` is Qwen3.8-27B with llama-server reasoning explicitly off. The separate `reasoner` alias targets the same Qwen blob through a distinct symlink and enables medium reasoning; `reasoner-alt` is DeepSeek-R1 32B. A five-prompt live comparison recorded in `logs/benchmarks/quality/reasoner.jsonl` found both correct; Qwen completed the selected runs in 111.3s / 3,081 output tokens (~27.7 end-to-end output tok/s), versus DeepSeek’s 141.3s / 3,243 (~23.0). This is a small manual-quality comparison, not a general model ranking. Pi’s previous 12–14 tok/s tool-loop problem was chiefly server-side reasoning on every tool turn, not oversized prompt context; disabling reasoning reduced one matched workflow from 205.5s / 4,267 completion tokens to 63.8s / 1,462 (3.2x faster). See `docs/HANDOFF.md` for method/caveats.
 
@@ -71,6 +91,25 @@ Model names/aliases/routing labels always come from `config.yaml`, resolved at r
 
 **Two Phase-0 rules that bite production code, not just benchmarks:** suppress thinking mode with llama-server's **`--reasoning off`** flag, never a `/no_think` prompt suffix (it worked on one checkpoint and silently failed on others, returning empty `content`); and give thinking-capable models a real `max_tokens` (≥1024, ≥4096 for reasoning) — an under-budgeted call returns empty and reads as a model failure. Full ruleset: `.cursor/rules/010-benchmark-eval-methodology.mdc`.
 
+## Live services and relay modes
+
+Production is `ai-mega-app :8000 -> llama-swap :8080`; the persistent
+`pi-capture-relay.service` exposes that route to the Windows/Pi Harness at
+`http://192.168.0.89:8081/v1` and forwards to `127.0.0.1:8080`. The relay
+allows client `192.168.0.246` and captures prompt-bearing traffic in
+`/tmp/pi-request-captures/`.
+
+The isolated Qwen3.6 worker is a different mode:
+`qwen36-ngram.service :5807` plus `pi-qwen36-relay.service :8082`, exposed to
+the Harness as `http://192.168.0.89:8082/v1` with model
+`qwen3.6-35b-ngram` and text-only input. While it is active,
+`llama-swap.service` and the normal app are intentionally stopped so GPU1's
+production residents do not compete for VRAM. Never apply GPU config or
+restart llama-swap in that mode; the 8082 worker is experimental and is not
+part of the production roster. Unit templates live in `ops/`; the worker
+warmup uses `scripts/warmup_openai_server.py`. See `AGENTS.md` for the
+complete mode map and capture-handling warning.
+
 ## Config file discipline (`.cursor/rules/005-config.mdc`)
 
 | File | Written by | Contains |
@@ -83,6 +122,37 @@ Model names/aliases/routing labels always come from `config.yaml`, resolved at r
 
 To change generated output, edit the generator and regenerate — don't hand-edit the artifact. Routing aliases (`chat-default | coder | coder-small | reasoner | reasoner-alt | vision | utility | embed | classifier | dispatcher`) are config vocabulary shared by prompts and code.
 
+### Config update and live apply workflow
+
+Edit `config.yaml` for model flags, context, placement, routing defaults, and
+prompts. Treat `settings.local.yaml` as a sparse Settings UI overlay only;
+never store a copied full model roster there, because it can silently override
+newer `config.yaml` values.
+
+For a config-only change, run from the repository root:
+
+```bash
+curl --fail-with-body --silent --show-error --request POST \
+  --header 'Accept: application/json' \
+  http://127.0.0.1:8000/api/gpu/apply
+python3 scripts/config_drift_check.py
+python3 scripts/load_model_check.py <alias>
+```
+
+The apply endpoint reloads config from disk before swapgen, writes the
+generated llama-swap config, waits for health, and re-warms residents. Restart
+`ai-mega-app` only when application code changed:
+
+```bash
+sudo systemctl restart ai-mega-app
+```
+
+`config_drift_check.py` verifies generated-versus-deployed files. The live
+truth is `load_model_check.py`, which triggers lazy loading and prints the
+actual running llama-server command with parsed flags. `restart_apply_test.sh`
+is the full restart/apply/pytest/TypeScript gate, not a requirement for a
+config-only edit.
+
 ## Frozen contracts
 
 Once these exist, they're read-only without owner approval:
@@ -94,12 +164,19 @@ Once these exist, they're read-only without owner approval:
 
 ## Verification gate
 
-Run from repo root before any completion report:
+For code, tests, configuration, or frontend-source changes, run from repo root
+before the completion report:
 
 ```bash
 python -m pytest -q --basetemp=.pytest-tmp/run
 npx tsc --noEmit
 ```
+
+For documentation-only changes, `git diff --check` is the required
+verification; do not run the application test suite solely because docs
+changed. Run the TypeScript check only when `web/src/**` or generated
+frontend output is in scope, and run pytest when Python, tests, or behavior
+affecting configuration changed.
 
 Full CI gate = ruff + `tsc --noEmit` + pytest + Playwright-vs-fake. Tests run against a fake llama-swap (canned OpenAI-format responses) — no GPU needed in CI. Live-hardware checks belong in `scripts/preflight.py`, run only on the box. A feature PR = code + wiring (registered at startup, reachable end-to-end) + tests + `docs/<feature>.md`; "built but not injected" is a rejected PR. Every new pipeline stage must write a debug span — a feature invisible in the Debug panel (`PLAN.md` §4.16) is not done.
 
@@ -121,11 +198,13 @@ Router changes additionally run the eval harness (`eval/` labeled prompt→route
 - **`scripts/incident_snapshot.py <trace_id|timestamp>`** — biggest win. Resolves a trace's span window (min `started_at` → max `ended_at`, `--pad` 90s) or a raw ISO/epoch timestamp, then dumps *both* filtered journals + `curl :8080/v1/models` + `nvidia-smi` + `ps aux | grep llama` → `logs/incidents/<id>.md`. Filters routine polling (`/api/gpu/inventory`, `/api/debug/summary-status`, `304`s, `/static/`; `--no-filter` to keep). `--with-trace` embeds the full `trace_inspect` dump. Replaces ~6-8 manual correlating-timestamps calls.
 - **`scripts/model_state.py`** — what's loaded and where. Wraps `curl :8080/v1/models` + `nvidia-smi --query-gpu` + `ps aux | grep llama-server` into one compact table → stdout (or `--out file`, `--json`).
 - **`scripts/config_drift_check.py`** — diffs fresh `app/gpu/swapgen.generate(get_config())` vs deployed `config.gpu.swap_yaml_path` (`/home/john/llm-stack/serving/llama-swap/config.yaml`), exit 1 + unified diff on drift. Catches silent `coder-small` placement drift. `--out /tmp/fresh.yaml` to preview fresh, `--write` to overwrite deployed.
+- **`scripts/load_model_check.py <alias>`** — sends a minimal request to trigger lazy loading, then prints the live alias status, GGUF, full command, and parsed llama-server flags. Use this after apply; it catches stale running processes that file-only drift checks cannot.
+- **`scripts/bench_sweep.py`** — agent-oriented isolated throughput matrix. Load a profile once with `--profile`, vary llama flags with repeated `--matrix KEY=V1,V2`, vary environment variables with `--matrix-env KEY=V1,V2`, and read the ranked `<label>-sweep.json`; no manual per-variant command construction.
 - **`scripts/chat_ctx_budget.py <chat_id> [--model X]`** — context-fit pre-flight. Uses the *current* real `app/chat/context.py assemble_context` + `app/background/summary_coverage.py trusted_covered_count` (exactly as `app/chat/turn.py:_request_completion` calls them), so it never drifts. Semantics are lossless: reports "✓ FITS" or "⛔ WOULD BE REFUSED" (no silent truncation) with budget vs estimated tokens, trusted covered count, and a per-message coverage table. `--next-msg` simulates appending a user message; `--list` shows recent chats.
 
 ## Boundaries (`.cursor/rules/002-boundaries.mdc`)
 
-**Always:** run the verification gate; write debug spans for new pipeline stages; add/update tests with behavior changes; snake_case Python, camelCase TypeScript; keep modules under ~300 lines.
+**Always:** use the verification gate appropriate to the changed files; write debug spans for new pipeline stages; add/update tests with behavior changes; snake_case Python, camelCase TypeScript; keep modules under ~300 lines.
 
 **Ask first:** new dependencies; SQLite schema, SSE event-type, or `config.yaml` key changes; touching frozen contracts; any edit to CI, hooks, or `.cursor/`.
 

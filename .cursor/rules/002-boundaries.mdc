@@ -5,8 +5,11 @@ alwaysApply: true
 # Three-tier boundaries
 
 **Always (no need to ask):**
-- Run `python -m pytest -q --basetemp=.pytest-tmp/run` from repo root and
-  `npx tsc --noEmit` before declaring a task done.
+- For code, tests, configuration, or frontend-source changes, run
+  `python -m pytest -q --basetemp=.pytest-tmp/run` and `npx tsc --noEmit`
+  from repo root before declaring the task done. For documentation-only
+  changes, run `git diff --check` instead; do not run the application suite
+  solely because docs changed.
 - Write a debug span for every new pipeline stage (see @PLAN.md §4.16).
 - Add or update tests alongside any behavior change.
 - Follow naming: snake_case Python, camelCase TypeScript.

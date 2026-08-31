@@ -1,3 +1,15 @@
+# For Claude and OpenAI models:
+
+## Startup context
+
+At the beginning of every task in this repository:
+
+1. Read `PLAN.md`.
+2. Read `docs/AGENT_CONTEXT_MEGA.md`.
+3. Read the most recent relevant handoff in `docs/HANDOFF.md`.
+4. Treat these as authoritative unless the user says otherwise.
+5. Do not read archived handoffs unless the task requires historical context.
+
 # AI Mega App — Agent Entry Point
 
 Personal AI platform: a claude.ai-parity web UI backed by local models on a dedicated Ubuntu GPU box. FastAPI backend orchestrates chat, routing, tools, RAG, and hermes-style memory; llama.cpp `llama-server` instances managed by llama-swap do all inference through one OpenAI-compatible endpoint. The old Ollama/LiteLLM/React codebase in this repo is a post-mortem, not a foundation — build from `PLAN.md`, not from existing `app/` or `web/` code.
@@ -24,7 +36,22 @@ python3 scripts/eval_quality_transcripts.py --prompts <prompts.json> \
 
 # Router accuracy; base URL must include /v1.
 python3 scripts/eval_router.py --base-url http://127.0.0.1:8080/v1
+
+# Agent-driven MTP sweep: loads the full base profile once and varies only
+# the requested dimensions; each variant is isolated, torn down, logged, and ranked.
+CUDA_VISIBLE_DEVICES=0 python3 scripts/bench_sweep.py --profile qwen38-mtp \
+  --matrix ub=256,512,1024,2048 --matrix b=2048,4096
+# Environment variables can be swept with --matrix-env.
+CUDA_VISIBLE_DEVICES=0 python3 scripts/bench_sweep.py --profile qwen38-mtp \
+  --matrix flash-attn=on --matrix-env GGML_CUDA_GRAPH_OPT=0,1
 ```
+
+`scripts/benchmark_profiles/qwen38-mtp.json` is the checked-in base for the
+Qwen3.8 separate-MTP profile (90K context, official MTP sidecar, n-max 4,
+q8 KV, batch 2048, ubatch 256, Flash Attention on, CUDA graphs on). Use
+`bench_sweep.py` for automated comparisons; do not repeat the full base
+configuration for a one-variable test. Sweep summaries are written beside
+the per-run JSONL files under `logs/benchmarks/server/`.
 
 `bench_server.py` and `bench_context_depth.py` own their isolated server lifecycle and must not be run with
 `--tensor-split` for the production roster. `eval_quality_transcripts.py` appends raw results to
@@ -43,6 +70,60 @@ linked by `chat_id`, so the requested chat's neighboring traces may contain the 
 | Projects | Filesystem-first (`projects/<id>/instructions.md`, `docs/`) |
 | Coding agent | opencode serve (delegated, never nested in the chat tool loop) |
 | Browser | BrowserOS via MCP client (host machine, escalation path only) |
+
+## Live services, relays, and mutually exclusive modes
+
+The normal production path is:
+
+```text
+browser/LAN client -> ai-mega-app :8000 -> llama-swap :8080 -> llama-server
+Windows/Pi Harness -> pi-capture-relay :8081 -> 127.0.0.1:8080
+```
+
+`ailab` is the Ubuntu GPU box (`192.168.0.89` on the LAN). GPU0 is the RTX
+3090 (24 GiB) and GPU1 is the RTX 3070 (8 GiB). The `gpu0-main` swap group
+contains the large models and loads one at a time. `resident` keeps the
+dispatcher, classifier, embed, utility, and `utility-gpu` available; the
+3070 has room for the dispatcher and `utility-gpu`, not `coder-small`.
+
+There is a separate, mutually exclusive Qwen3.6 worker mode for Harness
+testing:
+
+```text
+qwen36-ngram.service :5807 -> Qwen3.6-35B-A3B-UD-Q4_K_M, GPU1, 32K
+pi-qwen36-relay.service :8082 -> 127.0.0.1:5807
+Windows Harness -> http://192.168.0.89:8082/v1
+```
+
+In this mode, `llama-swap.service` is stopped so its GPU1 residents do not
+consume the worker's VRAM, and the normal app is offline. Do not restart
+llama-swap, apply GPU config, or add Qwen3.6 to normal startup while this
+test is active. The 8082 relay is text-only and accepts only client
+`192.168.0.246`; the 8081 relay is the production/Qwen3.8 route and has the
+same client restriction. Both relays forward `GET /v1/models` for Harness
+discovery and capture POST chat-completion traffic. Use the relay URLs from
+Windows; do not point a Windows client at `127.0.0.1` or the worker's direct
+`:5807` port. Both relays retain prompt-bearing captures under
+`/tmp/pi-request-captures/` or `/tmp/pi-qwen36-captures/`; treat them as
+sensitive and do not delete them during an active investigation.
+
+Check the relay units with:
+
+```bash
+systemctl --user status pi-capture-relay.service
+systemctl --user status pi-qwen36-relay.service
+```
+
+Unit templates and the isolated worker command are in `ops/`. The worker's
+warmup is `scripts/warmup_openai_server.py`.
+Qwen3.6's measured plain decode is about 12–13 tok/s; n-gram speculation
+reaches about 50–53 tok/s only on warm, predictable repeated code. Treat it
+as an isolated experimental alias, not a production roster decision.
+
+When switching modes, first record state with the appropriate service/model
+check, then stop the active mode and verify the GPU is clear before starting
+the other. The production config and generated llama-swap file were not
+changed by the 2026-08-30 Qwen3.6 experiment.
 
 ## Pointer hierarchy (read in this order)
 
@@ -74,14 +155,50 @@ Interface files are the real constraint layer — the type checker enforces what
 
 Model names live in `config.yaml`, resolved at runtime — zero-code swaps.
 
+### Config update and live apply workflow
+
+Edit `config.yaml` for model flags, context sizes, placement, routing defaults,
+and prompts. `settings.local.yaml` is reserved for sparse Settings UI
+overrides; never copy the full model roster into it, because a legacy roster
+can silently mask later `config.yaml` edits.
+
+For a config-only change, run from the repository root:
+
+```bash
+curl --fail-with-body --silent --show-error --request POST \
+  --header 'Accept: application/json' \
+  http://127.0.0.1:8000/api/gpu/apply
+python3 scripts/config_drift_check.py
+python3 scripts/load_model_check.py <alias>
+```
+
+The apply endpoint reloads production config from disk, regenerates the
+deployed llama-swap file, waits for health, and re-warms residents. Restart
+`ai-mega-app` only when application code changed:
+
+```bash
+sudo systemctl restart ai-mega-app
+```
+
+`config_drift_check.py` verifies generated versus deployed files;
+`load_model_check.py` triggers lazy loading and prints the authoritative live
+llama-server command and parsed flags.
+
 ## Verification gate
 
-From repo root, before any completion report:
+For code, tests, configuration, or frontend-source changes, run from repo root
+before the completion report:
 
 ```bash
 python -m pytest -q --basetemp=.pytest-tmp/run
 npx tsc --noEmit
 ```
+
+For documentation-only changes, `git diff --check` is the required
+verification; do not run the application test suite solely because docs
+changed. Run the TypeScript check only when `web/src/**` or generated
+frontend output is in scope, and run pytest when Python, tests, or behavior
+affecting configuration changed.
 
 Tests run against a fake llama-swap; no GPU in CI. A feature PR = code + wiring (registered and reachable end-to-end) + tests + `docs/<feature>.md`. "Built but not injected" is a rejected PR. Every pipeline stage writes a debug span — a feature invisible in the Debug panel is not done.
 
@@ -90,6 +207,7 @@ Tests run against a fake llama-swap; no GPU in CI. A feature PR = code + wiring 
 - `scripts/incident_snapshot.py <trace_id|timestamp>` → `logs/incidents/<id>.md` (trace window → both journals filtered + models + nvidia-smi + ps; replaces 6-8 manual calls)
 - `scripts/model_state.py` → compact `curl :8080/v1/models` + `nvidia-smi` + `ps aux | grep llama-server` table
 - `scripts/config_drift_check.py` → diff `swapgen.generate(get_config())` vs deployed `llama-swap/config.yaml`
+- `scripts/load_model_check.py <alias>` → lazy-load one alias and print its live parsed llama-server flags
 - `scripts/chat_ctx_budget.py <chat_id> [--model X]` → context-fit preview via real `assemble_context`/`trusted_covered_count` (lossless fits-vs-refused, pre-flight before sending)
 
 ## Worktrees and parallel agents
@@ -98,7 +216,7 @@ The user's task prompt supplies **branch + FILE SCOPE + acceptance**; if missing
 
 ## Boundaries (three tiers)
 
-- **Always:** run the verification gate; write debug spans; add tests with behavior changes; keep modules under ~300 lines.
+- **Always:** use the verification gate appropriate to the changed files; write debug spans and add tests with behavior changes; keep modules under ~300 lines.
 - **Ask first:** new dependencies; schema, SSE-event, or `config.yaml` key changes; touching frozen contracts; CI/hooks/`.cursor/` edits.
 - **Never:** hand-edit generated files (`llama-swap.yaml`, `web/js/**`); secrets outside `.env`; `git add .` / force-push / merge / push without explicit user request; read or copy `ref_do_not_copy/`.
 
@@ -106,12 +224,11 @@ When blocked by scope or constraints: stop and report. A described blocker is su
 
 ## Current phase
 
-**Phase 2 merged — live app running on `ailab`.** 136+ tests passing, `tsc --noEmit` clean, full end-to-end chat working against real llama-swap on GPU0 (3090) + GPU1 (3070). Phase 0 closed 2026-07-23 (roster locked, Config B placement, classifier 91.76%, dispatcher = Hammer2.1-1.5b — see `docs/PHASE0_FINDINGS_SUMMARY.md`). Phase 1 backend + frontend closed 2026-07-25. Phase 2 (config-schema, router-classifier, gpu-swapgen, background-utility, router-eval, settings-api, settings-ui) merged 2026-07-31 and live-verified 2026-08-02 (router eval 93.33%, GPU-reassignment demo working). Subsequent hardening commits shipped on `main`: `8c4f7b4` (regenerate button, tok/s display, swap-aware routing, warmup timeout, drain reduction), `53dac3a` (scroll stick-to-bottom, nav-interrupt fix), `0170ca4` (warmup logging + resident-model hot-at-boot).
-
-**Open items as of 2026-08-11 — see `docs/FIX_PLAN_2026-08-11.md` and `docs/AGENT_CONTEXT_MEGA.md` for the audited state.** Four parallel workstreams in flight:
-- **WS-A fix/config-drift** — `CUDA_DEVICE_ORDER=PCI_BUS_ID` in swapgen, revert `settings.local.yaml` drift (coder-small residency, ttl_s, routing overlay), classifier timeout 6→90s, legacy ollama tag renames in settings.json.
-- **WS-B fix/backend-reliability** — classifier/utility hot at service start (warmup retry + stored task ref), `_on_turn_complete` on error/timeout paths, `reasoning_content` field on `ChatDelta` + parse in `llm_client`.
-- **WS-C fix/web-gaps** — retry affordance on error banner, response time + usage inline in `.msg-meta`, fix misleading `chat.ts:35-36` comment, real `npx tsc` build committed with `web/src/**`.
-- **WS-D docs/refresh** (this branch) — refresh stale "Phase 1 open / web unbuilt" prose in `AGENTS.md`/`CLAUDE.md`, add 2026-08-11 entry to `docs/HANDOFF.md` marking audited-fixed items and recording the plan.
-
-All frontend work still builds to `docs/design-doc.md` (graphite/indigo dark system, compact density, IBM Plex Sans/Mono), enforced by `.cursor/rules/011-ui-design.mdc`. Placement truth (updated 2026-08-24, see `docs/AGENT_CONTEXT_MEGA.md` §4): `gpu0-main` swap group = `[chat-default, coder, coder-small, vision, reasoner, reasoner-alt]` (one at a time on 3090; `reasoner` and `reasoner-alt` are explicitly selected thinking aliases); `resident` group = `[dispatcher(GPU1), utility-gpu(GPU1, summarizer fast path), utility, embed, classifier (CPU)]`. `chat-default` is Qwen3.8 with server-side reasoning off; `reasoner` is the same Qwen blob via a distinct symlink with medium reasoning enabled; `reasoner-alt` is DeepSeek-R1 32B.
+**Phase 2 is merged and the app is live on `ailab`; do not follow the old
+Phase-1/open or web-unbuilt notes in historical handoffs.** The authoritative
+current roster, open defects, and 2026-08-30 experiment state are in
+`docs/AGENT_CONTEXT_MEGA.md`; `docs/HANDOFF.md` is supporting history. For
+the live production roster and placement, use the `Stack` table above and
+`scripts/model_state.py`, not an old handoff claim. All frontend work still
+builds from `web/src/**` to checked-in `web/js/**` according to
+`docs/design-doc.md` and `.cursor/rules/011-ui-design.mdc`.

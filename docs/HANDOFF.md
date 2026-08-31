@@ -2,7 +2,327 @@
 
 Working notes for whichever Claude Code session picks this up next.
 Not a planning doc, not user-facing — just context that isn't obvious
-from the code alone. Delete or trim entries once they're stale.
+from the code alone. The dated entries below the current-state notes are
+history, not live deployment instructions; use `AGENTS.md` and
+`docs/AGENT_CONTEXT_MEGA.md` for the current service/roster truth. Delete or
+trim entries once they're stale.
+
+## 2026-08-30 — Qwen3.6 isolated 32K service and diagnostic relay
+
+For the isolated Qwen3.6 worker test, `llama-swap.service` is intentionally
+stopped so its GPU1 residents (`dispatcher` and `utility-gpu`) do not consume
+the 3070's VRAM. Qwen3.6 is now managed by the user service
+`qwen36-ngram.service`, listening on `0.0.0.0:5807` with alias
+`qwen3.6-35b-ngram` and the tested profile: 32,768 context, 12 GPU layers,
+q8 KV, Flash Attention, 12 CPU threads, batch/ubatch 2048/256, one slot,
+reasoning off, and `ngram-mod` (match 24, max 12). Startup runs
+`scripts/warmup_openai_server.py`; the warmup completed successfully at
+about 13.2 tok/s. The model reports `n_ctx: 32768` and uses about 6.6 GiB on
+GPU1.
+
+The matching capture relay is managed by `pi-qwen36-relay.service` on
+`0.0.0.0:8082`, forwarding to `127.0.0.1:5807` and writing captures to
+`/tmp/pi-qwen36-captures/`. It allows only the Windows Harness client
+`192.168.0.246`, just as the existing 8081 relay allows that client for the
+llama-swap/Qwen3.8 route. Use `http://192.168.0.89:8082/v1` in DeepSeek
+Harness with model `qwen3.6-35b-ngram`, `contextWindow: 32768`, and text-only
+input. Localhost requests correctly receive 403; validate successful relay
+forwarding from the Windows client. The normal app backend is offline while
+this isolated test is active.
+
+## 2026-08-30 — Qwen3.8 text-only vs vision and Qwen3.6 GPU1 offload tests
+
+Production services were stopped for isolated testing; no config or generated
+llama-swap file was changed. Using the checked-in benchmark harness and the
+same Qwen3.8 MTP/KV/batch settings at 90K context, omitting the BF16 vision
+projector used 22,118 MiB on GPU0 and produced 73.98/75.07 end-to-end decode
+tok/s. Loading `mmproj-BF16.gguf` used 23,256 MiB and produced
+73.77/74.11 tok/s. The projector therefore costs about 1.1 GiB without a
+measurable shallow text decode benefit; keep it on the vision-capable alias,
+not ordinary text aliases. Owner reports that real longer-context vision
+requests fall to about 60 tok/s while text remains about 75 tok/s; this is
+consistent with the projector/prefill and image-token workload and should be
+measured with the image prompt suite before changing context defaults.
+
+Qwen3.6-35B-A3B-UD-Q4_K_M on GPU1 with 12 GPU layers (remaining layers in
+system RAM), q8 KV, Flash Attention, one slot, and 12 CPU threads remained
+stable at 16K, 32K, and 64K: 12.1–13.3 tok/s and 6.6–6.8 GiB VRAM. Increasing
+batch/ubatch to 4096/512 and CPU threads to 16 did not improve throughput.
+This is below the 20–30 tok/s worker target.
+
+Built-in llama.cpp n-gram speculation (`spec-type=ngram-mod`, match 24,
+draft max 12) is a large coding-pattern win: at both 16K and 64K, the first
+request was ~12.6 tok/s, then repeated Fibonacci/code requests reached
+50.4–53.2 tok/s with ~6.5–6.8 GiB GPU1 usage. This is a warm, highly
+predictable-code result; prose and novel tool output require a separate
+quality/acceptance check. It is currently the best stock-runtime worker
+profile, but should remain an isolated alias until agent transcripts confirm
+that n-gram guesses do not reduce correctness.
+
+The current `bench_server.py` intentionally starts with `-ngl 999`; this
+prevents llama.cpp's automatic `--fit` from running (the runtime reports
+"n_gpu_layers already set by user"). A subsequent `--n-cpu-moe 32` run
+overlapped the owner's restart of llama-swap, so its GPU0 reading is
+contaminated by the production `chat-default` process and is invalid for
+performance comparison. Do not adopt it. The harness needs an explicit
+placement/fit mode and a service-free rerun before a fair `--fit-target` or
+MoE-placement sweep can be added.
+
+Community tuning points to test next, not blindly adopt: `--fit on` with an
+explicit `--fit-target`/margin, MoE-aware `--n-cpu-moe` placement rather than
+arbitrary layer counts, and native Qwen3.6 MTP builds/models with
+`--spec-draft-n-max 2` or 3. A representative Reddit Qwen3.6 MTP setup uses
+`-fitt 1536`, q8 main/draft KV, `--no-mmap --mlock`, and reports 70–82 tok/s on
+a much faster RTX 4070 Super with a custom MTP PR/model; it is not directly
+comparable to this stock Q4 model/runtime. References:
+https://www.reddit.com/r/LocalLLaMA/comments/1t82zxv/80_toksec_and_128k_context_on_12gb_vram_with/
+https://www.reddit.com/r/LocalLLaMA/comments/1snt811/anyone_who_tried_new_36_on_single_3090_whats_your/
+https://www.reddit.com/r/LocalLLM/comments/1vq5oyu/guide_for_running_dense_models_on_16_gb_vram_qwen/
+
+### Superseded Qwen3.6 Harness setup
+
+The former foreground 65K server, direct `:5807` route, and duplicated Windows
+provider examples are retired. The managed 32K worker and the two relay
+endpoints are documented once in the 2026-08-30 entry above and in
+`AGENTS.md`; do not revive the old configuration from this file.
+
+
+## 2026-08-28 — DeepSeek Harness custom-provider vision setup
+
+The Pi/DeepSeek Harness capture relay listens on `192.168.0.89:8081` and
+forwards chat-completions to llama-swap at `127.0.0.1:8080`. It now forwards
+`GET /v1/models` as well, because Harness uses that endpoint during custom
+provider model discovery. The relay remains restricted to the configured Pi
+client (`192.168.0.246`) and remains POST-only for captured inference traffic.
+
+The Harness user config is `/home/john/.dsh/settings.yaml`. Models entered on a
+custom provider are text-only unless their model entry declares modalities;
+Qwen3.8 aliases served by AI Mega App therefore use:
+
+```yaml
+input: [text, image]
+```
+
+This metadata is a Harness-side claim and is separate from llama.cpp's
+`--mmproj` runtime flag. The latter is configured in `config.yaml` and the
+generated llama-swap config for `chat-default`, `coder`, `reasoner`, and
+`vision`.
+
+
+## 2026-08-27 — live coding comparison prompt: summary coverage trust diagnostics
+
+Use this identical prompt for a real implementation comparison between
+`chat-default` and `coder-alt`. Run both in disposable worktrees from the same
+clean base commit, with the same token budget (at least 4096). Preserve each
+diff and test output; assess correctness, scope discipline, and code clarity.
+
+```text
+You are working in the AI-Mega-App repository. Implement this feature end to
+end; do not change config, database schema, SSE event vocabulary, generated
+web/js files, dependencies, or unrelated code.
+
+Feature: Summary coverage trust diagnostics in the Debug panel.
+
+The app stores rolling-summary coverage metadata in the newest `summary` span.
+Today `app/background/summary_coverage.py:trusted_covered_count()` returns an
+integer or None, so the Debug panel cannot explain why it must fall back to
+raw history. Add a structured, conservative verdict and display it.
+
+Requirements:
+1. In `app/background/summary_coverage.py`, add a typed structured result for
+   the trust decision and a public `coverage_verdict(...)` helper. It must
+   report `trusted`, `covered_count`, and one of these stable reason strings:
+   `ok`, `no_summary`, `failed_summary`, `missing_metadata`,
+   `count_out_of_range`, `prefix_mismatch`, or `summary_mismatch`.
+2. Preserve the public behavior of `trusted_covered_count(...)` by delegating
+   to the verdict: return the count only when trusted, otherwise None. Do not
+   weaken existing fingerprint or newest-summary safety checks.
+3. Classify precisely: no committed chat summary is `no_summary`; a newest
+   span with `error` is `failed_summary`; no summary span, malformed span
+   data, or absent/wrong-type coverage fields is `missing_metadata`; an
+   invalid count is `count_out_of_range`; fingerprint failures use their
+   respective mismatch reasons. A failed or malformed newest attempt remains
+   authoritative over an older good one.
+4. Extend `GET /api/debug/summary-status?chat_id=` through its existing
+   status path. Keep current fields and add `coverage` with exactly `trusted`
+   (boolean), `covered_message_count` (integer or null), and `reason` (the
+   stable string). Compute it from the verdict, not a duplicate check.
+5. Update the existing Debug summary-status panel and its TypeScript type to
+   show either `summary coverage: trusted (N messages)` or `summary coverage
+   unavailable: <human-readable reason>`. Escape dynamic text and retain the
+   graphite/indigo compact style.
+6. Add focused tests: every verdict reason, old count-helper behavior, newest
+   failed attempt overriding an older valid one, and the summary-status API
+   payload. Add a frontend rendering/type test if supported. Run relevant
+   pytest tests and `npx tsc --noEmit`.
+
+Read AGENTS.md, PLAN.md, docs/FEATURES.md, and relevant existing
+summary-status/debug code first. In the final response list changed files,
+commands/results, and limitations. Do not leave an unused helper: the Debug
+panel must consume the new API field.
+```
+
+### Expected implementation and grading guide
+
+The intended boundary is `summary_coverage.coverage_verdict` ->
+`summary_status.summary_status` -> `/api/debug/summary-status` ->
+`web/src/types.ts` -> `web/src/views/debug.ts`. Make
+`trusted_covered_count` a compatibility wrapper around the verdict; do not
+duplicate trust checks. No migration or span stage is required: use the
+newest existing `summary` span and fingerprints.
+
+The existing top-level `covered_message_count` remains zero when untrusted.
+Add the nested, nullable truth:
+
+```json
+{
+  "covered_message_count": 0,
+  "coverage": {
+    "trusted": false,
+    "covered_message_count": null,
+    "reason": "missing_metadata"
+  }
+}
+```
+
+A committed summary with no matching span is `missing_metadata`, not
+`failed_summary`; this is a key grading case. Tests should use real
+chat/message/span fixtures and cover matching metadata, no chat summary,
+explicit latest-span error, no span/malformed JSON/missing fields,
+boolean/out-of-range count, both fingerprint mismatches, and a newer failed
+span overriding an older valid one. The implementation is incomplete if only
+the helper or tests exist—the Debug panel must display the API-backed verdict.
+
+## 2026-08-26 — Pi capture relay installed persistently
+
+The Pi capture relay is now a real enabled `systemd --user` service,
+`pi-capture-relay.service`, backed by
+`scripts/pi_request_capture_proxy.py` and enabled with `loginctl` lingering for
+user `john`. It listens on `0.0.0.0:8081`, forwards to `127.0.0.1:8080`, allows
+client `192.168.0.246`, and retains prompt-bearing captures in
+`/tmp/pi-request-captures/`. The installed unit source is
+`ops/pi-capture-relay.service`; the service log is available through its user
+service status and captures remain in `/tmp`.
+
+Pi endpoint: `http://ailab:8081/v1`. Check it with
+`systemctl --user status pi-capture-relay.service` and
+`ss -ltnp | rg ':8081\\b'`. If the laptop IP changes, update
+`PI_PROXY_ALLOWED_CLIENT` in `ops/pi-capture-relay.service`, reinstall the
+unit, then run `systemctl --user daemon-reload && systemctl --user restart
+pi-capture-relay.service`.
+
+## 2026-08-25 — config apply now reloads disk state and live-verified
+
+Fixed the recurring stale-config path. `settings.local.yaml` was a legacy full
+roster that overrode newer `config.yaml` model flags; it is now sparse and
+contains only intentional UI overrides. Model defaults/performance flags are
+owned by `config.yaml`. `POST /api/gpu/apply` now reloads the production config
+from disk before calling swapgen, while injected test configs remain static.
+
+Live proof: temporarily changed `chat-default --cache-reuse 256` to `257`,
+restarted only `ai-mega-app`, POSTed `/api/gpu/apply`, and
+`scripts/load_model_check.py chat-default` showed the live server at `257`.
+Restored `256`, POSTed apply again, and verified the live command returned to
+`256` with `--reasoning off`, MTP sidecar, n-max 4, q8 KV, batch 2048, and
+ubatch 256. `config_drift_check.py` reported no drift on both passes.
+
+Use `python3 scripts/load_model_check.py <alias>` to trigger lazy loading and
+print the parsed live llama-server command. The broad pytest run still stalls
+at the pre-existing suite point after roughly 34 tests; focused config/swapgen
+tests (48) and the reload regression pass, as does `npx tsc --noEmit`.
+
+## 2026-08-25 — coder-alt live quality testing started
+
+The live service currently has `coder-alt` loaded on GPU0 (Ornith-1.5-35B,
+server port 5803); all other roster models are unloaded. GPU0 was using about
+22.9 GiB of 24 GiB during the check. This is an active quality-test session,
+not a config-apply session.
+
+Current evaluation prompt:
+
+> Read AGENTS.md and inspect the repository. Implement one small, test-backed feature: Do not modify unrelated files. Run the focused tests and report files changed.
+
+The purpose is to assess repository instruction-following, scope discipline,
+small-feature implementation, focused verification, and reporting quality.
+Preserve the repository's existing user changes. In particular, do not reset
+the current checkout: it is `main` with uncommitted config/docs/benchmark
+changes, not a dedicated test branch. Do not apply or restart llama-swap while
+running this quality test.
+
+Previous coder-alt optimization result remains the recommended runtime:
+130K context, Flash Attention, temperature 0.6, top-p 0.95, top-k 20,
+12 threads, batch 2048, ubatch 128, with `--parallel 1` supplied by the
+llama-swap macro. The config and settings overlay are prepared but the live
+deployment should only be changed explicitly by the owner.
+
+## 2026-08-24 — coder-alt optimization results; config prepared, not live-applied
+
+Ran isolated GPU0 tests against `Ornith-1.5-35B-Q4_K_M.gguf` using the
+repository benchmark harness, with GPU1's resident production models left
+untouched. The model is stable at the configured 130,000-token context and
+fits solo on the RTX 3090 with roughly 1.7 GiB headroom.
+
+The tested matrix was:
+
+| Context | Batch | Ubatch | Average generation | Peak GPU0 VRAM |
+|---:|---:|---:|---:|---:|
+| 130K | 2048 | 128 | 151.58 tok/s (3-slot harness) | 23,098 MiB |
+| 130K | 2048 | 256 | 148.74 tok/s (3-slot harness) | 23,142 MiB |
+| 130K | 2048 | 512 | 150.06 tok/s (3-slot harness) | 23,230 MiB |
+| 130K | 4096 | 512 | 145.66 tok/s (3-slot harness) | 23,230 MiB |
+| 160K | 2048 | 256 | 146.47 tok/s (3-slot harness) | 23,744 MiB |
+
+The final production-shaped single-slot run (`--parallel 1`) with 130K,
+2048/128 averaged 148.74 tok/s across five requests and peaked at 22,898
+MiB. Therefore `--batch-size 2048` plus `--ubatch-size 128` is now prepared
+in `config.yaml`; `--parallel 1` remains supplied by the llama-swap macro.
+No live apply, service restart, or generated deployment-file change was
+performed.
+
+Growing-context recall stayed correct at every checkpoint through 105,479
+actual prompt tokens, but generation fell from 22.3 tok/s at 2,010 prompt
+tokens to 1.22 tok/s at 84,437 tokens. Keep 130K as the capacity ceiling,
+not as a claim of fast interactive generation at the far end.
+
+The safe six-case coder-debug transcript run completed without request
+errors with a 5,120-token allowance. Manual review found five fully correct
+diagnoses and one partial result: the NumPy diagnosis and fix were right but
+the removal version was misstated. The compile/run evaluator was not run
+because it executes model-generated code with host privileges.
+
+## 2026-08-24 — Qwen3.8 separate-MTP tuning results
+
+The official `mtp-Qwen3.8-27B-Q4_0.gguf` sidecar was downloaded to
+`/home/john/llm-stack/models/gguf/` and verified against the published SHA256
+`051a1764cff8c4f3ee6ae8b00593a0364c7539c67fa50ffc58f3f96509fca38e`.
+The exact sidecar-loaded command was tested isolated on GPU0 with
+`GGML_CUDA_GRAPH_OPT=1`, the Qwen3.8 Q4_K_XL main model, `-ngl -1`, `-ngld -1`,
+`-c 90000`, `--spec-type draft-mtp`, q8 draft/main KV, `-b 2048`, `-ub 512`,
+`--cache-reuse 256`, `--parallel 1`, and top-p/min-p/presence/frequency values
+all at the owner's deterministic settings. Startup logs explicitly showed the
+sidecar loading and GPU0 used ~22,136 MiB.
+
+Short isolated comparison (one shallow 66-token prompt; not a general ranking):
+
+| Settings | llama.cpp eval tok/s | Draft acceptance |
+|---|---:|---:|
+| `--spec-draft-p-min 0.75`, `--temp 0.0` | 70.51 | 89.34% (109/122) |
+| `--spec-draft-p-min 0.75`, `--temp 0.64` | 68.32 | 88.89% (104/117) |
+| Owner's full command, no p-min/temp override | **75.40** | 73.21% (123/168) |
+
+The full command was fastest in this short sample despite lower draft
+acceptance; more repeated and deep-context coding prompts are needed before
+choosing `p-min` as a production default. The sidecar was confirmed active in
+all three runs. Production config was not changed by these isolated tests.
+
+Four-request repeat using the full command (same shallow prompt, one server
+boot, four sequential requests) produced llama.cpp eval speeds of 76.45,
+73.94, 75.53, and 67.08 tok/s: **73.25 tok/s average**. Draft acceptance was
+75.93%, 69.94%, 72.12%, and 60.32%: **69.57% average**. End-to-end harness
+generation rates were 66.97, 64.29, 66.44, and 59.89 tok/s. This confirms the
+~70 tok/s range is reachable, while acceptance variance explains the lower
+tail. The four-run log is `logs/benchmarks/server/qwen38-mtp-full-settings-4x.jsonl`;
+the detailed llama.cpp log was `/tmp/qwen38-mtp-full-settings-4x.log`.
 
 ## 2026-08-24 — applied: utility-gpu q8_0 KV fix + universal "resume-exactly" summary prompt (G2)
 
@@ -1982,6 +2302,70 @@ The working tree was clean at the last check. `npx tsc --noEmit`, Python byte-co
 passed. A later full pytest attempt stalled for approximately 150 seconds and was stopped; do not claim the full
 suite passes without rerunning and resolving that stall. Use the approved operational scripts from `AGENTS.md`
 for live state (`scripts/model_state.py`, `scripts/incident_snapshot.py`, and `scripts/config_drift_check.py`).
+
+## 2026-08-24 — MTP profile application and automated sweep tooling
+
+The Qwen3.8 separate-MTP optimization campaign added reusable agent tooling:
+`scripts/benchmark_profiles/qwen38-mtp.json` stores the full 90K base profile,
+`scripts/bench_sweep.py` varies only requested `--matrix` dimensions (and
+`--matrix-env` environment variables), runs variants sequentially, tears down
+llama-server, and writes ranked JSON summaries beside per-run JSONL logs.
+
+Meaningful sweeps found the current best baseline: separate official MTP
+sidecar, `--spec-draft-n-max 4`, `--spec-draft-n-min 0`, no `--spec-draft-p-min`,
+`--spec-draft-p-split 0`, q8/q8 KV, `--flash-attn on`,
+`GGML_CUDA_GRAPH_OPT=1`, backend sampling enabled, `-b 2048`, `-ub 256`,
+90K context, and deterministic sampling (`temp 0`, top-p 1, min-p 0). Peak
+isolated throughput was about 77.7 end-to-end tok/s. q6_K KV variants failed
+to boot at 90K; Flash Attention off also failed, while CUDA graphs on was
+slightly faster than off.
+
+`config.yaml` was updated for `chat-default` and `coder` with this winning
+server flag set, and `AGENTS.md`/`CLAUDE.md` document the profile and sweep
+workflow. The live apply is still pending: `sudo ./scripts/restart_apply_test.sh`
+could not authenticate in the non-interactive session, and the app endpoint
+was down. Run that command from an authenticated terminal to regenerate and
+apply the generated llama-swap config. TypeScript and Python compilation
+passed; pytest needs a clean rerun after the service/config apply (a retry
+stalled after the prior documented test-suite issue).
+
+## 2026-08-24 — MTP p-min optimization matrix
+
+At `temp 0.0`, four sequential GPU0 requests per variant were run with the
+same 90K context, verified separate MTP sidecar, q8 KV, batch, and cache
+settings. Results:
+
+| Draft setting | llama.cpp eval average | Draft acceptance average | End-to-end average |
+|---|---:|---:|---:|
+| no `--spec-draft-p-min` | **81.80 tok/s** | 81.72% | **75.29 tok/s** |
+| `--spec-draft-p-min 0.50` | 73.19 tok/s | 80.57% | 66.52 tok/s |
+| `--spec-draft-p-min 0.75` | 71.57 tok/s | 89.21% | 65.15 tok/s |
+
+For this workload, the best setting is `temp 0.0` with no
+`--spec-draft-p-min`. This shallow screen was faster than the earlier full
+settings average; deep Pi coding prompts still need validation.
+
+Follow-up draft-depth sweep, same settings and four sequential requests per variant:
+
+| `--spec-draft-n-max` | llama.cpp eval average | Draft acceptance average | End-to-end average |
+|---:|---:|---:|---:|
+| 2 | 76.22 tok/s | 85.65% | 70.57 tok/s |
+| 3 (earlier baseline) | 81.80 tok/s | 81.72% | 75.29 tok/s |
+| 4 | **83.91 tok/s** | 75.47% | **77.05 tok/s** |
+
+The current speed winner is `--spec-draft-n-max 4`, with `temp 0.0` and no
+`--spec-draft-p-min`. It improved end-to-end throughput by about 2.3% over
+the n-max 3 baseline in this run, while reducing draft acceptance; validate
+it against a real Pi coding prompt before making it the production default.
+
+The reusable agent benchmark profile and matrix runner were added at
+`scripts/benchmark_profiles/qwen38-mtp.json` and `scripts/bench_sweep.py`.
+An automated 8-run batch sweep (`ub=256,512,1024,2048` × `b=2048,4096`)
+ranked `ub=256, b=2048` first at 77.66 end-to-end tok/s; `ub=512, b=2048`
+was effectively tied at 77.61, while `ub>=1024` fell sharply. A follow-up
+depth sweep at `ub=256` ranked n-max 4 at 76.62, n-max 3 at 74.36, n-max 5
+at 71.64, and n-max 6 at 50.68 tok/s. Keep n-max 4 and ub 256 as the
+current benchmark profile; results are in `logs/benchmarks/server/*sweep.json`.
 
 ### Immediate next actions for the next chat
 

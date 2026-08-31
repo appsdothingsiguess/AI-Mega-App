@@ -2,6 +2,59 @@
 
 Dense digest of everything learned auditing AI-Mega-App + llm-stack. Pair with `docs/FIX_PLAN_2026-08-11.md` (execution) and `docs/HANDOFF.md` (raw history). Facts below were code-verified 2026-08-11; prefer them over stale doc prose.
 
+## Current benchmark note — 2026-08-30
+
+### Current isolated Qwen3.6 service state
+
+For the current worker test, `llama-swap.service` is intentionally stopped so
+GPU1's production residents do not occupy the 3070. `qwen36-ngram.service`
+manages Qwen3.6 directly on `0.0.0.0:5807` with alias
+`qwen3.6-35b-ngram`: 32,768 context, 12 GPU layers, q8 KV, Flash Attention,
+12 threads, batch/ubatch 2048/256, one slot, reasoning off, and `ngram-mod`
+(match 24, max 12). Startup runs the repository warmup helper and completed
+successfully. GPU1 uses about 6.6 GiB and the model reports `n_ctx: 32768`.
+
+`pi-qwen36-relay.service` provides the diagnostic route on
+`0.0.0.0:8082` → `127.0.0.1:5807`, captures to `/tmp/pi-qwen36-captures/`,
+and allows only Windows client `192.168.0.246`. DeepSeek Harness should use
+`http://192.168.0.89:8082/v1`, model `qwen3.6-35b-ngram`, context window
+32768, text-only. The existing 8081 relay remains the Qwen3.8/llama-swap
+route. The normal app backend is offline during this isolated test.
+
+Isolated tests (services stopped; no config apply) measured Qwen3.8 at 90K
+context on GPU0: text-only/no `mmproj` used 22,118 MiB and decoded
+73.98–75.07 tok/s; the same MTP/KV/batch profile with the BF16 projector used
+23,256 MiB and decoded 73.77–74.11 tok/s. The projector costs ~1.1 GiB and
+does not help shallow text generation. The owner additionally observes real
+long-context vision work around 60 tok/s versus ~75 tok/s for text; treat that
+as workload-dependent and validate through the image benchmark suite.
+
+Qwen3.6-35B-A3B-UD-Q4_K_M on GPU1 with 12 GPU layers and RAM offload stayed
+stable through 64K at ~12–13 tok/s. Batch/ubatch and thread increases did not
+help. Candidate optimizations from current community reports are `--fit`
+with an explicit fit margin, `--n-cpu-moe`, and a custom/native Qwen3.6 MTP
+runtime/model; benchmark each independently before production wiring.
+Built-in `ngram-mod` speculation is a promising stock-runtime exception:
+with match=24 and draft-max=12, repeated code reached ~50–53 tok/s after a
+~12.6 tok/s cold request at both 16K and 64K. Treat this as pattern-dependent
+until validated on real agent/tool transcripts.
+
+The 20–30 tok/s figure was only an unverified viability target, not a measured
+3070 result. Plain decode is ~12–13 tok/s; `ngram-mod` reaches ~50–53 tok/s
+after warm-up on predictable code. The active server uses `--reasoning off`.
+For a small-thinking test use a separate profile with `--reasoning on` and
+`--reasoning-budget 2048`; thinking adds output tokens and should not be
+treated as a decode-speed optimization. DSH’s “65K” display should be read as
+the 65,536-token context window unless its timings explicitly label tok/s.
+
+### Session-close operational state — 2026-08-30 (superseded by isolated 32K service above)
+
+The earlier direct 65K server and 5807 provider have been replaced by the
+managed 32K worker and 8082 diagnostic relay described above. The warning
+about GPU1 residents still applies before restarting llama-swap or integrating
+Qwen3.6 into normal app startup. A DSH first request may still have high TTFT
+for large prompts because most model layers remain RAM-offloaded.
+
 ## Scripts and live investigation quick reference
 
 The model/context investigations added reusable harnesses under `scripts/`. Use them before inventing a new
@@ -65,8 +118,8 @@ scroll stick-to-bottom; nav-interrupt (no abort on unmount, store.activeChatStre
 - Config drift (§4). CUDA_DEVICE_ORDER missing (swapgen.py:136-141).
 - Docs stale (§7).
 
-## 7. Stale-doc inventory (fix = WS-D / orchestrator)
-- AI-Mega-App AGENTS.md + CLAUDE.md "Current phase": say Phase 1 open/web unbuilt — reality: Phase 2 merged, 136+ tests, live app with fixes above.
+## 7. Stale-doc inventory (audit status)
+- AI-Mega-App `AGENTS.md` and `CLAUDE.md` now point agents to this file for current state and explicitly reject the old Phase-1/open and web-unbuilt handoff notes. Keep this inventory line if another entry point regresses.
 - llm-stack/CLAUDE.md: PCI IDs stale; says dual-3070 (box is 3090+3070).
 - ollama/CLAUDE.md: 3090 PCI id stale (07:00.0→0D:00.0); Modelfile↔tag naming: 10 unsuffixed files (5 = old wide tags kept for rollback, 5 = current defaults) — values correct, names misleading.
 - benchmark_quality.sh: both queued fixes DONE (gemma4 in is_thinking_model; usage tokens in CSV/report). Remaining optional: separate reasoning from graded content.
