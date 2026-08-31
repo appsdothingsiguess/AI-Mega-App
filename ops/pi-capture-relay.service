@@ -1,0 +1,15 @@
+[Unit]
+Description=Persistent Pi llama-swap capture relay
+After=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/home/john/AI-Mega-App
+ExecStart=/usr/bin/python3 /home/john/AI-Mega-App/scripts/pi_request_capture_proxy.py
+Environment=PI_PROXY_ALLOWED_CLIENT=192.168.0.246
+Environment=PI_PROXY_CAPTURE_DIR=/tmp/pi-request-captures
+Restart=always
+RestartSec=2
+
+[Install]
+WantedBy=default.target

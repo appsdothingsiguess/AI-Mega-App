@@ -7,7 +7,7 @@ output text) — the "llama-server + curl" half of docs/BENCHMARK_PLAN.md §1.
 Usage:
   bench_server.py --label chat-default-q4 --model /path/model.gguf \
       --class chat-default --ctx 32768 [--tensor-split 3,1] [--mmproj path] \
-      [--prompt-file p.txt] [--n-predict 256] [--port 8899] [--timeout 300]
+      [--prompt-file p.txt] [--n-predict 256] [--port 8899] [--set ub=1024]
 
 Writes one JSON line per request to logs/benchmarks/server/<label>.jsonl and
 prints a one-line summary. Always tears the server down on exit (success,
@@ -23,6 +23,11 @@ import urllib.error
 BIN = "/home/john/llm-stack/engine/llama.cpp/build/bin/llama-server"
 REPO = Path("/home/john/AI-Mega-App")
 OUTDIR = REPO / "logs" / "benchmarks" / "server"
+
+FLAG_ALIASES = {
+    "c": "-c", "b": "-b", "ub": "-ub", "ngl": "-ngl", "ngld": "-ngld",
+    "md": "-md", "ctk": "-ctk", "ctv": "-ctv",
+}
 
 DEFAULT_PROMPTS = {
     "chat-default": "In three sentences, explain what a Kalman filter is used for.",
@@ -77,6 +82,22 @@ def gpu_mem():
         return {}
 
 
+def parse_overrides(values, prefix):
+    """Convert KEY=VALUE overrides into argv entries or environment values."""
+    parsed = {}
+    for item in values:
+        key, separator, value = item.partition("=")
+        if not separator or not key:
+            raise ValueError(f"{prefix} must be KEY=VALUE, got {item!r}")
+        parsed[key] = value
+    return parsed
+
+
+def flag_arg(key):
+    key = key.lstrip("-")
+    return FLAG_ALIASES.get(key, "--" + key.replace("_", "-"))
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--label", required=True)
@@ -94,6 +115,10 @@ def main():
     ap.add_argument("--boot-timeout", type=int, default=180)
     ap.add_argument("--request-timeout", type=int, default=180)
     ap.add_argument("--repeats", type=int, default=3)
+    ap.add_argument("--set", dest="overrides", action="append", default=[], metavar="KEY=VALUE",
+                    help="override/add a llama-server setting; e.g. --set ub=1024 --set temp=0")
+    ap.add_argument("--set-env", dest="env_overrides", action="append", default=[], metavar="KEY=VALUE",
+                    help="set an environment variable for the server")
     args = ap.parse_args()
 
     OUTDIR.mkdir(parents=True, exist_ok=True)
@@ -116,9 +141,25 @@ def main():
         cmd += ["--mmproj", args.mmproj]
     if args.model_class == "embed":
         cmd += ["--embeddings"]
+    try:
+        overrides = parse_overrides(args.overrides, "--set")
+        env_overrides = parse_overrides(args.env_overrides, "--set-env")
+    except ValueError as exc:
+        ap.error(str(exc))
+    for key, value in overrides.items():
+        cmd += [flag_arg(key), value]
 
     env = dict(os.environ)
     env["LD_LIBRARY_PATH"] = "/home/john/llm-stack/engine/llama.cpp/build/bin:" + env.get("LD_LIBRARY_PATH", "")
+    for key, value in env_overrides.items():
+        env[key] = value
+
+    manifest = {"ts": datetime.now(timezone.utc).isoformat(), "label": args.label,
+                "command": cmd, "overrides": overrides, "env_overrides": env_overrides,
+                "model": args.model, "ctx": args.ctx, "repeats": args.repeats,
+                "n_predict": args.n_predict}
+    with open(jsonl_path, "a") as f:
+        f.write(json.dumps({"event": "benchmark_start", **manifest}) + "\n")
 
     log(f"START {args.label}: {' '.join(cmd)}")
     proc = subprocess.Popen(cmd, env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)

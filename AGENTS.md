@@ -114,8 +114,27 @@ systemctl --user status pi-capture-relay.service
 systemctl --user status pi-qwen36-relay.service
 ```
 
-Unit templates and the isolated worker command are in `ops/`. The worker's
-warmup is `scripts/warmup_openai_server.py`.
+The relay units are independent enabled user services (`default.target`), not
+a shared target: both processes may be running, but a relay answers Harness
+only while its upstream is active. `:8081` is unavailable whenever
+`llama-swap :8080` is stopped; `:8082` is unavailable whenever the worker
+`:5807` is stopped.
+
+Unit templates and the isolated worker command are in `ops/`. To run the
+manual Qwen3.6 test mode, stop the production services, then start the worker:
+
+```bash
+sudo systemctl stop ai-mega-app.service llama-swap.service
+systemctl --user start pi-qwen36-relay.service qwen36-ngram.service
+```
+
+`qwen36-ngram.service` runs `scripts/warmup_openai_server.py` as
+`ExecStartPost`, so a successful start is already warmed. Restart that service
+to perform another warmup. To return to production, stop the worker first,
+then start `llama-swap.service` and `ai-mega-app.service`. Do not use
+`scripts/load_model_check.py` for Qwen3.6: its selector intentionally lists
+only the production `config.yaml` roster.
+
 Qwen3.6's measured plain decode is about 12–13 tok/s; n-gram speculation
 reaches about 50–53 tok/s only on warm, predictable repeated code. Treat it
 as an isolated experimental alias, not a production roster decision.
@@ -207,7 +226,7 @@ Tests run against a fake llama-swap; no GPU in CI. A feature PR = code + wiring 
 - `scripts/incident_snapshot.py <trace_id|timestamp>` → `logs/incidents/<id>.md` (trace window → both journals filtered + models + nvidia-smi + ps; replaces 6-8 manual calls)
 - `scripts/model_state.py` → compact `curl :8080/v1/models` + `nvidia-smi` + `ps aux | grep llama-server` table
 - `scripts/config_drift_check.py` → diff `swapgen.generate(get_config())` vs deployed `llama-swap/config.yaml`
-- `scripts/load_model_check.py <alias>` → lazy-load one alias and print its live parsed llama-server flags
+- `scripts/load_model_check.py <alias>` → lazy-load one production alias and print its live parsed llama-server flags
 - `scripts/chat_ctx_budget.py <chat_id> [--model X]` → context-fit preview via real `assemble_context`/`trusted_covered_count` (lossless fits-vs-refused, pre-flight before sending)
 
 ## Worktrees and parallel agents

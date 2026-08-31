@@ -9,7 +9,8 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
-from unittest.mock import AsyncMock
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, Mock
 
 import pytest
 from fastapi import FastAPI
@@ -128,6 +129,26 @@ def test_apply_writes_file_and_returns_ok(tmp_path: Path, monkeypatch) -> None:
     assert body["ok"] is True
     assert swap_path.exists()
     assert swap_path.read_text(encoding="utf-8") == generate(cfg)
+
+
+def test_apply_config_reloads_production_config_before_generating(monkeypatch) -> None:
+    """A direct config.yaml edit must reach apply without a backend restart."""
+    import app.gpu.api as gpu_api
+
+    old_cfg = _make_config("/tmp/old-llama-swap.yaml")
+    new_model = _TEST_MODEL.model_copy(update={"extra_flags": ["--cache-type-k", "q8_0"]})
+    new_cfg = old_cfg.model_copy(update={"models": [new_model]})
+    monkeypatch.setattr(gpu_api, "get_config", lambda: new_cfg)
+    reset = Mock()
+    monkeypatch.setattr(gpu_api, "reset_config_cache", reset)
+
+    app = SimpleNamespace(
+        state=SimpleNamespace(config=old_cfg, reload_config_from_disk=True)
+    )
+    request = SimpleNamespace(app=app)
+    assert gpu_api._config_for_apply(request) is new_cfg
+    reset.assert_called_once_with()
+    assert app.state.config is new_cfg
 
 
 def test_apply_rewarms_resident_models_after_reload(tmp_path: Path, monkeypatch) -> None:

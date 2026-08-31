@@ -11,12 +11,31 @@ from __future__ import annotations
 import hashlib
 import json
 import sqlite3
-from typing import Any
+from dataclasses import dataclass
+from typing import Any, Literal
 
 
 COVERED_COUNT_FIELD = "covered_message_count"
 COVERED_PREFIX_SHA256_FIELD = "covered_prefix_sha256"
 SUMMARY_SHA256_FIELD = "summary_sha256"
+CoverageReason = Literal[
+    "ok",
+    "no_summary",
+    "failed_summary",
+    "missing_metadata",
+    "count_out_of_range",
+    "prefix_mismatch",
+    "summary_mismatch",
+]
+
+
+@dataclass(frozen=True)
+class CoverageVerdict:
+    """Conservative decision about whether a committed summary covers history."""
+
+    trusted: bool
+    covered_count: int | None
+    reason: CoverageReason
 
 
 def _sha256(value: bytes) -> str:
@@ -77,49 +96,68 @@ def _latest_summary_data(
     return data if isinstance(data, dict) else None
 
 
-def trusted_covered_count(
+def coverage_verdict(
     conn: sqlite3.Connection,
     chat_id: str,
     history: list[dict[str, Any]],
     summary: str | None,
-) -> int | None:
-    """Return the current trusted prefix count, or no trusted coverage.
+) -> CoverageVerdict:
+    """Classify the newest summary span against the committed summary.
 
     The newest summary attempt is authoritative.  Failed, partial, malformed,
     or metadata-less attempts therefore force the conservative raw-history
     path even when an older record once matched.
     """
     if not summary:
-        return None
+        return CoverageVerdict(False, None, "no_summary")
     data = _latest_summary_data(conn, chat_id)
-    if data is None or data.get("error"):
-        return None
+    if data is None:
+        return CoverageVerdict(False, None, "missing_metadata")
+    error = data.get("error")
+    if error:
+        if isinstance(error, str):
+            return CoverageVerdict(False, None, "failed_summary")
+        return CoverageVerdict(False, None, "missing_metadata")
 
     count = data.get(COVERED_COUNT_FIELD)
     if isinstance(count, bool) or not isinstance(count, int):
-        return None
+        return CoverageVerdict(False, None, "missing_metadata")
     if count < 0 or count > len(history):
-        return None
+        return CoverageVerdict(False, None, "count_out_of_range")
 
     prefix_fingerprint = data.get(COVERED_PREFIX_SHA256_FIELD)
     committed_summary_fingerprint = data.get(SUMMARY_SHA256_FIELD)
     if not isinstance(prefix_fingerprint, str) or not isinstance(
         committed_summary_fingerprint, str
     ):
-        return None
+        return CoverageVerdict(False, None, "missing_metadata")
     if prefix_fingerprint != covered_prefix_sha256(history[:count]):
-        return None
+        return CoverageVerdict(False, None, "prefix_mismatch")
     if committed_summary_fingerprint != summary_sha256(summary):
-        return None
-    return count
+        return CoverageVerdict(False, None, "summary_mismatch")
+    return CoverageVerdict(True, count, "ok")
+
+
+def trusted_covered_count(
+    conn: sqlite3.Connection,
+    chat_id: str,
+    history: list[dict[str, Any]],
+    summary: str | None,
+) -> int | None:
+    """Return the trusted prefix count, preserving the legacy API."""
+    verdict = coverage_verdict(conn, chat_id, history, summary)
+    return verdict.covered_count if verdict.trusted else None
 
 
 __all__ = [
     "COVERED_COUNT_FIELD",
     "COVERED_PREFIX_SHA256_FIELD",
     "SUMMARY_SHA256_FIELD",
+    "CoverageReason",
+    "CoverageVerdict",
     "coverage_fields",
     "covered_prefix_sha256",
+    "coverage_verdict",
     "summary_sha256",
     "trusted_covered_count",
 ]

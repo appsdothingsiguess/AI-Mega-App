@@ -110,6 +110,21 @@ export interface LastSummarySpan {
   error: string | null;
 }
 
+export type SummaryCoverageReason =
+  | "ok"
+  | "no_summary"
+  | "failed_summary"
+  | "missing_metadata"
+  | "count_out_of_range"
+  | "prefix_mismatch"
+  | "summary_mismatch";
+
+export interface SummaryCoverage {
+  trusted: boolean;
+  covered_message_count: number | null;
+  reason: SummaryCoverageReason;
+}
+
 export interface SummaryStatus {
   latest_tokens: number | null;
   latest_model: string | null;
@@ -120,6 +135,7 @@ export interface SummaryStatus {
   summary_every_n_turns?: number;
   turn_count: number;
   covered_message_count: number;
+  coverage: SummaryCoverage;
   last_summary: LastSummarySpan | null;
   in_flight: boolean;
 }

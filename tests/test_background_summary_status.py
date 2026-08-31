@@ -17,6 +17,11 @@ async def test_summary_status_below_threshold(bg_app) -> None:
     # chat-default ctx=4096 (TEST_MODEL), fraction=0.5 default -> 2048
     assert status["threshold_tokens"] == 2048
     assert status["covered_message_count"] == 0
+    assert status["coverage"] == {
+        "trusted": False,
+        "covered_message_count": None,
+        "reason": "no_summary",
+    }
     assert status["last_summary"] is None
     assert status["in_flight"] is False
 
@@ -60,6 +65,11 @@ async def test_summary_status_reports_last_summary_after_regen(bg_app) -> None:
     assert last["model"] == "utility"
     assert last["device"] == "cpu"
     assert last["covered_message_count"] == status["covered_message_count"] == 2
+    assert status["coverage"] == {
+        "trusted": True,
+        "covered_message_count": 2,
+        "reason": "ok",
+    }
     assert last["new_message_count"] == 2
     assert last["chars"] == len("Summary for status check.")
 

@@ -1,0 +1,18 @@
+[Unit]
+Description=Qwen3.6 GPU1 n-gram worker
+After=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/home/john/AI-Mega-App
+Environment=CUDA_DEVICE_ORDER=PCI_BUS_ID
+Environment=CUDA_VISIBLE_DEVICES=1
+ExecStart=/home/john/llm-stack/engine/llama.cpp/build/bin/llama-server --host 0.0.0.0 --port 5807 --alias qwen3.6-35b-ngram --jinja --parallel 1 -m /home/john/llm-stack/models/gguf/Qwen3.6-35B-A3B-UD-Q4_K_M.gguf -ngl 12 -c 32768 --cache-type-k q8_0 --cache-type-v q8_0 --flash-attn on --threads 12 --reasoning off -b 2048 -ub 256 --cache-reuse 256 --spec-type ngram-mod --spec-ngram-mod-n-max 12 --spec-ngram-mod-n-min 1 --spec-ngram-mod-n-match 24
+ExecStartPost=/usr/bin/python3 /home/john/AI-Mega-App/scripts/warmup_openai_server.py
+Environment=WARMUP_BASE_URL=http://127.0.0.1:5807/v1
+Environment=WARMUP_MODEL=qwen3.6-35b-ngram
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=default.target

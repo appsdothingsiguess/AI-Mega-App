@@ -110,6 +110,14 @@ part of the production roster. Unit templates live in `ops/`; the worker
 warmup uses `scripts/warmup_openai_server.py`. See `AGENTS.md` for the
 complete mode map and capture-handling warning.
 
+Both relay units are independently enabled user services; they can both be
+running, but each requires its own upstream (`:8081` → `:8080`, `:8082` →
+`:5807`). For a manual Qwen3.6 test, first stop production, then run
+`systemctl --user start pi-qwen36-relay.service qwen36-ngram.service`.
+`qwen36-ngram.service` runs its warmup helper as `ExecStartPost`; a successful
+start is warm, and `systemctl --user restart qwen36-ngram.service` re-warms
+it. The regular `load_model_check.py` selector remains production-only.
+
 ## Config file discipline (`.cursor/rules/005-config.mdc`)
 
 | File | Written by | Contains |

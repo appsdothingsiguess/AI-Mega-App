@@ -118,6 +118,26 @@ function summaryStatusHtml(status: SummaryStatus | null): string {
   }
 
   const last = status.last_summary;
+  const coverage = status.coverage;
+  if (coverage.trusted && coverage.covered_message_count != null) {
+    rows.push(
+      `<div class="summary-status-meta muted">summary coverage: trusted (${escapeHtml(String(coverage.covered_message_count))} messages)</div>`,
+    );
+  } else {
+    const reasonLabels: Record<string, string> = {
+      no_summary: "no committed summary",
+      failed_summary: "latest summary attempt failed",
+      missing_metadata: "summary coverage metadata is missing or malformed",
+      count_out_of_range: "summary covered an invalid message range",
+      prefix_mismatch: "conversation changed under the covered prefix",
+      summary_mismatch: "committed summary content changed",
+    };
+    const reason = reasonLabels[coverage.reason] ?? "unknown coverage state";
+    rows.push(
+      `<div class="summary-status-meta muted">summary coverage unavailable: ${escapeHtml(reason)}</div>`,
+    );
+  }
+
   if (last) {
     const when = new Date(last.started_at).toLocaleTimeString();
     const device = last.device ?? "?";

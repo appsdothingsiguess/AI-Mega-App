@@ -306,3 +306,8 @@ def test_summary_status_rest_endpoint(db_conn) -> None:
         assert body["will_trigger"] is False
         assert body["last_summary"] is None
         assert body["in_flight"] is False
+        assert body["coverage"] == {
+            "trusted": False,
+            "covered_message_count": None,
+            "reason": "no_summary",
+        }

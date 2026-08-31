@@ -27,6 +27,7 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import PlainTextResponse
 
 from app.debug import new_trace, span
+from app.config import get_config, reset_config_cache
 from app.gpu.inventory import GPUInfo, fetch_inventory
 from app.gpu.swapgen import generate
 from app.warmup import all_residents_loaded, resident_swap_names, warmup_resident_models
@@ -46,6 +47,16 @@ def _health_url(base_url: str) -> str:
     """
     parsed = urlparse(base_url)
     return f"{parsed.scheme}://{parsed.netloc}/health"
+
+
+def _config_for_apply(request: Request):
+    """Return fresh disk config in production, injected config in tests."""
+    if getattr(request.app.state, "reload_config_from_disk", False):
+        reset_config_cache()
+        config = get_config()
+        request.app.state.config = config
+        return config
+    return request.app.state.config
 
 
 async def _poll_health(url: str, timeout_s: float = _POLL_TIMEOUT_S) -> bool:
@@ -89,7 +100,12 @@ async def post_apply(request: Request) -> dict:
     2026-07-30).  This endpoint writes the file then polls /health until OK.
     Rolls back the previous config (.bak) on poll timeout.
     """
-    config = request.app.state.config
+    # Production app instances are created from the cached config at startup.
+    # Reload here so the documented workflow is reliable: edit config.yaml,
+    # POST /api/gpu/apply, and have that exact file state reach swapgen without
+    # requiring a backend restart. Test apps inject a config directly and keep
+    # that deterministic value.
+    config = _config_for_apply(request)
 
     if not config.gpu.enabled:
         raise HTTPException(

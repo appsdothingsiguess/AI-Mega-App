@@ -7,6 +7,24 @@ history, not live deployment instructions; use `AGENTS.md` and
 `docs/AGENT_CONTEXT_MEGA.md` for the current service/roster truth. Delete or
 trim entries once they're stale.
 
+## 2026-08-31 — Relay lifecycle restored; Qwen3.6 manual warmup
+
+The two capture relays are independent enabled user services, not members of a
+shared target: `pi-capture-relay.service` owns `:8081` → `127.0.0.1:8080` and
+`pi-qwen36-relay.service` owns `:8082` → `127.0.0.1:5807`. Both may be running
+at once, but only the relay whose upstream mode is active can serve Harness.
+An unreachable `:8081` means llama-swap `:8080` is down; it is not evidence
+that the relay process itself is down.
+
+Qwen3.6 stays an isolated manual mode. Stop `ai-mega-app.service` and
+`llama-swap.service` before `systemctl --user start qwen36-ngram.service`;
+the service's `ExecStartPost` runs `scripts/warmup_openai_server.py`, so a
+successful start has already warmed the worker. Use
+`systemctl --user restart qwen36-ngram.service` for another warmup. Stop the
+worker before restoring production. `scripts/load_model_check.py` was restored
+to its production-only selector after an attempted dual-endpoint menu caused
+the selected model to be sent to the wrong upstream; do not use it for Qwen3.6.
+
 ## 2026-08-30 — Qwen3.6 isolated 32K service and diagnostic relay
 
 For the isolated Qwen3.6 worker test, `llama-swap.service` is intentionally

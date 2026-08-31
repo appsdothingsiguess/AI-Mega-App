@@ -154,6 +154,9 @@ def create_app(config: Config | None = None) -> FastAPI:
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         app.state.config = cfg
+        # GPU apply can refresh the production config from disk. Tests and
+        # embedding callers that inject a Config remain intentionally static.
+        app.state.reload_config_from_disk = config is None
         app.state.db = open_db(_resolve_db_path(cfg))
         # app/debug/trace.py opens its own connection lazily via the process-
         # global get_config() cache, which does not track a per-app Config

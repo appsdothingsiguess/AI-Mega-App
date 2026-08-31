@@ -2,11 +2,11 @@
 
 Dense digest of everything learned auditing AI-Mega-App + llm-stack. Pair with `docs/FIX_PLAN_2026-08-11.md` (execution) and `docs/HANDOFF.md` (raw history). Facts below were code-verified 2026-08-11; prefer them over stale doc prose.
 
-## Current benchmark note — 2026-08-30
+## Current benchmark note — 2026-08-31
 
-### Current isolated Qwen3.6 service state
+### Manual isolated Qwen3.6 service mode
 
-For the current worker test, `llama-swap.service` is intentionally stopped so
+For a worker test, `llama-swap.service` is intentionally stopped so
 GPU1's production residents do not occupy the 3070. `qwen36-ngram.service`
 manages Qwen3.6 directly on `0.0.0.0:5807` with alias
 `qwen3.6-35b-ngram`: 32,768 context, 12 GPU layers, q8 KV, Flash Attention,
@@ -19,7 +19,14 @@ successfully. GPU1 uses about 6.6 GiB and the model reports `n_ctx: 32768`.
 and allows only Windows client `192.168.0.246`. DeepSeek Harness should use
 `http://192.168.0.89:8082/v1`, model `qwen3.6-35b-ngram`, context window
 32768, text-only. The existing 8081 relay remains the Qwen3.8/llama-swap
-route. The normal app backend is offline during this isolated test.
+route. The normal app backend is offline during this isolated test. The two
+relay services are independently enabled under the user `default.target` and
+may both be running; a relay cannot answer until its upstream is running.
+`qwen36-ngram.service` invokes `scripts/warmup_openai_server.py` as
+`ExecStartPost`, so a successful manual start is warmed. Start it only after
+stopping `ai-mega-app.service` and `llama-swap.service`; stop it before
+restoring those production services. `scripts/load_model_check.py` lists only
+the production roster and is not a Qwen3.6 worker control path.
 
 Isolated tests (services stopped; no config apply) measured Qwen3.8 at 90K
 context on GPU0: text-only/no `mmproj` used 22,118 MiB and decoded

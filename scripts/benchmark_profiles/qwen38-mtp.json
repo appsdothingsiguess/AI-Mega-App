@@ -1,0 +1,29 @@
+{
+  "model": "/home/john/llm-stack/models/gguf/Qwen3.8-27B-UD-Q4_K_XL.gguf",
+  "model_class": "chat-default",
+  "ctx": 90000,
+  "repeats": 4,
+  "n_predict": 256,
+  "env": {"GGML_CUDA_GRAPH_OPT": "1"},
+  "set": {
+    "ngl": "-1",
+    "md": "/home/john/llm-stack/models/gguf/mtp-Qwen3.8-27B-Q4_0.gguf",
+    "ngld": "-1",
+    "spec-type": "draft-mtp",
+    "spec-draft-n-max": "4",
+    "spec-draft-type-k": "q8_0",
+    "spec-draft-type-v": "q8_0",
+    "flash-attn": "on",
+    "ctk": "q8_0",
+    "ctv": "q8_0",
+    "b": "2048",
+    "ub": "256",
+    "cache-reuse": "256",
+    "parallel": "1",
+    "temp": "0.0",
+    "top-p": "1.0",
+    "min-p": "0.0",
+    "presence-penalty": "0.0",
+    "frequency-penalty": "0.0"
+  }
+}

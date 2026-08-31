@@ -39,7 +39,7 @@ from app.gpu.swapgen import generate
 #                  swap:true already guarantees only one of the group is
 #                  resident in VRAM at a time, so this costs nothing extra.
 #   coder-small   (gpu=0, no ttl)
-#   vision        (gpu=0, mmproj, no ttl)
+#   vision        (gpu=0, Qwen3.8-27B + mmproj, no ttl)
 #   dispatcher    (gpu=1, resident, ttl:0, --temp 0)
 #   utility-gpu   (gpu=1, resident, ttl:0, --reasoning off; shares the
 #                  qwen3-8b.gguf file with utility but a different device,
@@ -58,9 +58,23 @@ _BIN = "/home/john/llm-stack/engine/llama.cpp/build/bin/llama-server"
 _QWEN38_FLAGS = (
     '--reasoning on --reasoning-preserve --chat-template-kwargs '
     '\'{"reasoning_effort":"medium"}\' --reasoning-budget 5000 '
-    '--spec-type ngram-mod,draft-mtp --spec-draft-n-max 2 --cache-type-k q4_1 '
-    '--cache-type-v q4_1 --flash-attn on --temp 1.0 --top-p 0.95 '
-    '--top-k 20 --min-p 0.0'
+    f'--model-draft {_BASE}/mtp-Qwen3.8-27B-Q4_0.gguf '
+    '--spec-type draft-mtp --spec-draft-n-max 4 '
+    '--spec-draft-type-k q8_0 --spec-draft-type-v q8_0 '
+    '--cache-type-k q8_0 --cache-type-v q8_0 --flash-attn on '
+    '--temp 0.0 --top-p 1.0 --min-p 0.0 --presence-penalty 0.0 '
+    '--frequency-penalty 0.0 --batch-size 2048 --ubatch-size 256 '
+    '--cache-reuse 256 --parallel 1'
+)
+_CHAT_FLAGS = (
+    '--reasoning off '
+    f'--model-draft {_BASE}/mtp-Qwen3.8-27B-Q4_0.gguf '
+    '--spec-type draft-mtp --spec-draft-n-max 4 '
+    '--spec-draft-type-k q8_0 --spec-draft-type-v q8_0 '
+    '--cache-type-k q8_0 --cache-type-v q8_0 --flash-attn on '
+    '--temp 0.0 --top-p 1.0 --min-p 0.0 --presence-penalty 0.0 '
+    '--frequency-penalty 0.0 --batch-size 2048 --ubatch-size 256 '
+    '--cache-reuse 256 --parallel 1'
 )
 
 GOLDEN = f"""\
@@ -70,20 +84,20 @@ macros:
   llama: {_BIN} --host 0.0.0.0 --port ${{PORT}} --jinja --parallel 1
 models:
   chat-default:
-    cmd: ${{llama}} -m {_BASE}/Qwen3.8-27B-UD-Q4_K_XL.gguf -ngl 999 -c 131072 {_QWEN38_FLAGS}
+    cmd: ${{llama}} -m {_BASE}/Qwen3.8-27B-UD-Q4_K_XL.gguf -ngl 999 -c 90000 --mmproj {_BASE}/Qwen3.8-27B-mmproj-BF16.gguf {_CHAT_FLAGS}
     env: ["CUDA_VISIBLE_DEVICES=0", "CUDA_DEVICE_ORDER=PCI_BUS_ID"]
     ttl: 0
   coder:
-    cmd: ${{llama}} -m {_BASE}/Qwen3.8-27B-UD-Q4_K_XL-coder.gguf -ngl 999 -c 131072 {_QWEN38_FLAGS}
+    cmd: ${{llama}} -m {_BASE}/Qwen3.8-27B-UD-Q4_K_XL-coder.gguf -ngl 999 -c 90000 --mmproj {_BASE}/Qwen3.8-27B-mmproj-BF16.gguf {_QWEN38_FLAGS}
     env: ["CUDA_VISIBLE_DEVICES=0", "CUDA_DEVICE_ORDER=PCI_BUS_ID"]
   coder-small:
     cmd: ${{llama}} -m {_BASE}/qwen2.5-coder-7b.gguf -ngl 999 -c 30000
     env: ["CUDA_VISIBLE_DEVICES=0", "CUDA_DEVICE_ORDER=PCI_BUS_ID"]
   coder-alt:
-    cmd: ${{llama}} -m {_BASE}/Ornith-1.5-35B-Q4_K_M.gguf -ngl 999 -c 130000 --flash-attn on --temp 0.6 --top-p 0.95 --top-k 20 --threads 12
+    cmd: ${{llama}} -m {_BASE}/Ornith-1.5-35B-Q4_K_M.gguf -ngl 999 -c 130000 --flash-attn on --temp 0.6 --top-p 0.95 --top-k 20 --threads 12 --batch-size 2048 --ubatch-size 128
     env: ["CUDA_VISIBLE_DEVICES=0", "CUDA_DEVICE_ORDER=PCI_BUS_ID"]
   vision:
-    cmd: ${{llama}} -m {_BASE}/Qwen3-VL-32B-Instruct-Q4_K_M.gguf -ngl 999 -c 8192 --mmproj {_BASE}/Qwen3-VL-32B-Instruct-mmproj-BF16.gguf
+    cmd: ${{llama}} -m {_BASE}/Qwen3.8-27B-UD-Q4_K_XL-vision.gguf -ngl 999 -c 8192 --mmproj {_BASE}/Qwen3.8-27B-mmproj-BF16.gguf
     env: ["CUDA_VISIBLE_DEVICES=0", "CUDA_DEVICE_ORDER=PCI_BUS_ID"]
   dispatcher:
     cmd: ${{llama}} -m {_BASE}/Hammer2.1-1.5b-Q4_K_M.gguf -ngl 999 -c 4096 --temp 0

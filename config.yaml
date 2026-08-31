@@ -24,18 +24,18 @@ models:
   - name: chat-default
     class: general
     # 2026-08-23: the former 262144 setting fails at boot when the documented
-    # MTP speculative path allocates its second KV context (CUDA OOM). 131072
-    # boots with the complete production flag set. Do not restore 262K unless
-    # MTP is removed or a capacity test proves it deployable.
-    ctx: 131072
+    # MTP speculative path allocates its second KV context (CUDA OOM). 90000
+    # is the currently validated production ceiling with the complete MTP flag set.
+    # 2026-08-24 MTP throughput winner: 90K context, separate official MTP
+    # sidecar, n-max 4, q8 KV, ubatch 256; isolated peak ~77 tok/s.
+    ctx: 90000
     gpu: 0
     tool_call: native
     # 2026-08-21: switched from Qwen3.6-35B-A3B to Qwen3.8-27B-UD-Q4_K_XL.
-    # Unlike Qwen3.6, thinking is wanted here (reasoning_effort:medium via
-    # chat-template-kwargs, capped by reasoning-budget) rather than suppressed
-    # -- so thinking:true / reasoning_off:false. Native MTP spec-decoding
+    # Normal chat and coding-agent turns keep server-side reasoning off;
+    # deliberate thinking uses the explicit reasoner alias below. Native MTP
     # (checkpoint has qwen35.nextn_predict_layers=1 baked in, no separate
-    # draft model needed). q4_1 KV and a 131072-token context are the current
+    # draft model needed). q8_0 KV and a 90000-token context are the current
     # deployable MTP configuration on the 3090. Sampler values
     # (temp/top-p/top-k/min-p) are Unsloth's
     # published Qwen3.8 "Thinking Mode" recommendation -- an earlier
@@ -53,35 +53,46 @@ models:
     enabled: true
     file: "/home/john/llm-stack/models/gguf/Qwen3.8-27B-UD-Q4_K_XL.gguf"
     quant: Q4_K_XL
-    mmproj: null
+    mmproj: "/home/john/llm-stack/models/gguf/Qwen3.8-27B-mmproj-BF16.gguf"
     resident: true
     ttl_s: 0
     extra_flags:
       - "--reasoning"
       - "on"
-      - "--reasoning-preserve"
-      - "--chat-template-kwargs"
-      - '''{"reasoning_effort":"medium"}'''
-      - "--reasoning-budget"
-      - "5000"
+      - "--model-draft"
+      - "/home/john/llm-stack/models/gguf/mtp-Qwen3.8-27B-Q4_0.gguf"
       - "--spec-type"
-      - "ngram-mod,draft-mtp"
+      - "draft-mtp"
       - "--spec-draft-n-max"
-      - "2"
+      - "4"
+      - "--spec-draft-type-k"
+      - "q8_0"
+      - "--spec-draft-type-v"
+      - "q8_0"
       - "--cache-type-k"
-      - "q4_1"
+      - "q8_0"
       - "--cache-type-v"
-      - "q4_1"
+      - "q8_0"
       - "--flash-attn"
       - "on"
       - "--temp"
-      - "1.0"
+      - "0.0"
       - "--top-p"
-      - "0.95"
-      - "--top-k"
-      - "20"
+      - "1.0"
       - "--min-p"
       - "0.0"
+      - "--presence-penalty"
+      - "0.0"
+      - "--frequency-penalty"
+      - "0.0"
+      - "--batch-size"
+      - "2048"
+      - "--ubatch-size"
+      - "256"
+      - "--cache-reuse"
+      - "256"
+      - "--parallel"
+      - "1"
   - name: reasoner
     # Same blob as chat-default, thinking enabled at the request layer —
     # not a separate swap entry (PLAN.md §4.1). 2026-08-21: follows
@@ -98,7 +109,7 @@ models:
     enabled: true
     file: "/home/john/llm-stack/models/gguf/Qwen3.8-27B-UD-Q4_K_XL.gguf"
     quant: Q4_K_XL
-    mmproj: null
+    mmproj: "/home/john/llm-stack/models/gguf/Qwen3.8-27B-mmproj-BF16.gguf"
     resident: false
     ttl_s: null
     extra_flags: []
@@ -123,7 +134,7 @@ models:
     # allocates its second KV context; 131072 boots and decodes at 67.5
     # tok/s on the production MTP settings. Keep the validated value until a
     # long-prompt throughput sweep establishes a higher safe operating point.
-    ctx: 131072
+    ctx: 90000
     gpu: 0
     tool_call: native
     # 2026-08-21: switched to Qwen3.8-27B (same weights as chat-default) per
@@ -144,7 +155,7 @@ models:
     enabled: true
     file: "/home/john/llm-stack/models/gguf/Qwen3.8-27B-UD-Q4_K_XL-coder.gguf"
     quant: Q4_K_XL
-    mmproj: null
+    mmproj: "/home/john/llm-stack/models/gguf/Qwen3.8-27B-mmproj-BF16.gguf"
     resident: false
     ttl_s: null
     extra_flags:
@@ -155,24 +166,40 @@ models:
       - '''{"reasoning_effort":"medium"}'''
       - "--reasoning-budget"
       - "5000"
+      - "--model-draft"
+      - "/home/john/llm-stack/models/gguf/mtp-Qwen3.8-27B-Q4_0.gguf"
       - "--spec-type"
-      - "ngram-mod,draft-mtp"
+      - "draft-mtp"
       - "--spec-draft-n-max"
-      - "2"
+      - "4"
+      - "--spec-draft-type-k"
+      - "q8_0"
+      - "--spec-draft-type-v"
+      - "q8_0"
       - "--cache-type-k"
-      - "q4_1"
+      - "q8_0"
       - "--cache-type-v"
-      - "q4_1"
+      - "q8_0"
       - "--flash-attn"
       - "on"
       - "--temp"
-      - "1.0"
+      - "0.0"
       - "--top-p"
-      - "0.95"
-      - "--top-k"
-      - "20"
+      - "1.0"
       - "--min-p"
       - "0.0"
+      - "--presence-penalty"
+      - "0.0"
+      - "--frequency-penalty"
+      - "0.0"
+      - "--batch-size"
+      - "2048"
+      - "--ubatch-size"
+      - "256"
+      - "--cache-reuse"
+      - "256"
+      - "--parallel"
+      - "1"
   - name: coder-small
     class: coding
     # 2026-08-23 isolated GPU0 capacity/throughput sweep: this GGUF's native
@@ -205,15 +232,20 @@ models:
     # entry for full method/numbers. tool_call untested for this model
     # family — left at "weak" until an eval_router-style pass confirms
     # native structured tool_calls.
-    ctx: 130000
+    ctx: 90000
     gpu: 0
     tool_call: weak
     # Same thinking-model caveat as the other Qwen3-family entries: an
     # under-budgeted max_tokens burns the whole budget on reasoning_content
     # and returns empty content with finish_reason "length".
+    # 2026-08-24 optimization: b2048/ub128 was the best isolated coder-alt
+    # shape; ub512 and b4096 were slower, while 160K context cost VRAM and
+    # throughput without improving the role's usable interactive behavior.
+    # Pi connects directly to the OpenAI-compatible endpoint, so enable
+    # llama.cpp reasoning at server startup as well as per-request in the app.
     thinking: true
     reasoning_off: false
-    max_tokens: 8192
+    max_tokens: 32768
     enabled: true
     file: "/home/john/llm-stack/models/gguf/Ornith-1.5-35B-Q4_K_M.gguf"
     quant: Q4_K_M
@@ -221,6 +253,8 @@ models:
     resident: false
     ttl_s: null
     extra_flags:
+      - "--reasoning"
+      - "on"
       - "--flash-attn"
       - "on"
       - "--temp"
@@ -231,6 +265,10 @@ models:
       - "20"
       - "--threads"
       - "12"
+      - "--batch-size"
+      - "2048"
+      - "--ubatch-size"
+      - "128"
   - name: vision
     class: vision
     ctx: 8192
@@ -240,9 +278,12 @@ models:
     reasoning_off: false
     max_tokens: 2048
     enabled: true
-    file: "/home/john/llm-stack/models/gguf/Qwen3-VL-32B-Instruct-Q4_K_M.gguf"
-    quant: Q4_K_M
-    mmproj: "/home/john/llm-stack/models/gguf/Qwen3-VL-32B-Instruct-mmproj-BF16.gguf"
+    # Qwen3.8-27B is a native vision-language model. Keep a symlinked file
+    # path so swapgen preserves this as a distinct, addressable vision alias
+    # instead of deduplicating it with chat-default/coder on GPU0.
+    file: "/home/john/llm-stack/models/gguf/Qwen3.8-27B-UD-Q4_K_XL-vision.gguf"
+    quant: Q4_K_XL
+    mmproj: "/home/john/llm-stack/models/gguf/Qwen3.8-27B-mmproj-BF16.gguf"
     resident: false
     ttl_s: null
     extra_flags: []
@@ -430,6 +471,8 @@ routing:
   rules:
     - keywords: ["write code", "stack trace"]
       intent: code_task
+    - keywords: ["think step by step"]
+      intent: reasoning_task
   attachments:
     image: vision_task
     code_file: code_task

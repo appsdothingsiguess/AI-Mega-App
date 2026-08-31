@@ -9,6 +9,7 @@ Usage:
   python scripts/model_state.py
   python scripts/model_state.py --json
   python scripts/model_state.py --base-url http://127.0.0.1:8080/v1
+  python scripts/model_state.py --qwen36-url http://127.0.0.1:5807/v1
 
 Replaces ~3 manual calls with one compact table.
 """
@@ -104,24 +105,32 @@ def resolve_base_url(cli: str | None) -> str:
         return "http://127.0.0.1:8080/v1"
 
 
-def fmt_table(models_data, gpus, procs) -> str:
+def _models_markdown(title: str, models_data: dict | None) -> list[str]:
+    lines = [f"## {title}"]
+    if isinstance(models_data, dict) and "_error" in models_data:
+        lines.append(f"_Error fetching {models_data.get('_url','')}: {models_data['_error']}_")
+    elif isinstance(models_data, dict) and "data" in models_data:
+        lines.extend(["| model | status |", "|-------|--------|"])
+        for model in sorted(models_data["data"], key=lambda item: item.get("id", "")):
+            # llama-swap adds status.value; llama-server's native /v1/models
+            # response only returns a model from a running server, so it is
+            # loaded even though the native response has no status field.
+            status = model.get("status", {}).get("value", "loaded")
+            lines.append(f"| `{model.get('id', '?')}` | {status} |")
+    else:
+        lines.extend(["```json", json.dumps(models_data, indent=2), "```"])
+    lines.append("")
+    return lines
+
+
+def fmt_table(models_data, gpus, procs, extra_models: list[tuple[str, dict | None]] | None = None) -> str:
     lines: list[str] = []
     lines.append("# Model State")
     lines.append("")
 
-    lines.append("## llama-swap /v1/models")
-    if isinstance(models_data, dict) and "_error" in models_data:
-        lines.append(f"_Error fetching {models_data.get('_url','')}: {models_data['_error']}_")
-    elif isinstance(models_data, dict) and "data" in models_data:
-        lines.append("| model | status |")
-        lines.append("|-------|--------|")
-        for m in sorted(models_data["data"], key=lambda x: x.get("id","")):
-            lines.append(f"| `{m.get('id','?')}` | {m.get('status',{}).get('value','?')} |")
-    else:
-        lines.append("```json")
-        lines.append(json.dumps(models_data, indent=2))
-        lines.append("```")
-    lines.append("")
+    lines.extend(_models_markdown("llama-swap /v1/models", models_data))
+    for label, relay_models in extra_models or []:
+        lines.extend(_models_markdown(f"{label} /v1/models", relay_models))
 
     lines.append("## nvidia-smi")
     if isinstance(gpus, dict) and "_error" in gpus:
@@ -151,6 +160,11 @@ def fmt_table(models_data, gpus, procs) -> str:
 def main() -> int:
     ap = argparse.ArgumentParser(description="Compact GPU + llama-swap model state")
     ap.add_argument("--base-url", default=None, help="llama-swap base URL (default from config.yaml)")
+    ap.add_argument(
+        "--qwen36-url",
+        default=None,
+        help="Qwen3.6 worker/relay base URL, e.g. http://127.0.0.1:5807/v1 or :8082/v1",
+    )
     ap.add_argument("--json", action="store_true", help="Emit raw JSON instead of markdown table")
     ap.add_argument("--out", type=Path, default=None, help="Write output to file instead of stdout")
     args = ap.parse_args()
@@ -159,13 +173,31 @@ def main() -> int:
     models_data = fetch_models(base_url)
     gpus = nvidia_smi()
     procs = llama_processes()
+    qwen36_url = args.qwen36_url
+    if qwen36_url is None and any("--port 5807" in process.get("line", "") for process in procs):
+        # The relay deliberately rejects requests from ailab itself. Query its
+        # local upstream when the isolated worker is running, but label the
+        # result as the corresponding worker/relay route below.
+        qwen36_url = "http://127.0.0.1:5807/v1"
+    extra_models = []
+    if qwen36_url:
+        extra_models.append(("Qwen3.6 worker/relay", fetch_models(qwen36_url)))
 
     if args.json:
-        payload = {"base_url": base_url, "models": models_data, "gpus": gpus, "processes": procs}
+        payload = {
+            "base_url": base_url,
+            "models": models_data,
+            "qwen36_url": qwen36_url,
+            "qwen36_models": extra_models[0][1] if extra_models else None,
+            "gpus": gpus,
+            "processes": procs,
+        }
         text = json.dumps(payload, indent=2)
     else:
-        text = fmt_table(models_data, gpus, procs)
+        text = fmt_table(models_data, gpus, procs, extra_models)
         text += f"\n> base_url: `{base_url}`\n"
+        if qwen36_url:
+            text += f"> qwen36_url: `{qwen36_url}`\n"
 
     if args.out:
         args.out.parent.mkdir(parents=True, exist_ok=True)
