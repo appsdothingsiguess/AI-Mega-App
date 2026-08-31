@@ -7,6 +7,52 @@ history, not live deployment instructions; use `AGENTS.md` and
 `docs/AGENT_CONTEXT_MEGA.md` for the current service/roster truth. Delete or
 trim entries once they're stale.
 
+## 2026-08-31 — Pi.dev pivot: coding-agent platform built on Pi
+
+The working direction has changed: Pi.dev is now the preferred base for the
+all-in-one coding-agent experience that originally motivated AI Mega App.
+Pi replaces the Claude Dev/Cursor/OpenCode harness layer because it already
+provides a capable general chat and coding loop, sub-agent support, model
+profiles, and an extension surface. Do not rebuild that agent loop in the
+AI-Mega-App web/backend unless a concrete missing capability requires it.
+
+AI Mega App remains valuable as the local inference and operations layer:
+llama-swap/model roster, model benchmarking, the Windows-to-Ubuntu relay,
+capture diagnostics, and any proven search/browser or routing infrastructure.
+The likely near-term topology is Windows Pi → `pi-capture-relay` → Ubuntu
+llama-swap. Smart routing should initially be expressed through Pi model
+profiles/sub-agents and explicit task selection; only move routing back into
+the backend when measurements show Pi configuration is insufficient.
+
+Extension plan, in priority order:
+
+1. Keep `pi-goosedump` as the first memory/compaction extension. It already
+   demonstrated useful context handling, but its stale-context crash remains
+   an important lifecycle test: delayed callbacks must not use a `ctx` after
+   session replacement, reload, or fork.
+2. Keep `pi-mcp-extension` as the MCP bridge. Avoid installing duplicate MCP
+   clients or `context-mode` until compatibility is tested; `context-mode`
+   overlaps compaction/tool-output handling and its install previously hit a
+   locked `goosedump.exe` on Windows.
+3. Add web access in two layers. Use a lightweight direct `web_search` /
+   `web_fetch` extension for ordinary public documentation and current facts;
+   use BrowserOS MCP on the Windows host for JavaScript-heavy pages,
+   authentication, screenshots, and interactive browser tasks. BrowserOS is
+   not required on the headless Ubuntu GPU box. Pi should receive concise,
+   source-linked results rather than raw browser/tool dumps.
+4. Only then add custom extensions for missing routing, search fallback,
+   result normalization, or context policies. Each extension must have a
+   narrow contract, bounded output, timeout/error handling, and a standalone
+   read-only smoke test.
+
+Validation before retiring the old harness concept: repeat long coding tasks
+through Pi with sub-agents and `coder-alt`; force/reproduce compaction; test
+large tool outputs and restart/session replacement; verify BrowserOS MCP
+round-trip; compare direct search/fetch against BrowserOS extraction; and
+confirm that failures degrade to a useful answer instead of terminating Pi.
+Keep the old AI-Mega-App orchestration/UI work as reference and preserve
+useful infrastructure until these tests pass in real coding sessions.
+
 ## 2026-08-31 — Relay lifecycle restored; Qwen3.6 manual warmup
 
 The two capture relays are independent enabled user services, not members of a
