@@ -1,0 +1,17 @@
+[Unit]
+Description=Pi durable-memory storage service
+After=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/home/john/AI-Mega-App/pi-memory-service
+EnvironmentFile=/home/john/.config/pi-memory-service.env
+ExecStart=/home/john/AI-Mega-App/.venv/bin/python -m uvicorn app:create_app --factory --host 192.168.0.89 --port 8091 --no-proxy-headers
+Restart=on-failure
+RestartSec=2
+NoNewPrivileges=true
+PrivateTmp=true
+UMask=0077
+
+[Install]
+WantedBy=default.target
