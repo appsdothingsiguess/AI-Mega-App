@@ -6,11 +6,13 @@
 ## What Pi already covers (no plugin needed)
 
 - Agent loop, tool execution (read/write/edit/bash)
-- Session management, branching, compaction
+- Session management, branching, compaction (via **goosedump**: https://pi.dev/packages/pi-goosedump — may need modification for our use case)
 - Provider management (including llama.cpp router mode natively)
 - Slash commands, keyboard shortcuts
 - Custom tools, UI interaction
 - Model selection/switching per session
+- **Web access via BrowserOS MCP** — already done, working
+- **MCP bridge** via pi-mcp-extension — already done
 
 ## What AI Mega App has that Pi doesn't
 
@@ -138,19 +140,9 @@ C. **Pi-native approach — thinking level as routing proxy:** Instead of switch
 
 ---
 
-### 6. `pi-web-tools` — Web search and fetch
+### ~~6. `pi-web-tools`~~ — DONE (BrowserOS MCP)
 
-**What:** Tools for web search and page fetching, layered: lightweight direct fetch for public docs, BrowserOS MCP for JS-heavy/auth pages.
-
-**Why:** Pi has no built-in web access. The HANDOFF.md extension plan (item 3) identifies this as priority after memory and MCP bridge. Two layers avoid over-relying on BrowserOS for simple lookups.
-
-**Design:**
-- `web_search` tool: query → search API (SearXNG, Brave, or similar) → ranked results
-- `web_fetch` tool: URL → clean text extraction (readability algorithm)
-- Both return concise, source-linked results (not raw HTML dumps)
-- BrowserOS escalation path for pages that need JS rendering or auth
-
-**Complexity:** Medium. Search API integration + content extraction.
+BrowserOS MCP is already working. No plugin needed.
 
 ---
 
@@ -228,12 +220,42 @@ The web UI, FastAPI backend, chat orchestrator, and frontend TypeScript are reti
 
 1. **pi-llama-swap** — must work before anything else; validates the Pi→llama-swap bridge
 2. **pi-smart-router** — rules-based first; makes the system usable without manual `/model`
-3. **pi-web-tools** — high daily utility; unblocks research tasks
+3. **GPU1 sub-agent slot** — re-measure coder-small on GPU1 w/o utility-gpu; if goosedump owns compaction, free that slot
 4. **pi-memory** — high value but high complexity; start with explicit "remember X" before auto-extraction
 5. **pi-debug-trace** — operational visibility; important for debugging model/routing issues
 6. **pi-bench** — convenience; not blocking daily use
 7. **pi-relay-dashboard** — niche; only matters during relay debugging
 8. **pi-project-context** — Pi's existing context files may be sufficient; evaluate gap first
+
+~~pi-web-tools~~ — done (BrowserOS MCP)
+
+## Critical constraint: sub-agents require a second model slot
+
+Pi doesn't ship sub-agents — it's by design ("Pi ships with powerful defaults but skips features like sub agents and plan mode. Instead, you can ask pi to build what you want or install a third party pi package"). A sub-agent extension needs a second model to run alongside the primary model on GPU0.
+
+**The problem:** GPU1 (3070, 8 GiB) currently hosts dispatcher (~1.3 GiB) + utility-gpu (~6.2 GiB) as residents, leaving ~590 MiB free. No room for a third model. GPU0 runs one big model at a time via llama-swap's swap group. So there's no concurrent second model slot for sub-agents.
+
+**Options:**
+
+A. **Kick utility-gpu off GPU1, load a small Qwen model instead.** utility-gpu is the summarizer fast path (~14x CPU decode). Losing it means summaries fall back to CPU utility (~5 tok/s decode). If goosedump handles compaction client-side (Pi's own model does the summarization), we may not need utility-gpu at all — it was built for AI Mega App's server-side background summarization which is being retired. This frees ~5 GiB on GPU1 for a small coding/agent model alongside dispatcher.
+
+B. **Use coder-small (Qwen2.5-Coder-7B) on GPU1.** At Q4 it's ~4-5 GiB. Fits alongside dispatcher (~1.3 GiB) on the 8 GiB 3070. But this contradicts the current placement (coder-small is on GPU0's swap group) and the measured constraint that "coder-small must stay on GPU0, never GPU1" (from the co-residency testing). That constraint was about coder-small + dispatcher + utility-gpu all on GPU1 — without utility-gpu, it might fit. **Needs re-measurement.**
+
+C. **Use an even smaller model.** Qwen3-4B, Qwen3-1.7B, or a small tool-calling model. ~2-3 GiB, easily fits on GPU1 alongside dispatcher. Lower quality but sufficient for sub-agent tasks like file search, simple edits, test running.
+
+D. **CPU-only sub-agent model.** The box has 64 GB RAM and 32 cores. A Q4 7B model runs at ~5-15 tok/s on CPU with 8 threads. Slow but functional for background tasks that don't need interactive speed.
+
+E. **Use the primary model via llama-swap.** Sub-agent calls go to the same model the main agent is using. No concurrent execution but serialized sub-agent turns work if the sub-agent tasks are short. This is the zero-hardware-cost option.
+
+**Recommendation:** Option A is most promising. If goosedump owns compaction, utility-gpu's purpose (server-side background summarization) is retired. Free that GPU1 slot for a small sub-agent model. Re-measure coder-small on GPU1 alongside dispatcher-only. If it fits, that's 112 tok/s coding capability available as a sub-agent while the main model runs on GPU0.
+
+**What sub-agents would do:**
+- Parallel file search/analysis (grep + read + summarize)
+- Run tests in background while main agent continues
+- Code review of a diff while main agent works on next task
+- RAG retrieval + context assembly
+
+This is the key unlock for making Pi competitive with Claude Code's sub-agent architecture on local hardware.
 
 ## Open questions
 
@@ -241,4 +263,6 @@ The web UI, FastAPI backend, chat orchestrator, and frontend TypeScript are reti
 2. **Where does the classifier model live?** If Pi talks to llama-swap, the classifier is already running as a CPU resident. The router extension just needs to call it via the llama-swap endpoint. But should we use Pi's own model for classification instead (avoid an extra HTTP call)?
 3. **Memory storage location?** `~/.pi/agent/memory.db` (global) vs `.pi/memory.db` (per-project) vs a central SQLite on ailab (survives machine changes). Probably global + per-project, like Pi's own extension locations.
 4. **Do we need the AI Mega App web UI at all?** Pi's TUI covers coding. But a web UI for non-terminal users (phone, tablet) or for sharing sessions could still have value. Pi's experimental RPC mode + a web frontend is the path if needed.
-5. **BrowserOS integration:** Should this be a separate plugin or part of pi-web-tools? Separate is cleaner (BrowserOS is Windows-only, heavy dependency) but means two plugins for "web access."
+5. ~~**BrowserOS integration**~~ — done.
+6. **Goosedump modifications:** What specifically needs changing? If it handles compaction well enough, utility-gpu can be retired from the roster, freeing GPU1 for a sub-agent model. Need to test goosedump's behavior with local models (quality, speed, does it work with llama-swap's models or only cloud providers?).
+7. **Sub-agent architecture:** Pi doesn't have sub-agents natively. Building a sub-agent extension requires: a second model slot (GPU1), a way to spawn parallel agent loops, and a protocol for the main agent to delegate tasks. This is likely the hardest plugin to build but the highest-impact for coding productivity.
