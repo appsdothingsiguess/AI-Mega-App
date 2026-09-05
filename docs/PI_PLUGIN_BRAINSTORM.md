@@ -79,33 +79,30 @@ C. **Pi-native approach — thinking level as routing proxy:** Instead of switch
 
 ---
 
-### 3. `pi-memory` — Hermes-style persistent fact memory (cross-session only)
+### 3. ~~`pi-memory`~~ — REDUNDANT (goosedump already has durable memory)
 
-**What:** An extension that extracts, stores, and retrieves durable facts across sessions.
+**Status: NOT NEEDED as a separate plugin.** Source inspection of goosedump v0.12.62 reveals it already has a full durable memory system built in:
 
-**Why:** Goosedump already owns in-session compaction — it summarizes the active conversation so it fits in context. But goosedump deliberately discards knowledge that's outside the current conversation's working set. `pi-memory` is the complementary layer: it persists facts, preferences, and decisions that should survive session boundaries and be retrievable in future sessions. The two don't compete: goosedump compresses the live session, pi-memory preserves durable knowledge across sessions.
+**What goosedump already provides:**
+- `goose_remember` — extracts facts from completed exchanges into persistent storage (runs via native binary, not an LLM call through llama-swap)
+- `goose_recall` — retrieves memories by query, filterable by type, project-scoped or global, with limit/history options
+- `goose_forget` — removes specific memory entries
+- `goose_memory_status` — shows storage health and type counts
+- `/goose-forget` and `/goose-memory-status` slash commands
+- Memory types: `decision`, `fact`, `preference`, `procedure`, `lesson` (with `active`/`superseded` status)
+- Project-scoped memory (per `ctx.cwd`) plus cross-project queries via `allProjects` flag
+- Memory is opt-in via `enableMemory` setting (default: false)
+- Memory extraction is coordinated with compaction via `InferenceCoordinator` — remember and compact don't run simultaneously
 
-**Design:**
-- `agent_end` / `agent_settled` event hooks to extract facts from completed exchanges
-- SQLite store in `~/.pi/agent/memory.db` (global) + project-local `.pi/memory.db`
-- Fact extraction via the utility model (small, CPU-resident) or the active model itself
-- `before_agent_start` hook injects relevant memories into system prompt
-- Retrieval: keyword match (FTS5) + optional vector similarity if we add embedding
-- `/memory` command: list, search, forget, export
+**What goosedump's memory does NOT cover (potential extension points if needed):**
+- Auto-injection of relevant memories into `before_agent_start` system prompt (goosedump registers the tool routing policy, but doesn't auto-recall relevant memories per prompt)
+- Vector similarity search (goosedump uses its native binary's matching, not Qdrant)
+- Memory import/export between machines
+- Memory sharing across users
 
-**Memory types (from AI Mega App's design):**
-- User preferences ("prefers snake_case", "uses pytest not unittest")
-- Project facts ("uses FastAPI", "SQLite for storage", "deployed on ailab")
-- Decisions ("chose Qdrant over sqlite-vec because p95 latency")
-- Corrections ("the model name is Qwen3.8, not Qwen3.6")
+**Recommendation:** Enable goosedump's memory (`enableMemory: true`), test it with real workflows, and evaluate the gap before building anything. If auto-injection of relevant memories into context is needed, that's a thin wrapper around `goose_recall` in a `before_agent_start` hook — not a full plugin.
 
-**Lifecycle warning (from goosedump's own bug):** Goosedump hit a stale-context crash where delayed callbacks used a `ctx` after session replacement/reload/fork. pi-memory must follow the same defensive pattern: acquire all references fresh in `session_start`, clean up in `session_shutdown`, never hold a `ctx` or `sessionManager` reference across session boundaries. This is Pi's documented footgun (see extensions.md "Session replacement lifecycle and footguns").
-
-**Risk:** Extraction quality depends heavily on the model doing the extraction. The AI Mega App summarizer had lossy problems (dropped numbers, collapsed indexed lists). Start conservative: extract only explicit user statements ("remember that...", "note that..."), not implicit facts.
-
-**Scope boundary with goosedump:** pi-memory does NOT touch compaction. It does not hook `session_before_compact`. It reads completed conversations, not in-progress ones. If goosedump evolves to extract facts during compaction, pi-memory should consume those rather than duplicate the extraction.
-
-**Complexity:** High. This is a real feature, not just plumbing.
+**Key finding for GPU1:** Goosedump's compaction and memory both use a native binary, NOT an LLM call through llama-swap. This confirms utility-gpu's entire purpose (server-side background summarization for AI Mega App) is retired. That frees ~5 GiB on GPU1.
 
 ---
 
@@ -220,8 +217,8 @@ The web UI, FastAPI backend, chat orchestrator, and frontend TypeScript are reti
 
 1. **pi-llama-swap** — must work before anything else; validates the Pi→llama-swap bridge
 2. **pi-smart-router** — rules-based first; makes the system usable without manual `/model`
-3. **GPU1 sub-agent slot** — re-measure coder-small on GPU1 w/o utility-gpu; if goosedump owns compaction, free that slot
-4. **pi-memory** — high value but high complexity; start with explicit "remember X" before auto-extraction
+3. **GPU1 sub-agent slot** — retire utility-gpu (goosedump uses native binary, not llama-swap for compaction/memory), re-measure coder-small on GPU1 w/ dispatcher only
+4. **goosedump tuning** — enable `enableMemory: true`, test with real workflows, evaluate auto-injection gap
 5. **pi-debug-trace** — operational visibility; important for debugging model/routing issues
 6. **pi-bench** — convenience; not blocking daily use
 7. **pi-relay-dashboard** — niche; only matters during relay debugging
@@ -264,5 +261,5 @@ This is the key unlock for making Pi competitive with Claude Code's sub-agent ar
 3. **Memory storage location?** `~/.pi/agent/memory.db` (global) vs `.pi/memory.db` (per-project) vs a central SQLite on ailab (survives machine changes). Probably global + per-project, like Pi's own extension locations.
 4. **Do we need the AI Mega App web UI at all?** Pi's TUI covers coding. But a web UI for non-terminal users (phone, tablet) or for sharing sessions could still have value. Pi's experimental RPC mode + a web frontend is the path if needed.
 5. ~~**BrowserOS integration**~~ — done.
-6. **Goosedump modifications:** What specifically needs changing? If it handles compaction well enough, utility-gpu can be retired from the roster, freeing GPU1 for a sub-agent model. Need to test goosedump's behavior with local models (quality, speed, does it work with llama-swap's models or only cloud providers?).
+6. **Goosedump modifications:** Source inspection shows goosedump uses a native binary for both compaction and memory — it does NOT call an LLM through llama-swap at all. This means: (a) utility-gpu can be retired immediately, freeing ~5 GiB on GPU1; (b) compaction/memory quality depends on the native binary's built-in model, not our local models; (c) the open question is whether goosedump's native compaction quality is good enough for our use case, or if we need to modify it to use llama-swap models instead. Test with real sessions before deciding.
 7. **Sub-agent architecture:** Pi doesn't have sub-agents natively. Building a sub-agent extension requires: a second model slot (GPU1), a way to spawn parallel agent loops, and a protocol for the main agent to delegate tasks. This is likely the hardest plugin to build but the highest-impact for coding productivity.
