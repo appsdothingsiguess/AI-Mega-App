@@ -3,14 +3,37 @@
 **Date:** 2026-09-05
 **Context:** Pi replaces the AI Mega App agent/UI layer. The services layer survives: llama-swap, model roster, GPU management, relay infrastructure, benchmarking. This doc identifies what Pi plugins/extensions to build to bridge Pi to those services and add capabilities Pi lacks.
 
+## Pick the cheapest tier that works (added 2026-09-05)
+
+Pi has four customization tiers; from `usage.md`: *"Pi keeps the core small and pushes workflow-specific behavior into extensions, skills, prompt templates, and packages."* Reach for them in this order — an **extension** is only justified by event hooks, custom tools, or custom TUI:
+
+1. **Prompt template** (`~/.pi/agent/prompts/*.md`) — reusable prompts, `$1`/`$@`/`${1:-default}`, `argument-hint` autocomplete. Pi's own repo uses `/wr`, `/cl`, `/pr` this way. Right tier for: code review, PR review, changelog audit.
+2. **Skill** (`SKILL.md` + scripts, progressive disclosure) — right tier for: design (see below), test runner, doc generation, worktree/git discipline.
+3. **Extension** (TypeScript, event hooks) — right tier for: llama-swap group-aware provider, thinking-level router, sub-agents.
+4. **Package** — bundle any of the above for distribution.
+
+Several brainstorm entries below were originally specced one tier too high. Only `pi-llama-swap`, the thinking-level router, and sub-agents genuinely need extension tier.
+
+### Design capability → skills, not a plugin (open-design)
+
+A "Claude Design mimic" does NOT need a frontier model or an extension — Claude Code's design capabilities are **skills** (markdown instruction files), which Pi loads natively. [`nexu-io/open-design`](https://github.com/nexu-io/open-design) is an **Apache-2.0** ("open-source Claude Design alternative") repo containing **162 `SKILL.md` skills** + 154 brand design-system packages. Verified 2026-09-05: all 162 pass Pi's frontmatter rules (valid name + description); only 4 of 162 reference the daemon/MCP. Adopt as one settings line, skip the Electron/daemon/MCP layer:
+
+```json
+{ "skills": ["/path/to/open-design/skills"] }
+```
+
+Caveats: (1) skill *quality* is model-bound — output depends on Qwen3.8's design reasoning, so test a few before adopting all 162; (2) `artifacts-builder`-style skills that target claude.ai's Artifact tool won't work in Pi. Same mechanism works for `~/.claude/skills` (docx/pdf/pptx/xlsx are portable; those are Proprietary-licensed so local-use only, not bundling).
+
 ## What Pi already covers (no plugin needed)
 
 - Agent loop, tool execution (read/write/edit/bash)
-- Session management, branching, compaction (via **goosedump**: https://pi.dev/packages/pi-goosedump — may need modification for our use case)
+- Session management, branching, **compaction + durable memory (via goosedump — already has remember/recall/forget, 5 typed claims; makes `pi-memory` redundant, see §3)**
 - Provider management (including llama.cpp router mode natively)
-- Slash commands, keyboard shortcuts
+- Slash commands, keyboard shortcuts, **prompt templates, skills**
 - Custom tools, UI interaction
-- Model selection/switching per session
+- Model selection/switching per session (`--models` + Ctrl+P, `/scoped-models`), **`/thinking` levels (off→max, free — no swap)**
+- **Context files** — walks up dirs loading `AGENTS.md`/`CLAUDE.md` + `.pi/SYSTEM.md` + `APPEND_SYSTEM.md` (makes `pi-project-context` §8 largely redundant)
+- **Token/cost/context usage** shown in footer; `/session` totals; `--mode json` structured event stream (weakens the `pi-debug-trace` §7 case)
 - **Web access via BrowserOS MCP** — already done, working
 - **MCP bridge** via pi-mcp-extension — already done
 
@@ -56,7 +79,11 @@
 
 **What:** An extension that intercepts `before_agent_start` or `input` events and selects the best model from the roster based on the prompt content.
 
-**Why:** Pi's model selection is manual (`/model` or Ctrl+L). AI Mega App's router automatically picks `chat-default` vs `coder` vs `reasoner` vs `vision` based on the prompt. This is the single biggest UX gap — users shouldn't have to manually switch models for different tasks.
+**Why:** Pi's model selection is manual (`/model` or Ctrl+L). AI Mega App's router automatically picks `chat-default` vs `coder` vs `reasoner` vs `vision` based on the prompt.
+
+**Reassessment (2026-09-05) — mostly not worth building:** That router was built for a *chat* app where consecutive prompts genuinely varied (chit-chat → code → reasoning). Pi is a *coding agent*: you're in a repo, on a task, and nearly every turn is a code task. The classification distribution is close to degenerate, so a 91.76%-accurate classifier solves a problem we no longer have. The cost is worse: GPU0 holds one big model at a time, so every route change between big models is an unload + cold load (`chat-default` cold-loads in **12.47s**, warm 0.67s — Phase-0 `docs/phase0-measurements.md`) and discards the KV cache, forcing a full reprefill of system prompt + `AGENTS.md` + skills + tool history. Auto-routing would make Pi feel *slower* than manual `/model`, because a human switches a few times a day while a classifier switches on prompt phrasing. Pi also already ships `--models` + Ctrl+P cycling and `/scoped-models` for cheap manual switching.
+
+**What survives: option C (thinking-level routing), which is free.** `/thinking` (off→max) changes no weights, triggers no swap, costs nothing. Per the 2026-08-24 finding, reasoning-off cut a matched workflow 205.5s→63.8s (3.2x) — a bigger lever than model selection. Map task shape to thinking level (off for trivial edits, high for debugging, max for architecture) and skip the model-switching classifier entirely.
 
 **Design options:**
 
@@ -66,16 +93,9 @@ B. **Classifier-assisted (later):** Use the `classifier` model (CPU-resident, al
 
 C. **Pi-native approach — thinking level as routing proxy:** Instead of switching models, map task type to thinking level: code tasks get `high` thinking, chit-chat gets `off`, reasoning gets `max`. This works if all tasks route through the same base model (Qwen3.8). Simpler than model switching but loses the coder-small/vision specialization.
 
-**Recommendation:** Start with A (rules), add B when the classifier model is proven stable. C is complementary — use thinking level AND model selection together.
+**Recommendation:** Do NOT build the model-switching classifier (A/B). Build only C — a `before_agent_start` hook that sets thinking level from prompt shape. No swap cost, no classifier model, no KV-cache loss.
 
-**Implementation:**
-- `pi.on("before_agent_start", ...)` inspects prompt text + images
-- Calls `pi.setModel(...)` or `pi.setThinkingLevel(...)` based on classification
-- Records decision in a custom entry for debugging
-- `/route` command to show last routing decision and override
-- Respects manual model override (if user picked a model, don't auto-switch)
-
-**Complexity:** Low for rules, medium for classifier integration.
+**Complexity:** Low (thinking-level only).
 
 ---
 
@@ -217,16 +237,19 @@ The web UI, FastAPI backend, chat orchestrator, and frontend TypeScript are reti
 
 1. **pi-llama-swap** — must work before anything else; validates the Pi→llama-swap bridge
 2. **pi-smart-router** — rules-based first; makes the system usable without manual `/model`
-3. **GPU1 sub-agent slot** — retire utility-gpu (goosedump uses native binary, not llama-swap for compaction/memory), re-measure coder-small on GPU1 w/ dispatcher only
-4. **goosedump tuning** — enable `enableMemory: true`, test with real workflows, evaluate auto-injection gap
-5. **pi-debug-trace** — operational visibility; important for debugging model/routing issues
-6. **pi-bench** — convenience; not blocking daily use
-7. **pi-relay-dashboard** — niche; only matters during relay debugging
-8. **pi-project-context** — Pi's existing context files may be sufficient; evaluate gap first
+3. **Serialized sub-agent (`task` tool)** — extension registering a nested agent loop against the *current GPU0 model*; returns a summary. Zero GPU change, zero swap. Delivers context isolation, the primary sub-agent benefit. Build and measure this BEFORE any GPU1 work.
+4. **Design + doc skills** — point Pi at open-design `skills/` (one settings line); test a few for local-model quality.
+5. **goosedump tuning** — enable `enableMemory: true`, test with real workflows, evaluate auto-injection gap.
+6. **GPU1 worker slot (only if step 3 proves serialization is the bottleneck)** — gate on GGUF size + `bench_server.py`; scope to retrieval/analysis, not code generation (see break-even below).
+7. ~~pi-smart-router~~ → thinking-level hook only (see §2); skip the classifier.
+8. **pi-bench** — convenience; not blocking daily use.
+9. ~~pi-debug-trace~~ / ~~pi-project-context~~ — largely redundant with Pi built-ins (footer/`/session`/`--mode json`; context-file walking). Evaluate the actual gap before building.
 
-~~pi-web-tools~~ — done (BrowserOS MCP)
+~~pi-web-tools~~ — done (BrowserOS MCP). ~~pi-memory~~ — done by goosedump.
 
 ## Critical constraint: sub-agents require a second model slot
+
+> **Superseded 2026-09-05.** See "Reassessment" + "GPU1 model sizing" under §3 above for the current analysis (serialization delivers context isolation with no GPU change; GPU1 is optional and, if used, sized for Qwen3.5-9B on a *fully free* 3070 = 8.00 GiB, not the 590 MiB-free framing below). The options below are kept for history; the VRAM figures predate the 8.00 GiB correction and the hybrid-architecture KV math.
 
 Pi doesn't ship sub-agents — it's by design ("Pi ships with powerful defaults but skips features like sub agents and plan mode. Instead, you can ask pi to build what you want or install a third party pi package"). A sub-agent extension needs a second model to run alongside the primary model on GPU0.
 
@@ -244,15 +267,40 @@ D. **CPU-only sub-agent model.** The box has 64 GB RAM and 32 cores. A Q4 7B mod
 
 E. **Use the primary model via llama-swap.** Sub-agent calls go to the same model the main agent is using. No concurrent execution but serialized sub-agent turns work if the sub-agent tasks are short. This is the zero-hardware-cost option.
 
-**Recommendation:** Option A is most promising. If goosedump owns compaction, utility-gpu's purpose (server-side background summarization) is retired. Free that GPU1 slot for a small sub-agent model. Re-measure coder-small on GPU1 alongside dispatcher-only. If it fits, that's 112 tok/s coding capability available as a sub-agent while the main model runs on GPU0.
+**Reassessment (2026-09-05) — the framing conflated two separable things.** "Sub-agents" and "a concurrent second model" are not the same. The primary benefit of sub-agents is **context isolation** (a worker greps 40 files, returns 3 lines; the main context never sees the other 37), and that benefit needs **no concurrency at all** — a serialized sub-agent hitting the *same already-loaded GPU0 model* delivers it at zero hardware cost and zero swap (option E). So the GPU1 work is optional, not the unlock.
 
-**What sub-agents would do:**
-- Parallel file search/analysis (grep + read + summarize)
-- Run tests in background while main agent continues
-- Code review of a diff while main agent works on next task
-- RAG retrieval + context assembly
+**Break-even math for a DELEGATED (GPU1) coder, supervised by the orchestrator.** Decode is memory-bandwidth-bound; the 112 tok/s coder-small figure was measured on the 3090 (936 GB/s). Scaled to the 3070 (448 GB/s) that's **~54 tok/s** [INFERENCE — needs `bench_server.py` on GPU1 to confirm]. Supervision is not free: the orchestrator (27.7 tok/s measured) *decodes* its review reasoning. Modelling a 2000-token task (orchestrator baseline 72.2s):
 
-This is the key unlock for making Pi competitive with Claude Code's sub-agent architecture on local hardware.
+| coder tok/s | verification | break-even acceptance | max speedup |
+|---|---|---|---|
+| 54 | mechanical (tests/compile, ~0 review tokens) | ~56% | 1.79x |
+| 54 | read-and-judge (~300 review tokens) | ~71% | 1.41x |
+| 112 (GPU0 fantasy) | ~0 | 30% | 3.30x |
+
+**Consequence: supervision cost and savings are the same quantity.** The more carefully the orchestrator reviews, the less you save. Delegated code *generation* is the worst fit — thin margin, expensive supervision. The design only wins where verification is **mechanical** (execute tests / compile), not intellectual (read and judge).
+
+**Better role for a GPU1 worker: retrieval and analysis, not generation.** Grep the repo, read 30 files, return a summary. There the acceptance-rate problem vanishes — the orchestrator consumes a summary it never had to page in; context isolation is pure win with no break-even to clear.
+
+### GPU1 model sizing (Qwen3.5-9B, 2026-09-05)
+
+Qwen3.5-9B (released Feb 2026) is a **hybrid** architecture: 32 layers = 8 full-attention + 24 Gated DeltaNet (linear attention). Only the 8 attention layers hold a growing KV cache (4 KV heads, head_dim 256) → **~32 KiB/token**, ~4.5x better than a dense 8B. This buys context, not throughput.
+
+3070 = **8.00 GiB** (8192 MiB, binary — earlier drafts wrongly used 7.45). Weights est. 5.06 GiB at ~4.83 bpw Q4_K_M (UNVERIFIED — HF blocked from this env; the ~152k vocab may push the real GGUF to 5.4–5.8 GB).
+
+| Config | Context ceiling (q8_0 KV) | Decode (realistic) |
+|---|---|---|
+| dispatcher resident (1.3 GiB) | ~40k tokens | ~48–56 tok/s @ short ctx |
+| **3070 fully free** | **~130k tokens** (65k at fp16) | ~45–53 @ 32k, ~35–41 @ 128k |
+
+Prefill is compute-bound: ~550–1100 tok/s (wide bracket — kernel-dependent). That's the number that matters for a retrieval worker (read 30 files in seconds).
+
+**The real tradeoff:** "fully free" means dispatcher moves off GPU1 *too*. At 32k ctx the worker needs only ~5.6 GiB, so dispatcher can stay and you still get ~40k ctx. The jump 40k→130k costs the dispatcher — only worth it if tasks genuinely need >40k.
+
+**Two cheap gates before any GPU reconfiguration (in order):**
+1. Download the GGUF, `ls -l` — confirms 5.06 vs 5.4–5.8 GiB; this single number decides whether dispatcher stays.
+2. `CUDA_VISIBLE_DEVICES=1 python3 scripts/bench_server.py --label coder-gpu1 --model <gguf> --model-class coder-small --ctx 32768` — confirms real tok/s.
+
+If decode lands ~54, the delegated-generation design is DOA and the retrieval-worker design is the one to build. Leave utility-gpu resident until these gates pass.
 
 ## Open questions
 
