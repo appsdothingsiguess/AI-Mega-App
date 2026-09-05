@@ -77,15 +77,15 @@ C. **Pi-native approach — thinking level as routing proxy:** Instead of switch
 
 ---
 
-### 3. `pi-memory` — Hermes-style persistent fact memory
+### 3. `pi-memory` — Hermes-style persistent fact memory (cross-session only)
 
-**What:** An extension that extracts, stores, and retrieves facts across sessions.
+**What:** An extension that extracts, stores, and retrieves durable facts across sessions.
 
-**Why:** Pi sessions are ephemeral — compaction summarizes but doesn't extract structured facts. AI Mega App's hermes-style memory extracts key facts, preferences, and decisions into a persistent store that survives session boundaries. This is critical for a personal AI that learns about your projects and preferences.
+**Why:** Goosedump already owns in-session compaction — it summarizes the active conversation so it fits in context. But goosedump deliberately discards knowledge that's outside the current conversation's working set. `pi-memory` is the complementary layer: it persists facts, preferences, and decisions that should survive session boundaries and be retrievable in future sessions. The two don't compete: goosedump compresses the live session, pi-memory preserves durable knowledge across sessions.
 
 **Design:**
-- `tool_result` / `agent_end` event hooks to extract facts from conversation
-- SQLite store in `~/.pi/agent/memory.db` (or project-local `.pi/memory.db`)
+- `agent_end` / `agent_settled` event hooks to extract facts from completed exchanges
+- SQLite store in `~/.pi/agent/memory.db` (global) + project-local `.pi/memory.db`
 - Fact extraction via the utility model (small, CPU-resident) or the active model itself
 - `before_agent_start` hook injects relevant memories into system prompt
 - Retrieval: keyword match (FTS5) + optional vector similarity if we add embedding
@@ -97,7 +97,11 @@ C. **Pi-native approach — thinking level as routing proxy:** Instead of switch
 - Decisions ("chose Qdrant over sqlite-vec because p95 latency")
 - Corrections ("the model name is Qwen3.8, not Qwen3.6")
 
+**Lifecycle warning (from goosedump's own bug):** Goosedump hit a stale-context crash where delayed callbacks used a `ctx` after session replacement/reload/fork. pi-memory must follow the same defensive pattern: acquire all references fresh in `session_start`, clean up in `session_shutdown`, never hold a `ctx` or `sessionManager` reference across session boundaries. This is Pi's documented footgun (see extensions.md "Session replacement lifecycle and footguns").
+
 **Risk:** Extraction quality depends heavily on the model doing the extraction. The AI Mega App summarizer had lossy problems (dropped numbers, collapsed indexed lists). Start conservative: extract only explicit user statements ("remember that...", "note that..."), not implicit facts.
+
+**Scope boundary with goosedump:** pi-memory does NOT touch compaction. It does not hook `session_before_compact`. It reads completed conversations, not in-progress ones. If goosedump evolves to extract facts during compaction, pi-memory should consume those rather than duplicate the extraction.
 
 **Complexity:** High. This is a real feature, not just plumbing.
 
