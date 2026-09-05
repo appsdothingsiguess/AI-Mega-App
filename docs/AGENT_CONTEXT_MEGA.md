@@ -2,6 +2,19 @@
 
 Dense digest of everything learned auditing AI-Mega-App + llm-stack. Pair with `docs/FIX_PLAN_2026-08-11.md` (execution) and `docs/HANDOFF.md` (raw history). Facts below were code-verified 2026-08-11; prefer them over stale doc prose.
 
+## Pi.dev pivot status — 2026-09-05 (owner-reported, not yet code-verified)
+
+Full pivot rationale/plan is `docs/HANDOFF.md`'s 2026-08-31 "Pi.dev pivot" entry; this is a status update against that plan's validation checklist, not a repeat of it.
+
+- **`pi-goosedump` compaction:** the crash where compaction succeeded but the agent then stopped (the stale-`ctx`-after-replace/reload/fork lifecycle bug called out in the pivot entry) is reported fixed. Not yet independently re-verified in this repo; treat as owner-confirmed pending a repro/regression note.
+- **A second relay exists on the Ubuntu box** (`ailab`), built to support this pivot, alongside `pi-capture-relay`/`pi-qwen36-relay`. It is **not committed to this repo** — no unit file under `ops/`, no config here — and is built but not yet tested. Do not assume it is running or wire anything against it until it lands in git; treat it the same as the pi-qwen36 relay's "experimental, not production roster" status until then.
+- The local/laptop-hosted agent path for compaction was rejected as inadequate (hardware-limited); the fix moved the workload off the laptop rather than tuning it in place. Exact replacement path TBD pending the relay above landing in git.
+- **Model choice signal:** for coding sub-agent work through Pi, Qwen3.8 is noticeably slow in practice; an alternate coder model (`coder-alt`, per the pivot entry's validation list) is reported as clearly better for this workload. Not yet benchmarked head-to-head in this repo's harnesses — treat as a directional signal, not a roster decision.
+- **BrowserOS MCP round-trip works** (agent browsing via MCP confirmed functional) — this clears one item on the pivot entry's pre-retirement validation list.
+- **Open decision, not yet made:** which additional Pi extensions to adopt beyond `pi-goosedump` + `pi-mcp-extension` (the pivot entry's tier-3 web-access layer and tier-4 custom extensions are still unselected). Do not treat the extension list in the 2026-08-31 entry as final.
+
+Outstanding from the original validation checklist (unconfirmed either way): forced/reproduced compaction beyond the one fixed crash, large tool-output handling, restart/session-replacement, direct-search-vs-BrowserOS comparison.
+
 ## Current benchmark note — 2026-08-31
 
 ### Manual isolated Qwen3.6 service mode

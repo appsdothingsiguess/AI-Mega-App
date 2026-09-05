@@ -14,6 +14,8 @@ At the beginning of every task in this repository:
 
 Personal AI platform: a claude.ai-parity web UI backed by local models on a dedicated Ubuntu GPU box. FastAPI backend orchestrates chat, routing, tools, RAG, and hermes-style memory; llama.cpp `llama-server` instances managed by llama-swap do all inference through one OpenAI-compatible endpoint. The old Ollama/LiteLLM/React codebase in this repo is a post-mortem, not a foundation — build from `PLAN.md`, not from existing `app/` or `web/` code.
 
+**Pi.dev pivot (2026-08-31, status updated 2026-09-05 — see `docs/HANDOFF.md` and `docs/AGENT_CONTEXT_MEGA.md`):** Pi (`earendil-works/pi`) is now the preferred coding-agent/chat-loop platform; do not rebuild that loop in this app's `web/`/`app/` layers unless a concrete gap requires it. This repo's job narrows to the inference/ops layer — llama-swap, model roster, benchmarking, and the Windows-to-Ubuntu relay. Not yet fully validated: a second relay supporting this pivot exists on `ailab` but is untested and not committed here; treat it as not present until it lands in git.
+
 ## Operational scripts — read before benchmarking or tracing
 
 The recent model/context work is captured in `scripts/`; do not recreate ad-hoc benchmark harnesses.

@@ -7,6 +7,30 @@ history, not live deployment instructions; use `AGENTS.md` and
 `docs/AGENT_CONTEXT_MEGA.md` for the current service/roster truth. Delete or
 trim entries once they're stale.
 
+## 2026-09-05 — Pi.dev pivot status update (owner-reported)
+
+Status against the 2026-08-31 pivot entry's extension plan and validation
+checklist below; see `docs/AGENT_CONTEXT_MEGA.md`'s "Pi.dev pivot status"
+section for the condensed version. Not independently re-verified in this
+repo unless noted.
+
+- `pi-goosedump`'s compaction-then-agent-stops crash (the stale-`ctx`
+  lifecycle bug flagged in the entry below) is reported fixed.
+- A second relay was built on `ailab` to move the compaction workload off
+  the local/laptop-hosted agent, which proved inadequate. It is **not yet
+  pushed to git** — no `ops/` unit file, no config in this repo — and is
+  untested. Treat it as non-existent for anything this repo tracks until it
+  lands; don't wire against it or assume it's running.
+- Qwen3.8 is reported slow for coding sub-agent work through Pi; `coder-alt`
+  is reported clearly better. Directional only — not benchmarked here.
+- BrowserOS MCP round-trip for agent browsing is confirmed working, clearing
+  that item on the validation checklist.
+- Still open: which extensions to add beyond `pi-goosedump` +
+  `pi-mcp-extension` (tiers 3–4 of the plan below are unselected).
+- Still unconfirmed either way: forced/reproduced compaction beyond the one
+  fixed crash, large tool-output handling, restart/session-replacement,
+  direct-search-vs-BrowserOS comparison.
+
 ## 2026-08-31 — Pi.dev pivot: coding-agent platform built on Pi
 
 The working direction has changed: Pi.dev is now the preferred base for the
