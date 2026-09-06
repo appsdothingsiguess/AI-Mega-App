@@ -2496,3 +2496,23 @@ pi-qwen36-relay.service`: both are inactive/disabled, `:5807` and `:8082` are
 closed, and `:8081` remains listening. Their unit templates remain in `ops/`
 for traceability and reversible rollback; no prompt-bearing capture files were
 deleted.
+
+## 2026-09-06 — Retired harness reorganized and pushed
+
+The owner approved the reversible repository reorganization. The former
+AI-Mega-App browser/agent harness was moved under `retired/`, including its
+`app/` modules, `web/` frontend, E2E harness, legacy tests, frontend tooling,
+and UI-specific planning documents. The active repository now keeps the
+service-side configuration and GPU inventory/swap generation modules,
+operational scripts, the Pi memory service, and service-focused tests.
+
+The preservation point is the local tag
+`pre-harness-retirement-2026-09-06`. The change was committed as
+`a44b60a` (`chore: preserve retired harness and keep service layer`) and
+pushed to `origin/main`. Focused surviving-service verification passed with
+53 tests, and `git diff --check` passed.
+
+The llama.cpp engine at `/home/john/llm-stack/engine` was not moved or
+modified. Preserving the llama-swap configuration and engine source in Git is
+the next separate task; do not treat the current repository commit as an
+engine/configuration backup.
