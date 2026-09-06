@@ -73,6 +73,12 @@ linked by `chat_id`, so the requested chat's neighboring traces may contain the 
 
 ## Live services, relays, and mutually exclusive modes
 
+The cross-project Pi/GooseDump contract is maintained in
+[`docs/PI_GOOSEDUMP_INTEGRATION.md`](docs/PI_GOOSEDUMP_INTEGRATION.md). Use it
+for the shared port topology and client/server ownership; keep deeper app
+architecture in this repository and GooseDump implementation notes in the
+Windows client project.
+
 The normal production path is:
 
 ```text
