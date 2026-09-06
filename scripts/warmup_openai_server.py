@@ -29,13 +29,23 @@ def request(method: str, url: str, payload: dict | None = None) -> dict:
         return json.loads(response.read())
 
 
+def health_ready(url: str) -> bool:
+    """A health endpoint need only return a successful HTTP response.
+
+    llama-swap returns plain ``OK`` while direct llama-server endpoints may
+    return JSON, so parsing this response is neither necessary nor portable.
+    """
+    with urllib.request.urlopen(url, timeout=10) as response:
+        return 200 <= response.status < 300
+
+
 def main() -> int:
     deadline = time.monotonic() + TIMEOUT_S
     health_url = BASE_URL.removesuffix("/v1") + "/health"
     while time.monotonic() < deadline:
         try:
-            request("GET", health_url)
-            break
+            if health_ready(health_url):
+                break
         except (OSError, urllib.error.HTTPError):
             time.sleep(2)
     else:

@@ -27,8 +27,7 @@ MINIMAL_MODEL = {
 }
 
 REQUIRED_ALIASES = (
-    "coder", "reasoner", "vision", "classifier", "dispatcher", "utility",
-    "utility-gpu",
+    "coder", "reasoner", "vision", "classifier", "coder-sub",
 )
 
 MINIMAL_CONFIG: dict = {
@@ -338,8 +337,8 @@ def test_disabled_model_reference_has_precise_error(tmp_path: Path) -> None:
 
 def test_repo_config_background_section(tmp_path: Path) -> None:
     cfg = load_config(config_mod.CONFIG_PATH)
-    assert cfg.background.title_model == "dispatcher"
-    assert cfg.background.summary_model == "utility"
+    assert cfg.background.title_model == "coder-sub"
+    assert cfg.background.summary_model == "coder-sub"
     assert cfg.background.summary_every_n_turns == 6
 
 
@@ -347,8 +346,8 @@ def test_background_defaults_when_absent(tmp_path: Path) -> None:
     base_path = tmp_path / "config.yaml"
     write_yaml(base_path, MINIMAL_CONFIG)
     cfg = load_config(base_path)
-    assert cfg.background.title_model == "dispatcher"
-    assert cfg.background.summary_model == "utility"
+    assert cfg.background.title_model == "chat-default"
+    assert cfg.background.summary_model == "chat-default"
     assert cfg.background.summary_every_n_turns == 6
 
 

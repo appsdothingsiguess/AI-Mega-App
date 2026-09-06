@@ -1,0 +1,17 @@
+[Unit]
+Description=Warm Pi chat and coding models through llama-swap
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=/home/john/AI-Mega-App
+Environment=WARMUP_BASE_URL=http://127.0.0.1:8080/v1
+Environment=WARMUP_TIMEOUT_S=300
+Environment=WARMUP_MODEL=chat-default
+ExecStart=/usr/bin/python3 /home/john/AI-Mega-App/scripts/warmup_openai_server.py
+ExecStartPost=/usr/bin/env WARMUP_BASE_URL=http://127.0.0.1:8080/v1 WARMUP_TIMEOUT_S=300 WARMUP_MODEL=coder-sub /usr/bin/python3 /home/john/AI-Mega-App/scripts/warmup_openai_server.py
+RemainAfterExit=yes
+
+[Install]
+WantedBy=default.target

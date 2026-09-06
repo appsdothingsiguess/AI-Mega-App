@@ -295,12 +295,13 @@ models:
     thinking: false
     reasoning_off: false
     max_tokens: 256
-    enabled: true
+    # Retired with the custom AI Mega App harness.
+    enabled: false
     file: "/home/john/llm-stack/models/gguf/Hammer2.1-1.5b-Q4_K_M.gguf"
     quant: Q4_K_M
     mmproj: null
-    resident: true
-    ttl_s: 0
+    resident: false
+    ttl_s: null
     extra_flags: []
   - name: utility-gpu
     # Same model as `utility`, placed on GPU1 (3070) resident (ttl:0,
@@ -331,7 +332,9 @@ models:
     # headroom for a 1024-token summary; keep the CPU fallback at 512 because
     # its 5 tok/s decode rate leaves no useful input budget at 1024.
     max_tokens: 1024
-    enabled: true
+    # Retired: GPU1 is an on-demand Pi-selected worker lane, not a resident
+    # summarizer lane. CPU `utility` remains the service fallback.
+    enabled: false
     file: "/home/john/llm-stack/models/gguf/qwen3-8b.gguf"
     quant: Q4_K_M
     mmproj: null
@@ -353,6 +356,24 @@ models:
     # -- ~55x/~8x speedup over q4_1, confirmed quality-neutral on the exact
     # real production prompt that regressed (docs/HANDOFF.md, docs/current_bugs.md).
     extra_flags: ["--cache-type-k", "q8_0", "--cache-type-v", "q8_0"]
+  - name: coder-sub
+    # Qwen3.5-9B is the resident Pi coding-subagent worker on the RTX 3070.
+    # It was measured
+    # on 2026-09-06 at 32K: 66.8 average decode tok/s, 6405 MiB peak.
+    class: coding
+    ctx: 32768
+    gpu: 1
+    tool_call: native
+    thinking: false
+    reasoning_off: true
+    max_tokens: 4096
+    enabled: true
+    file: "/home/john/llm-stack/models/gguf/Qwen3.5-9B-Q4_K_M.gguf"
+    quant: Q4_K_M
+    mmproj: null
+    resident: true
+    ttl_s: 0
+    extra_flags: ["--flash-attn", "on"]
   - name: utility
     class: utility
     ctx: 8192
@@ -367,7 +388,8 @@ models:
     # could never actually summarize anything. 512 leaves real room for
     # input tokens within the timeout.
     max_tokens: 512
-    enabled: true
+    # Retired with the custom AI Mega App title/summary pipeline.
+    enabled: false
     file: "/home/john/llm-stack/models/gguf/qwen3-8b.gguf"
     quant: Q4_K_M
     mmproj: null
@@ -434,8 +456,10 @@ models:
 
 defaults:
   chat_model: "chat-default"
-  utility_model: "utility"
-  title_model: "dispatcher"
+  # Compatibility-only references while the retiring app code remains on
+  # disk; its service is disabled after this apply.
+  utility_model: "coder-sub"
+  title_model: "coder-sub"
 
 llm:
   # Must exceed a cold GPU0 swap + first-token latency. PLAN.md §4.1's
@@ -494,6 +518,8 @@ routing:
     fallback_model: chat-default
 
 background:
-  title_model: dispatcher
-  summary_model: utility
+  # Compatibility-only; Pi/GooseDump own titles, summaries, and compaction.
+  title_model: coder-sub
+  summary_model: coder-sub
+  summary_model_gpu: coder-sub
   summary_every_n_turns: 6

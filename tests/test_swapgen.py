@@ -40,10 +40,7 @@ from app.gpu.swapgen import generate
 #                  resident in VRAM at a time, so this costs nothing extra.
 #   coder-small   (gpu=0, no ttl)
 #   vision        (gpu=0, Qwen3.8-27B + mmproj, no ttl)
-#   dispatcher    (gpu=1, resident, ttl:0, --temp 0)
-#   utility-gpu   (gpu=1, resident, ttl:0, --reasoning off; shares the
-#                  qwen3-8b.gguf file with utility but a different device,
-#                  so the (file, gpu) dedup key keeps both entries)
+#   coder-sub     (gpu=1, resident Qwen3.5-9B Pi coding worker)
 #   utility       (gpu=cpu, resident, ttl:0, --reasoning off)
 #   embed         (gpu=cpu, resident, ttl:0, --embedding)
 #   classifier    (gpu=cpu, resident, ttl:0, --reasoning off, --temp 0)
@@ -67,7 +64,7 @@ _QWEN38_FLAGS = (
     '--cache-reuse 256 --parallel 1'
 )
 _CHAT_FLAGS = (
-    '--reasoning off '
+    '--reasoning on '
     f'--model-draft {_BASE}/mtp-Qwen3.8-27B-Q4_0.gguf '
     '--spec-type draft-mtp --spec-draft-n-max 4 '
     '--spec-draft-type-k q8_0 --spec-draft-type-v q8_0 '
@@ -94,22 +91,14 @@ models:
     cmd: ${{llama}} -m {_BASE}/qwen2.5-coder-7b.gguf -ngl 999 -c 30000
     env: ["CUDA_VISIBLE_DEVICES=0", "CUDA_DEVICE_ORDER=PCI_BUS_ID"]
   coder-alt:
-    cmd: ${{llama}} -m {_BASE}/Ornith-1.5-35B-Q4_K_M.gguf -ngl 999 -c 130000 --flash-attn on --temp 0.6 --top-p 0.95 --top-k 20 --threads 12 --batch-size 2048 --ubatch-size 128
+    cmd: ${{llama}} -m {_BASE}/Ornith-1.5-35B-Q4_K_M.gguf -ngl 999 -c 90000 --reasoning on --flash-attn on --temp 0.6 --top-p 0.95 --top-k 20 --threads 12 --batch-size 2048 --ubatch-size 128
     env: ["CUDA_VISIBLE_DEVICES=0", "CUDA_DEVICE_ORDER=PCI_BUS_ID"]
   vision:
     cmd: ${{llama}} -m {_BASE}/Qwen3.8-27B-UD-Q4_K_XL-vision.gguf -ngl 999 -c 8192 --mmproj {_BASE}/Qwen3.8-27B-mmproj-BF16.gguf
     env: ["CUDA_VISIBLE_DEVICES=0", "CUDA_DEVICE_ORDER=PCI_BUS_ID"]
-  dispatcher:
-    cmd: ${{llama}} -m {_BASE}/Hammer2.1-1.5b-Q4_K_M.gguf -ngl 999 -c 4096 --temp 0
+  coder-sub:
+    cmd: ${{llama}} -m {_BASE}/Qwen3.5-9B-Q4_K_M.gguf -ngl 999 -c 32768 --reasoning off --flash-attn on
     env: ["CUDA_VISIBLE_DEVICES=1", "CUDA_DEVICE_ORDER=PCI_BUS_ID"]
-    ttl: 0
-  utility-gpu:
-    cmd: ${{llama}} -m {_BASE}/qwen3-8b.gguf -ngl 999 -c 16384 --reasoning off --cache-type-k q8_0 --cache-type-v q8_0
-    env: ["CUDA_VISIBLE_DEVICES=1", "CUDA_DEVICE_ORDER=PCI_BUS_ID"]
-    ttl: 0
-  utility:
-    cmd: ${{llama}} -m {_BASE}/qwen3-8b.gguf --device none -ngl 0 -c 8192 --reasoning off --threads 8
-    env: ["CUDA_VISIBLE_DEVICES=", "CUDA_DEVICE_ORDER=PCI_BUS_ID"]
     ttl: 0
   embed:
     cmd: ${{llama}} -m {_BASE}/nomic-embed-text-v2-moe.Q4_K_M.gguf --device none -ngl 0 --embedding -c 2048 --threads 4
@@ -120,7 +109,7 @@ models:
     env: ["CUDA_VISIBLE_DEVICES=", "CUDA_DEVICE_ORDER=PCI_BUS_ID"]
     ttl: 0
 groups:
-  resident: {{ swap: false, exclusive: false, members: [dispatcher, utility-gpu, utility, embed, classifier] }}
+  resident: {{ swap: false, exclusive: false, members: [coder-sub, embed, classifier] }}
   gpu0-main: {{ swap: true, members: [chat-default, coder, coder-small, coder-alt, vision] }}
 """
 
@@ -252,8 +241,8 @@ def test_reasoner_alt_disabled(generated):
 
 
 def test_resident_group_membership(generated):
-    """resident group: CPU + GPU1 residents (dispatcher, utility-gpu, utility, embed, classifier)."""
-    for name in ["dispatcher", "utility-gpu", "utility", "embed", "classifier"]:
+    """Qwen3.5 coding worker and supporting CPU services are resident."""
+    for name in ["coder-sub", "embed", "classifier"]:
         assert name in generated.split("resident:")[1].split("\n")[0]
 
 
@@ -265,20 +254,15 @@ def test_gpu0_main_membership(generated):
     assert "reasoner" not in gpu0_line
 
 
-def test_utility_gpu_in_resident_group(generated):
-    """utility-gpu is resident:true -> joins the always-loaded resident
-    group alongside dispatcher (both stay warm; VRAM math is documented in
-    config.yaml's utility-gpu comment -- this is why coder-small must NOT
-    also live on GPU1)."""
+def test_gpu1_resident_coder_sub_excludes_retired_models(generated):
+    """Qwen3.5 is the sole GPU1 resident; retired aliases are omitted."""
     resident_line = generated.split("resident:")[1].split("\n")[0]
-    assert "utility-gpu" in resident_line
-    assert "dispatcher" in resident_line
+    assert "utility-gpu" not in generated
+    assert "dispatcher" not in resident_line
+    assert "coder-sub" in resident_line
 
 
-def test_gpu1_swap_group_omitted_when_empty(generated):
-    """No gpu==1, resident:false entries in the base roster (coder-small is
-    gpu=0, utility-gpu is resident) -- the gpu1-swap group must not appear
-    at all rather than being emitted empty."""
+def test_gpu1_swap_group_omitted_without_on_demand_gpu1_models(generated):
     assert "gpu1-swap:" not in generated
 
 
@@ -308,12 +292,10 @@ def test_gpu1_swap_group_appears_for_nonresident_gpu1_entry():
     assert "dispatcher" not in gpu1_line
 
 
-def test_utility_gpu_not_deduped_with_utility(generated):
-    """utility and utility-gpu share qwen3-8b.gguf but sit on different
-    devices (cpu vs gpu=1) -- both must survive dedup, which keys on
-    (file, gpu) precisely so this doesn't collapse like reasoner does."""
-    assert "  utility:" in generated
-    assert "  utility-gpu:" in generated
+def test_retired_utility_gpu_is_not_generated(generated):
+    """Both retired utility aliases are omitted from the served roster."""
+    assert "  utility:" not in generated
+    assert "  utility-gpu:" not in generated
 
 
 def test_both_resident_ties_keep_first_in_list():

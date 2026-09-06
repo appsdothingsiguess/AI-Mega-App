@@ -128,12 +128,11 @@ class RoutingConfig(_Strict):
     )
 
 class BackgroundConfig(_Strict):
-    title_model: str = "dispatcher"
-    summary_model: str = "utility"
-    # GPU1 fast-path alias (see config.yaml utility-gpu, app/gpu/swapgen.py
-    # gpu1-swap group). Tried first; falls back to summary_model (CPU) on
-    # any LLMError (timeout, load failure, etc).
-    summary_model_gpu: str = "utility-gpu"
+    # Compatibility defaults only: Pi/GooseDump own titles, summaries, and
+    # compaction after the custom app harness is retired.
+    title_model: str = "chat-default"
+    summary_model: str = "chat-default"
+    summary_model_gpu: str = "chat-default"
     # Fallback cadence used only before any real llama.cpp usage data exists
     # for a chat (its first turn, or a test harness that seeds messages
     # directly). Once a turn's real prompt_tokens is on record,
