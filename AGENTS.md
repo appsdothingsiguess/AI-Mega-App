@@ -267,3 +267,9 @@ the live production roster and placement, use the `Stack` table above and
 `scripts/model_state.py`, not an old handoff claim. All frontend work still
 builds from `web/src/**` to checked-in `web/js/**` according to
 `docs/design-doc.md` and `.cursor/rules/011-ui-design.mdc`.
+# Current layout
+
+The former browser chat/agent harness is preserved under `retired/` and is not
+the active application path. Keep the service/configuration layer, operational
+scripts, Pi memory service, and the external inference engine at
+`/home/john/llm-stack/engine`.

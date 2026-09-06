@@ -1,5 +1,13 @@
 # CLAUDE.md
 
+## Current repository layout
+
+The custom browser chat/agent harness has been retired after the Pi.dev pivot.
+Its source, frontend, E2E harness, and legacy tests are preserved under
+`retired/`. The active root retains service configuration, GPU/swap generation,
+operational scripts, and the Pi memory service. The llama.cpp engine remains
+outside this repository at `/home/john/llm-stack/engine`.
+
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
 ## What this repo is

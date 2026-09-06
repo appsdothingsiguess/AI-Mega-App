@@ -1,13 +1,10 @@
-"""GPU delegation package (PLAN.md §4.1, docs/FEATURES.md F14).
+"""Surviving GPU service helpers.
 
-Re-exports the public surface that settings-api wires at startup:
-  - router (APIRouter, mounted at /api/gpu)
-  - generate (Config → YAML str)
-  - start_rewarm (app → None, creates background task)
+The retired FastAPI GPU control route and resident-model rewarm lifecycle are
+preserved under ``retired/app/gpu``. Active operational code uses inventory
+and swap generation directly.
 """
 
-from app.gpu.api import router
-from app.gpu.rewarm import start_rewarm
 from app.gpu.swapgen import generate
 
-__all__ = ["generate", "router", "start_rewarm"]
+__all__ = ["generate"]
