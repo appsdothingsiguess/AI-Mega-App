@@ -80,6 +80,12 @@ browser/LAN client -> ai-mega-app :8000 -> llama-swap :8080 -> llama-server
 Windows/Pi Harness -> pi-capture-relay :8081 -> 127.0.0.1:8080
 ```
 
+Pi.dev GooseDump's `/goose-compact` calls Pi's `ctx.compact()`, so Pi uses its
+currently selected model provider through either the production `:8081` relay
+or the isolated `:8082` relay. It then posts structured durable-memory claims
+to the separate authenticated `pi-memory-service` at
+`http://192.168.0.89:8091`. Neither model relay is the memory-ingestion API.
+
 `ailab` is the Ubuntu GPU box (`192.168.0.89` on the LAN). GPU0 is the RTX
 3090 (24 GiB) and GPU1 is the RTX 3070 (8 GiB). The `gpu0-main` swap group
 contains the large models and loads one at a time. `resident` keeps the
@@ -94,6 +100,9 @@ qwen36-ngram.service :5807 -> Qwen3.6-35B-A3B-UD-Q4_K_M, GPU1, 32K
 pi-qwen36-relay.service :8082 -> 127.0.0.1:5807
 Windows Harness -> http://192.168.0.89:8082/v1
 ```
+
+Port `8082` is only the isolated Qwen3.6 diagnostic route. It is not part of
+the normal GooseDump compact-summary flow.
 
 In this mode, `llama-swap.service` is stopped so its GPU1 residents do not
 consume the worker's VRAM, and the normal app is offline. Do not restart
@@ -112,6 +121,7 @@ Check the relay units with:
 ```bash
 systemctl --user status pi-capture-relay.service
 systemctl --user status pi-qwen36-relay.service
+systemctl --user status pi-memory-service.service
 ```
 
 The relay units are independent enabled user services (`default.target`), not

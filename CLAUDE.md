@@ -99,6 +99,13 @@ Production is `ai-mega-app :8000 -> llama-swap :8080`; the persistent
 allows client `192.168.0.246` and captures prompt-bearing traffic in
 `/tmp/pi-request-captures/`.
 
+Pi.dev GooseDump's `/goose-compact` calls Pi's `ctx.compact()`, using whatever
+model provider Pi currently has selected: normally `:8081`, or `:8082` in the
+isolated Qwen3.6 mode. Durable-memory save/search then uses the separate
+authenticated API at `http://192.168.0.89:8091`. The memory API is
+storage/ingestion, not an inference relay; its unit is
+`pi-memory-service.service`.
+
 The isolated Qwen3.6 worker is a different mode:
 `qwen36-ngram.service :5807` plus `pi-qwen36-relay.service :8082`, exposed to
 the Harness as `http://192.168.0.89:8082/v1` with model
@@ -109,6 +116,9 @@ restart llama-swap in that mode; the 8082 worker is experimental and is not
 part of the production roster. Unit templates live in `ops/`; the worker
 warmup uses `scripts/warmup_openai_server.py`. See `AGENTS.md` for the
 complete mode map and capture-handling warning.
+
+Do not point normal Pi.dev or GooseDump traffic at `:8082`; that port is
+reserved for the isolated Qwen3.6 experiment.
 
 Both relay units are independently enabled user services; they can both be
 running, but each requires its own upstream (`:8081` → `:8080`, `:8082` →

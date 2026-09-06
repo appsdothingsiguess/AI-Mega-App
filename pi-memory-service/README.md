@@ -6,7 +6,8 @@ The Pi-side fork retains GooseDump session behavior: `goose_search`, `goose_grep
 
 ```text
 goose_remember / successful post-compaction hook
-  -> ctx.modelRegistry.complete(ctx.model, ...) through existing relay :8081
+  -> ctx.modelRegistry.complete(ctx.model, ...) through Pi's selected model
+     provider (normally relay :8081; isolated Qwen3.6 mode uses :8082)
   -> structured durable claims
   -> pi-memory-service store/search/tombstone API
 ```

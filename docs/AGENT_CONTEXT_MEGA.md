@@ -28,6 +28,16 @@ stopping `ai-mega-app.service` and `llama-swap.service`; stop it before
 restoring those production services. `scripts/load_model_check.py` lists only
 the production roster and is not a Qwen3.6 worker control path.
 
+### Pi.dev GooseDump memory path
+
+GooseDump's `/goose-compact` calls Pi's `ctx.compact()`, so model completion
+uses whichever provider Pi currently selected: normally the production relay
+at `http://192.168.0.89:8081/v1`, or the isolated Qwen3.6 relay at
+`http://192.168.0.89:8082/v1` during that test mode. GooseDump then uses the
+separate authenticated `pi-memory-service` at
+`http://192.168.0.89:8091` for durable-memory save/search. The memory service
+does not call a model and is not an OpenAI relay.
+
 Isolated tests (services stopped; no config apply) measured Qwen3.8 at 90K
 context on GPU0: text-only/no `mmproj` used 22,118 MiB and decoded
 73.98–75.07 tok/s; the same MTP/KV/batch profile with the BF16 projector used

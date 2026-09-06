@@ -24,6 +24,12 @@ llama-swap. Smart routing should initially be expressed through Pi model
 profiles/sub-agents and explicit task selection; only move routing back into
 the backend when measurements show Pi configuration is insufficient.
 
+GooseDump's `/goose-compact` calls Pi's `ctx.compact()`, using Pi's currently
+selected model provider (`http://192.168.0.89:8081/v1` normally, or `:8082/v1`
+in isolated Qwen3.6 mode). Durable-memory save/search is separate and uses
+`pi-memory-service` at `http://192.168.0.89:8091`; that service is not a model
+relay.
+
 Extension plan, in priority order:
 
 1. Keep `pi-goosedump` as the first memory/compaction extension. It already
